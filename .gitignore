@@ -1,0 +1,36 @@
+# Flutter/Dart
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+*.iml
+
+# Android
+android/.gradle/
+android/local.properties
+android/app/debug
+android/app/profile
+android/app/release
+android/key.properties
+*.jks
+
+# iOS
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/Flutter/ephemeral/
+
+# Web build output
+web/.dart_tool/
+
+# The archived React PWA
+legacy-pwa/node_modules/
+legacy-pwa/dist/
+legacy-pwa/dev-dist/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
