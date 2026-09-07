@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:stockpile/app.dart';
 import 'package:stockpile/models/item.dart';
 import 'package:stockpile/models/purchase_order.dart';
+import 'package:stockpile/models/receipt.dart';
 import 'package:stockpile/models/sales_order.dart';
 import 'package:stockpile/models/transfer.dart';
 import 'package:stockpile/state/inventory_controller.dart';
@@ -359,6 +360,200 @@ void main() {
 
       expect(find.text('Margin on what has shipped'), findsOneWidget);
       expect(find.text('80.0%'), findsOneWidget);
+    });
+  });
+
+  group('receipts', () {
+    testWidgets('the page offers a way to raise one when empty', (
+      tester,
+    ) async {
+      await _pumpApp(tester, size: _tallDesktop, initialLocation: '/receipts');
+
+      expect(find.text('Receipts'), findsWidgets);
+      expect(find.text('No receipts yet'), findsOneWidget);
+      expect(find.text('New Receipt'), findsWidgets);
+    });
+
+    testWidgets('a receipt lists its reference, payment and total', (
+      tester,
+    ) async {
+      tester.view.physicalSize = _tallDesktop;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final controller = await newController();
+      final item = controller.createItem(
+        draft(name: 'Bolt', quantity: 20, unitCost: 100),
+      );
+      controller.issueReceipt(
+        method: PaymentMethod.card,
+        lines: [
+          ReceiptLine(
+            id: 'rl1',
+            itemId: item.id,
+            itemName: 'Bolt',
+            quantity: 3,
+            unitPrice: 500,
+          ),
+        ],
+        amountPaid: 1500,
+      );
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: const StockpileApp(initialLocation: '/receipts'),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('RC-0001'), findsOneWidget);
+      expect(find.byType(ReceiptStatusPill), findsWidgets);
+      expect(find.textContaining('Card'), findsWidgets);
+    });
+
+    testWidgets('a receipt deep-links to its own page and totals', (
+      tester,
+    ) async {
+      tester.view.physicalSize = _tallDesktop;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final controller = await newController();
+      final item = controller.createItem(
+        draft(name: 'Bolt', quantity: 20, unitCost: 100),
+      );
+      final receipt = controller.issueReceipt(
+        lines: [
+          ReceiptLine(
+            id: 'rl1',
+            itemId: item.id,
+            itemName: 'Bolt',
+            quantity: 3,
+            unitPrice: 500,
+          ),
+        ],
+        amountPaid: 2000,
+      )!;
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: StockpileApp(initialLocation: '/receipts/${receipt.id}'),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('RC-0001'), findsWidgets);
+      expect(find.text('Download PDF'), findsOneWidget);
+      expect(find.text('Total'), findsWidgets);
+      expect(find.text('Change given'), findsOneWidget);
+      // Margin on 3 units at 500 sold against a cost of 100.
+      expect(find.text('Gross profit'), findsOneWidget);
+    });
+
+    testWidgets('a voided receipt says so and offers no refund', (
+      tester,
+    ) async {
+      tester.view.physicalSize = _tallDesktop;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final controller = await newController();
+      final item = controller.createItem(draft(name: 'Bolt', quantity: 20));
+      final receipt = controller.issueReceipt(
+        lines: [
+          ReceiptLine(
+            id: 'rl1',
+            itemId: item.id,
+            itemName: 'Bolt',
+            quantity: 3,
+            unitPrice: 500,
+          ),
+        ],
+      )!;
+      controller.voidReceipt(receipt.id, reason: 'Rang up twice');
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: StockpileApp(initialLocation: '/receipts/${receipt.id}'),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('This receipt has been voided'), findsOneWidget);
+      expect(find.text('Rang up twice'), findsOneWidget);
+      expect(find.text('Refund'), findsNothing);
+      expect(find.text('Void'), findsNothing);
+      expect(find.text('Delete'), findsOneWidget);
+    });
+
+    testWidgets('a sale that has sent stock offers a receipt', (tester) async {
+      tester.view.physicalSize = _tallDesktop;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final controller = await newController();
+      final item = controller.createItem(draft(name: 'Bolt', quantity: 20));
+      final order = controller.createSalesOrder(
+        lines: [
+          SalesOrderLine(
+            id: 'l1',
+            itemId: item.id,
+            itemName: 'Bolt',
+            quantityOrdered: 10,
+            unitPrice: 900,
+          ),
+        ],
+      );
+      controller.confirmSalesOrder(order.id);
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: StockpileApp(initialLocation: '/sales-orders/${order.id}'),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Nothing has gone out, so there is nothing to receipt yet.
+      expect(find.text('Issue receipt'), findsNothing);
+
+      controller.fulfilSalesOrder(order.id, {'l1': 4});
+      await tester.pumpAndSettle();
+
+      expect(find.text('Issue receipt'), findsOneWidget);
+    });
+
+    testWidgets('the editor prices a counter sale as items are picked', (
+      tester,
+    ) async {
+      tester.view.physicalSize = _tallDesktop;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final controller = await newController();
+      controller.createItem(
+        draft(name: 'Bolt', quantity: 20, retailerPrice: 750),
+      );
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: const StockpileApp(initialLocation: '/receipts/new'),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Item').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.textContaining('Bolt').last);
+      await tester.pumpAndSettle();
+
+      // One unit at the retailer price, with the tendered amount kept in step.
+      expect(find.textContaining('Issue receipt'), findsOneWidget);
+      expect(find.text('750.00'), findsOneWidget);
     });
   });
 

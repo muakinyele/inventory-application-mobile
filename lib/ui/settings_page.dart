@@ -8,6 +8,7 @@ import '../core/formatters.dart';
 import '../core/palette.dart';
 import '../data/csv_codec.dart';
 import '../data/export_service.dart';
+import '../data/receipt_document.dart';
 import '../models/app_settings.dart';
 import '../state/inventory_controller.dart';
 import 'widgets/section_card.dart';
@@ -43,19 +44,49 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   late final TextEditingController _companyName;
+  late final TextEditingController _companyAddress;
+  late final TextEditingController _companyPhone;
+  late final TextEditingController _companyEmail;
+  late final TextEditingController _taxLabel;
+  late final TextEditingController _taxRate;
+  late final TextEditingController _receiptFooter;
 
   @override
   void initState() {
     super.initState();
-    _companyName = TextEditingController(
-      text: context.read<InventoryController>().settings.companyName,
+    final settings = context.read<InventoryController>().settings;
+    _companyName = TextEditingController(text: settings.companyName);
+    _companyAddress = TextEditingController(text: settings.companyAddress);
+    _companyPhone = TextEditingController(text: settings.companyPhone);
+    _companyEmail = TextEditingController(text: settings.companyEmail);
+    _taxLabel = TextEditingController(text: settings.taxLabel);
+    // Held as a percentage in the field and a fraction in the model, which is
+    // the way round each is easiest to read.
+    _taxRate = TextEditingController(
+      text: settings.taxRate == 0
+          ? ''
+          : _trimZeroes(settings.taxRate * 100),
     );
+    _receiptFooter = TextEditingController(text: settings.receiptFooter);
   }
 
   @override
   void dispose() {
     _companyName.dispose();
+    _companyAddress.dispose();
+    _companyPhone.dispose();
+    _companyEmail.dispose();
+    _taxLabel.dispose();
+    _taxRate.dispose();
+    _receiptFooter.dispose();
     super.dispose();
+  }
+
+  static String _trimZeroes(double value) {
+    final text = value.toStringAsFixed(3);
+    return text.contains('.')
+        ? text.replaceFirst(RegExp(r'\.?0+$'), '')
+        : text;
   }
 
   void _notify(String message) {
@@ -95,12 +126,30 @@ class _SettingsPageState extends State<SettingsPage> {
     if (mounted) _notify('${number(controller.items.length)} items exported');
   }
 
+  Future<void> _exportReceipts(BuildContext buttonContext) async {
+    final controller = context.read<InventoryController>();
+    if (controller.receipts.isEmpty) {
+      _notify('No receipts to export yet.');
+      return;
+    }
+    await const ExportService().shareText(
+      filename: 'receipts.csv',
+      contents: receiptsToCsv(controller.receipts, controller.settings),
+      mimeType: 'text/csv',
+      originRect: shareOriginOf(buttonContext),
+    );
+    if (mounted) {
+      _notify('${number(controller.receipts.length)} receipts exported');
+    }
+  }
+
   Future<void> _exportBackup(BuildContext buttonContext) async {
     final controller = context.read<InventoryController>();
     final payload = {
       'version': 1,
       'items': controller.items.map((i) => i.toJson()).toList(),
       'movements': controller.movements.map((m) => m.toJson()).toList(),
+      'receipts': controller.receipts.map((r) => r.toJson()).toList(),
       'settings': controller.settings.toJson(),
     };
     await const ExportService().shareText(
@@ -249,6 +298,118 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             const SizedBox(height: 14),
             SectionCard(
+              title: 'Receipts',
+              child: Column(
+                children: [
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'What gets printed at the head and foot of a receipt, '
+                      'and the tax new ones are raised at. Each receipt keeps '
+                      'its own copy of the rate, so changing it here never '
+                      'alters what a customer was already charged.',
+                      style: TextStyle(fontSize: 12.5, color: p.inkMuted),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: _companyAddress,
+                    textCapitalization: TextCapitalization.words,
+                    decoration: const InputDecoration(
+                      labelText: 'Business address',
+                    ),
+                    onChanged: (value) => controller.updateSettings(
+                      settings.copyWith(companyAddress: value),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _companyPhone,
+                          keyboardType: TextInputType.phone,
+                          decoration: const InputDecoration(
+                            labelText: 'Phone',
+                          ),
+                          onChanged: (value) => controller.updateSettings(
+                            settings.copyWith(companyPhone: value),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: TextField(
+                          controller: _companyEmail,
+                          keyboardType: TextInputType.emailAddress,
+                          decoration: const InputDecoration(
+                            labelText: 'Email',
+                          ),
+                          onChanged: (value) => controller.updateSettings(
+                            settings.copyWith(companyEmail: value),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _taxLabel,
+                          decoration: const InputDecoration(
+                            labelText: 'Tax name',
+                            helperText: 'VAT, GST, Sales Tax',
+                          ),
+                          onChanged: (value) => controller.updateSettings(
+                            settings.copyWith(
+                              taxLabel: value.trim().isEmpty ? 'VAT' : value,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: TextField(
+                          controller: _taxRate,
+                          keyboardType:
+                              const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          decoration: const InputDecoration(
+                            labelText: 'Tax rate (%)',
+                            helperText: 'Leave blank for none',
+                          ),
+                          onChanged: (value) {
+                            final percent = parseAmount(value) ?? 0;
+                            controller.updateSettings(
+                              settings.copyWith(
+                                taxRate: (percent / 100).clamp(0, 1).toDouble(),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _receiptFooter,
+                    textCapitalization: TextCapitalization.sentences,
+                    decoration: const InputDecoration(
+                      labelText: 'Footer line',
+                      helperText: 'The closing line on a printed receipt',
+                    ),
+                    onChanged: (value) => controller.updateSettings(
+                      settings.copyWith(receiptFooter: value),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            SectionCard(
               title: 'Data',
               child: Column(
                 children: [
@@ -264,6 +425,15 @@ class _SettingsPageState extends State<SettingsPage> {
                     icon: Icons.upload_outlined,
                     label: 'Import items (CSV)',
                     onTap: _importCsv,
+                  ),
+                  Divider(color: p.line, height: 1),
+                  Builder(
+                    builder: (rowContext) => _MenuRow(
+                      icon: Icons.receipt_long_outlined,
+                      label: 'Export receipts (CSV)',
+                      note: '${controller.receipts.length}',
+                      onTap: () => _exportReceipts(rowContext),
+                    ),
                   ),
                   Divider(color: p.line, height: 1),
                   Builder(

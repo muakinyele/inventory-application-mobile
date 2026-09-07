@@ -17,6 +17,9 @@ import 'ui/items_page.dart';
 import 'ui/purchase_order_detail_page.dart';
 import 'ui/purchase_order_editor_page.dart';
 import 'ui/purchase_orders_page.dart';
+import 'ui/receipt_detail_page.dart';
+import 'ui/receipt_editor_page.dart';
+import 'ui/receipts_page.dart';
 import 'ui/reports_page.dart';
 import 'ui/sales_order_detail_page.dart';
 import 'ui/sales_order_editor_page.dart';
@@ -159,6 +162,31 @@ GoRouter createRouter({String initialLocation = '/'}) => GoRouter(
                       ),
                     ),
                   ],
+                ),
+              ],
+            ),
+          ],
+        ),
+        StatefulShellBranch(
+          routes: [
+            GoRoute(
+              path: '/receipts',
+              builder: (context, state) => const ReceiptsPage(),
+              routes: [
+                GoRoute(
+                  path: 'new',
+                  // `?sale=` raises the receipt against a sales order rather
+                  // than as a counter sale, which fixes its lines to what
+                  // that order actually sent.
+                  builder: (context, state) => ReceiptEditorPage(
+                    salesOrderId: state.uri.queryParameters['sale'],
+                  ),
+                ),
+                GoRoute(
+                  path: ':id',
+                  builder: (context, state) => ReceiptDetailPage(
+                    receiptId: state.pathParameters['id']!,
+                  ),
                 ),
               ],
             ),
