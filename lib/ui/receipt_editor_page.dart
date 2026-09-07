@@ -102,8 +102,7 @@ class _ReceiptEditorPageState extends State<ReceiptEditorPage> {
         ),
   ];
 
-  double get _gross =>
-      _buildLines().fold(0.0, (sum, l) => sum + l.gross);
+  double get _gross => _buildLines().fold(0.0, (sum, l) => sum + l.gross);
 
   double get _lineDiscount =>
       _buildLines().fold(0.0, (sum, l) => sum + l.discount);
@@ -165,7 +164,9 @@ class _ReceiptEditorPageState extends State<ReceiptEditorPage> {
       method: _method,
       lines: lines,
       discount: _billDiscount,
-      amountPaid: _method.isDeferred ? (parseAmount(_paid.text) ?? 0) : _tendered,
+      amountPaid: _method.isDeferred
+          ? (parseAmount(_paid.text) ?? 0)
+          : _tendered,
       notes: _notes.text.trim(),
       cashier: _cashier.text.trim(),
     );
@@ -229,7 +230,9 @@ class _ReceiptEditorPageState extends State<ReceiptEditorPage> {
         child: PageBody(
           children: [
             PageHeader(
-              title: _fromSale ? 'Receipt for ${_order!.reference}' : 'New Receipt',
+              title: _fromSale
+                  ? 'Receipt for ${_order!.reference}'
+                  : 'New Receipt',
               subtitle: _fromSale
                   ? 'Payment for what that sale has already sent'
                   : 'Issuing this takes the stock off the shelf',

@@ -942,13 +942,11 @@ class InventoryController extends ChangeNotifier {
 
   /// Receipts that are still owed money. An account sale is expected to sit
   /// here until it is settled; a cash sale here means someone under-paid.
-  List<Receipt> get unpaidReceipts => _receipts
-      .where((r) => r.status.countsAsSale && !r.isPaid)
-      .toList();
+  List<Receipt> get unpaidReceipts =>
+      _receipts.where((r) => r.status.countsAsSale && !r.isPaid).toList();
 
   /// Everything taken across the counter, net of refunds and voids.
-  double get takings =>
-      _receipts.fold(0.0, (sum, r) => sum + r.netTotal);
+  double get takings => _receipts.fold(0.0, (sum, r) => sum + r.netTotal);
 
   /// Takings for one day, which is what a till reconciliation is against.
   double takingsOn(DateTime day) {

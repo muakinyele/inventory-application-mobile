@@ -101,10 +101,7 @@ class ReceiptLine {
   /// What the customer is left having paid for this line.
   double get netKept => net - refundValue;
 
-  ReceiptLine copyWith({
-    int? quantityRefunded,
-    double? costOfGoods,
-  }) {
+  ReceiptLine copyWith({int? quantityRefunded, double? costOfGoods}) {
     return ReceiptLine(
       id: id,
       itemId: itemId,

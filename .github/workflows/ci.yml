@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # So a red main can be re-checked without an empty commit.
+  workflow_dispatch:
+
+concurrency:
+  # One run per branch: pushing again supersedes the run in flight, except on
+  # main, where every commit's result is worth keeping.
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  check:
+    name: Analyze, test and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          # Pinned to the version the project is developed against, recorded in
+          # .metadata. A floating 'stable' would turn an unrelated Flutter
+          # release into a surprise red build on an untouched branch.
+          flutter-version: 3.44.1
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Verify formatting
+        # Formatting is checked but never auto-applied: CI reports, the author
+        # decides. --set-exit-if-changed is what makes it a check rather than
+        # a silent rewrite.
+        run: dart format --output=none --set-exit-if-changed lib test
+
+      - name: Analyze
+        # Warnings are failures here. The project currently analyzes clean, and
+        # the cheapest moment to keep it that way is before the warning lands.
+        run: flutter analyze --fatal-infos --fatal-warnings
+
+      - name: Verify generated database code is up to date
+        # database.g.dart is committed, so a schema change with a stale
+        # regeneration would otherwise only surface at runtime — as a missing
+        # column on someone's device.
+        run: |
+          dart run build_runner build
+          if ! git diff --quiet -- lib/data/database.g.dart; then
+            echo "::error file=lib/data/database.g.dart::Generated code is stale. Run 'dart run build_runner build' and commit the result."
+            git diff --stat -- lib/data/database.g.dart
+            exit 1
+          fi
+
+      - name: Test
+        run: flutter test
+
+      - name: Test on the web
+        # test/web_safety_test.dart is @TestOn('browser') and is silently
+        # skipped by the run above. It exists because Dart ints are JavaScript
+        # doubles in the browser, which once shipped a real bug that every VM
+        # test passed straight through — so it has to run somewhere.
+        #
+        # Scoped to that one file deliberately: the rest of the suite reaches
+        # sqlite3 through drift/native.dart, which is dart:ffi and cannot be
+        # compiled for the web at all. Widening this to the whole suite fails
+        # to compile rather than skipping.
+        run: flutter test --platform chrome test/web_safety_test.dart
+
+      - name: Build web
+        # The app ships to the browser, so a change that compiles for the VM
+        # but not for the web is a broken release, not a broken test.
+        run: flutter build web --no-tree-shake-icons

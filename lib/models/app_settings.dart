@@ -144,7 +144,8 @@ class AppSettings {
       taxRate: json['taxRate'] is num
           ? (json['taxRate'] as num).toDouble().clamp(0, 1).toDouble()
           : 0,
-      taxLabel: json['taxLabel'] is String && (json['taxLabel'] as String).isNotEmpty
+      taxLabel:
+          json['taxLabel'] is String && (json['taxLabel'] as String).isNotEmpty
           ? json['taxLabel'] as String
           : 'VAT',
       receiptFooter: json['receiptFooter'] is String
