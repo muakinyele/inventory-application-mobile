@@ -3,6 +3,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sqlite3/sqlite3.dart';
 import 'package:stockpile/data/database.dart';
 import 'package:stockpile/data/inventory_repository.dart';
+import 'package:stockpile/models/receipt.dart';
+import 'package:stockpile/state/inventory_controller.dart';
+
+import 'support.dart';
 
 /// The schema exactly as v1 shipped: one `unit_price` column on `items`, and
 /// everything else unchanged. Written straight to sqlite so drift genuinely
@@ -284,5 +288,54 @@ void main() {
         reason: '${item.name} must still add up after the upgrade',
       );
     }
+  });
+
+  test('an upgraded database gets a working receipt book', () async {
+    final raw = _openV1();
+    final db = AppDatabase(NativeDatabase.opened(raw));
+    addTearDown(db.close);
+    final repo = InventoryRepository(db);
+
+    final controller = InventoryController(repo, await repo.load());
+    // The receipt tables did not exist in v1, so this only works if the
+    // upgrade created them.
+    expect(controller.receipts, isEmpty);
+
+    final receipt = controller.issueReceipt(
+      lines: [
+        ReceiptLine(
+          id: 'rl1',
+          itemId: 'legacy-3',
+          itemName: 'Shelf Bracket',
+          quantity: 5,
+          unitPrice: 700,
+        ),
+      ],
+      amountPaid: 3500,
+    );
+
+    expect(receipt, isNotNull);
+    await pumpWrites();
+
+    final reloaded = await repo.load();
+    expect(reloaded.receipts.single.reference, receipt!.reference);
+    expect(reloaded.receipts.single.total, 3500);
+    // The sale came off the legacy stock, bins and all.
+    expect(reloaded.items.firstWhere((i) => i.id == 'legacy-3').quantity, 20);
+    expect(reloaded.levels['legacy-3'], {'Warehouse': 20});
+  });
+
+  test('receipt settings default cleanly on an upgraded database', () async {
+    final raw = _openV1();
+    final db = AppDatabase(NativeDatabase.opened(raw));
+    addTearDown(db.close);
+
+    final snapshot = await InventoryRepository(db).load();
+
+    // None of these keys exist in a v1 preferences table.
+    expect(snapshot.settings.taxRate, 0);
+    expect(snapshot.settings.taxLabel, 'VAT');
+    expect(snapshot.settings.companyAddress, '');
+    expect(snapshot.settings.receiptFooter, isNotEmpty);
   });
 }

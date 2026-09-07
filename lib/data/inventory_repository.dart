@@ -7,6 +7,7 @@ import '../models/item.dart' as model;
 import '../models/movement.dart' as model;
 import '../models/party.dart' as model;
 import '../models/purchase_order.dart' as model;
+import '../models/receipt.dart' as model;
 import '../models/sales_order.dart' as model;
 import '../models/transfer.dart' as model;
 import 'database.dart';
@@ -23,6 +24,7 @@ class Snapshot {
     this.customers = const [],
     this.purchaseOrders = const [],
     this.salesOrders = const [],
+    this.receipts = const [],
     this.transfers = const [],
     this.levels = const {},
     this.sequences = const {},
@@ -35,6 +37,7 @@ class Snapshot {
   final List<model.Customer> customers;
   final List<model.PurchaseOrder> purchaseOrders;
   final List<model.SalesOrder> salesOrders;
+  final List<model.Receipt> receipts;
   final List<model.Transfer> transfers;
 
   /// Stock broken down by location, keyed item id -> location -> quantity.
@@ -52,6 +55,7 @@ class Snapshot {
     customers: [],
     purchaseOrders: [],
     salesOrders: [],
+    receipts: [],
     transfers: [],
     levels: {},
     settings: AppSettings(),
@@ -124,6 +128,7 @@ class InventoryRepository {
     return Snapshot(
       purchaseOrders: await _loadPurchaseOrders(),
       salesOrders: await _loadSalesOrders(),
+      receipts: await _loadReceipts(),
       transfers: await _loadTransfers(),
       levels: await loadLevels(),
       sequences: await _loadSequences(),
@@ -261,6 +266,53 @@ class InventoryRepository {
         db.salesOrderLines,
       )..where((t) => t.orderId.equals(id))).go();
       await (db.delete(db.salesOrders)..where((t) => t.id.equals(id))).go();
+    });
+  }
+
+  // --- Receipts ------------------------------------------------------------
+
+  Future<List<model.Receipt>> _loadReceipts() async {
+    final rows = await (db.select(
+      db.receipts,
+    )..orderBy([(t) => OrderingTerm.desc(t.issuedAt)])).get();
+    if (rows.isEmpty) return const [];
+
+    final lines = await (db.select(
+      db.receiptLines,
+    )..orderBy([(t) => OrderingTerm.asc(t.position)])).get();
+
+    final byReceipt = <String, List<model.ReceiptLine>>{};
+    for (final line in lines) {
+      byReceipt.putIfAbsent(line.receiptId, () => []).add(_toReceiptLine(line));
+    }
+    return [
+      for (final row in rows) _toReceipt(row, byReceipt[row.id] ?? const []),
+    ];
+  }
+
+  Future<void> saveReceipt(model.Receipt receipt) =>
+      db.transaction(() => _writeReceipt(receipt));
+
+  Future<void> _writeReceipt(model.Receipt receipt) async {
+    await db.into(db.receipts).insertOnConflictUpdate(_receiptRow(receipt));
+    await (db.delete(
+      db.receiptLines,
+    )..where((t) => t.receiptId.equals(receipt.id))).go();
+    if (receipt.lines.isEmpty) return;
+    await db.batch(
+      (batch) => batch.insertAll(db.receiptLines, [
+        for (final (index, line) in receipt.lines.indexed)
+          _receiptLineRow(receipt.id, line, index),
+      ]),
+    );
+  }
+
+  Future<void> deleteReceipt(String id) async {
+    await db.transaction(() async {
+      await (db.delete(
+        db.receiptLines,
+      )..where((t) => t.receiptId.equals(id))).go();
+      await (db.delete(db.receipts)..where((t) => t.id.equals(id))).go();
     });
   }
 
@@ -409,6 +461,7 @@ class InventoryRepository {
     List<model.Movement> movements = const [],
     model.PurchaseOrder? purchaseOrder,
     model.SalesOrder? salesOrder,
+    model.Receipt? receipt,
     model.Transfer? transfer,
   }) async {
     await db.transaction(() async {
@@ -419,6 +472,7 @@ class InventoryRepository {
       if (movements.isNotEmpty) await insertMovements(movements);
       if (purchaseOrder != null) await _writePurchaseOrder(purchaseOrder);
       if (salesOrder != null) await _writeSalesOrder(salesOrder);
+      if (receipt != null) await _writeReceipt(receipt);
       if (transfer != null) await _writeTransfer(transfer);
     });
   }
@@ -502,6 +556,15 @@ class InventoryRepository {
     return AppSettings(
       companyName: prefs['companyName'] ?? 'My Inventory',
       currency: prefs['currency'] ?? 'NGN',
+      companyAddress: prefs['companyAddress'] ?? '',
+      companyPhone: prefs['companyPhone'] ?? '',
+      companyEmail: prefs['companyEmail'] ?? '',
+      taxRate: double.tryParse(prefs['taxRate'] ?? '')?.clamp(0, 1) ?? 0,
+      taxLabel: prefs['taxLabel']?.isNotEmpty == true
+          ? prefs['taxLabel']!
+          : 'VAT',
+      receiptFooter:
+          prefs['receiptFooter'] ?? 'Thank you for your custom.',
       themeMode: ThemeMode.values.firstWhere(
         (m) => m.name == prefs['themeMode'],
         orElse: () => ThemeMode.system,
@@ -533,6 +596,30 @@ class InventoryRepository {
           PreferencesCompanion.insert(
             key: 'themeMode',
             value: settings.themeMode.name,
+          ),
+          PreferencesCompanion.insert(
+            key: 'companyAddress',
+            value: settings.companyAddress,
+          ),
+          PreferencesCompanion.insert(
+            key: 'companyPhone',
+            value: settings.companyPhone,
+          ),
+          PreferencesCompanion.insert(
+            key: 'companyEmail',
+            value: settings.companyEmail,
+          ),
+          PreferencesCompanion.insert(
+            key: 'taxRate',
+            value: '${settings.taxRate}',
+          ),
+          PreferencesCompanion.insert(
+            key: 'taxLabel',
+            value: settings.taxLabel,
+          ),
+          PreferencesCompanion.insert(
+            key: 'receiptFooter',
+            value: settings.receiptFooter,
           ),
         ]);
       });
@@ -586,6 +673,8 @@ class InventoryRepository {
       await db.delete(db.purchaseOrders).go();
       await db.delete(db.salesOrderLines).go();
       await db.delete(db.salesOrders).go();
+      await db.delete(db.receiptLines).go();
+      await db.delete(db.receipts).go();
       await db.delete(db.stockLevels).go();
       await db.delete(db.transferLines).go();
       await db.delete(db.transfers).go();
@@ -861,6 +950,86 @@ SalesOrderLinesCompanion _salesLineRow(
   quantityOrdered: line.quantityOrdered,
   quantityFulfilled: Value(line.quantityFulfilled),
   unitPrice: Value(line.unitPrice),
+  costOfGoods: Value(line.costOfGoods),
+  position: Value(position),
+);
+
+model.Receipt _toReceipt(ReceiptRow row, List<model.ReceiptLine> lines) =>
+    model.Receipt(
+      id: row.id,
+      reference: row.reference,
+      salesOrderId: row.salesOrderId,
+      customerId: row.customerId,
+      customerName: row.customerName,
+      status: model.receiptStatusFrom(row.status),
+      method: model.paymentMethodFrom(row.method),
+      lines: lines,
+      discount: row.discount,
+      taxRate: row.taxRate,
+      taxLabel: row.taxLabel,
+      amountPaid: row.amountPaid,
+      notes: row.notes,
+      cashier: row.cashier,
+      movesStock: row.movesStock,
+      issuedAt: row.issuedAt,
+      refundedAt: row.refundedAt,
+      voidedAt: row.voidedAt,
+      voidReason: row.voidReason,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    );
+
+ReceiptsCompanion _receiptRow(model.Receipt r) => ReceiptsCompanion.insert(
+  id: r.id,
+  reference: r.reference,
+  salesOrderId: Value(r.salesOrderId),
+  customerId: Value(r.customerId),
+  customerName: Value(r.customerName),
+  status: Value(r.status.name),
+  method: Value(r.method.name),
+  discount: Value(r.discount),
+  taxRate: Value(r.taxRate),
+  taxLabel: Value(r.taxLabel),
+  amountPaid: Value(r.amountPaid),
+  notes: Value(r.notes),
+  cashier: Value(r.cashier),
+  movesStock: Value(r.movesStock),
+  issuedAt: r.issuedAt,
+  refundedAt: Value(r.refundedAt),
+  voidedAt: Value(r.voidedAt),
+  voidReason: Value(r.voidReason),
+  createdAt: r.createdAt,
+  updatedAt: r.updatedAt,
+);
+
+model.ReceiptLine _toReceiptLine(ReceiptLineRow row) => model.ReceiptLine(
+  id: row.id,
+  itemId: row.itemId,
+  itemName: row.itemName,
+  sku: row.sku,
+  unit: row.unit,
+  quantity: row.quantity,
+  unitPrice: row.unitPrice,
+  discount: row.discount,
+  quantityRefunded: row.quantityRefunded,
+  costOfGoods: row.costOfGoods,
+);
+
+ReceiptLinesCompanion _receiptLineRow(
+  String receiptId,
+  model.ReceiptLine line,
+  int position,
+) => ReceiptLinesCompanion.insert(
+  id: line.id,
+  receiptId: receiptId,
+  itemId: line.itemId,
+  itemName: line.itemName,
+  sku: Value(line.sku),
+  unit: Value(line.unit),
+  quantity: line.quantity,
+  unitPrice: Value(line.unitPrice),
+  discount: Value(line.discount),
+  quantityRefunded: Value(line.quantityRefunded),
   costOfGoods: Value(line.costOfGoods),
   position: Value(position),
 );

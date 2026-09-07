@@ -12,6 +12,7 @@ import '../models/item.dart';
 import '../models/movement.dart';
 import '../models/party.dart';
 import '../models/purchase_order.dart';
+import '../models/receipt.dart';
 import '../models/sales_order.dart';
 import '../models/transfer.dart';
 
@@ -32,6 +33,7 @@ class InventoryController extends ChangeNotifier {
       _customers = List.of(initial.customers),
       _purchaseOrders = List.of(initial.purchaseOrders),
       _salesOrders = List.of(initial.salesOrders),
+      _receipts = List.of(initial.receipts),
       _transfers = List.of(initial.transfers),
       _levels = Map.of(initial.levels),
       _sequences = Map.of(initial.sequences),
@@ -48,6 +50,7 @@ class InventoryController extends ChangeNotifier {
   List<Customer> _customers;
   List<PurchaseOrder> _purchaseOrders;
   List<SalesOrder> _salesOrders;
+  List<Receipt> _receipts;
   List<Transfer> _transfers;
 
   /// Stock broken down by bin: item id -> location -> quantity. The bins for
@@ -66,6 +69,7 @@ class InventoryController extends ChangeNotifier {
   List<Customer> get customers => List.unmodifiable(_customers);
   List<PurchaseOrder> get purchaseOrders => List.unmodifiable(_purchaseOrders);
   List<SalesOrder> get salesOrders => List.unmodifiable(_salesOrders);
+  List<Receipt> get receipts => List.unmodifiable(_receipts);
 
   /// Orders that can still receive stock, soonest expected first.
   List<PurchaseOrder> get openPurchaseOrders {
@@ -919,6 +923,396 @@ class InventoryController extends ChangeNotifier {
     _persist(() => _repo.saveSalesOrder(order));
   }
 
+  // --- Receipts ------------------------------------------------------------
+
+  Receipt? receiptById(String id) {
+    for (final receipt in _receipts) {
+      if (receipt.id == id) return receipt;
+    }
+    return null;
+  }
+
+  /// Receipts raised against a sales order, newest first.
+  List<Receipt> receiptsForSalesOrder(String salesOrderId) =>
+      _receipts.where((r) => r.salesOrderId == salesOrderId).toList();
+
+  /// Receipts issued to a customer, newest first.
+  List<Receipt> receiptsForCustomer(String customerId) =>
+      _receipts.where((r) => r.customerId == customerId).toList();
+
+  /// Receipts that are still owed money. An account sale is expected to sit
+  /// here until it is settled; a cash sale here means someone under-paid.
+  List<Receipt> get unpaidReceipts => _receipts
+      .where((r) => r.status.countsAsSale && !r.isPaid)
+      .toList();
+
+  /// Everything taken across the counter, net of refunds and voids.
+  double get takings =>
+      _receipts.fold(0.0, (sum, r) => sum + r.netTotal);
+
+  /// Takings for one day, which is what a till reconciliation is against.
+  double takingsOn(DateTime day) {
+    return _receipts
+        .where((r) => _sameDay(r.issuedAt, day))
+        .fold(0.0, (sum, r) => sum + r.netTotal);
+  }
+
+  /// Takings split by how they were paid, so a till can be counted against
+  /// the cash line rather than the whole day's total.
+  Map<PaymentMethod, double> takingsByMethod({DateTime? day}) {
+    final totals = <PaymentMethod, double>{};
+    for (final receipt in _receipts) {
+      if (day != null && !_sameDay(receipt.issuedAt, day)) continue;
+      if (!receipt.status.countsAsSale) continue;
+      totals[receipt.method] = (totals[receipt.method] ?? 0) + receipt.netTotal;
+    }
+    return totals;
+  }
+
+  static bool _sameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
+  /// The lines a receipt for [order] would carry: what that sale has actually
+  /// sent, priced as it was quoted. Nothing despatched, nothing to receipt.
+  List<ReceiptLine> receiptLinesForSalesOrder(SalesOrder order) {
+    return [
+      for (final line in order.lines)
+        if (line.quantityFulfilled > 0)
+          ReceiptLine(
+            id: _uid(),
+            itemId: line.itemId,
+            itemName: line.itemName,
+            sku: byId(line.itemId)?.sku ?? '',
+            unit: byId(line.itemId)?.unit ?? 'pcs',
+            quantity: line.quantityFulfilled,
+            unitPrice: line.unitPrice,
+            costOfGoods: line.costOfGoods,
+          ),
+    ];
+  }
+
+  /// Issues a receipt.
+  ///
+  /// A counter sale — one with no [salesOrderId] — is the moment the goods
+  /// change hands, so it takes the stock off the shelf itself and banks what
+  /// it cost at today's average, exactly as a despatch does. A receipt raised
+  /// against a sales order moves nothing: that order's despatch already did,
+  /// and booking it twice would take the stock out twice over.
+  ///
+  /// Quantities on a counter sale are clamped to what is actually on the
+  /// shelf — stock is never allowed to go negative — and a line left with
+  /// nothing to sell is dropped. Returns null when no line survives that.
+  Receipt? issueReceipt({
+    String? salesOrderId,
+    String? customerId,
+    PaymentMethod method = PaymentMethod.cash,
+    required List<ReceiptLine> lines,
+    double discount = 0,
+    double? taxRate,
+    double amountPaid = 0,
+    String notes = '',
+    String cashier = '',
+    DateTime? issuedAt,
+  }) {
+    if (lines.isEmpty) return null;
+
+    final now = DateTime.now();
+    final order = salesOrderId == null ? null : salesOrderById(salesOrderId);
+    final movesStock = order == null;
+    final customer = customerById(customerId ?? order?.customerId);
+
+    // Minted up front so every ledger row can carry the document it came from,
+    // the same way a transfer does.
+    final receiptId = _uid();
+    final reference = _nextReference('RC');
+
+    final priced = <ReceiptLine>[];
+    final touchedItems = <Item>[];
+    final movements = <Movement>[];
+    final binWrites = <String, Map<String, int>>{};
+    // Two lines can name the same item, so the running total is tracked here
+    // rather than read back off `_items` — which has not been written yet.
+    final remaining = <String, int>{};
+
+    for (final line in lines) {
+      if (line.quantity <= 0) continue;
+      final item = byId(line.itemId);
+
+      if (!movesStock || item == null) {
+        // Nothing to take off the shelf: either the sale already despatched,
+        // or the item has since been deleted and only its name survives.
+        priced.add(line);
+        continue;
+      }
+
+      final onHand = remaining[item.id] ?? item.quantity;
+      final quantity = line.quantity.clamp(0, onHand < 0 ? 0 : onHand);
+      if (quantity <= 0) continue;
+
+      final after = onHand - quantity;
+      remaining[item.id] = after;
+
+      priced.add(
+        ReceiptLine(
+          id: line.id,
+          itemId: line.itemId,
+          itemName: line.itemName.isEmpty ? item.name : line.itemName,
+          sku: line.sku.isEmpty ? item.sku : line.sku,
+          unit: line.unit,
+          quantity: quantity,
+          unitPrice: line.unitPrice,
+          discount: line.discount,
+          costOfGoods: quantity * item.unitCost,
+        ),
+      );
+
+      final updatedItem = item.copyWith(quantity: after, updatedAt: now);
+      touchedItems.add(updatedItem);
+      _putLevels(item.id, _settled(item.id, -quantity, item.location));
+      binWrites[item.id] = _levels[item.id] ?? const <String, int>{};
+      movements.add(
+        _movement(
+          updatedItem,
+          MovementKind.stockOut,
+          onHand,
+          after,
+          'Sold at the counter on $reference',
+          documentId: receiptId,
+        ),
+      );
+    }
+
+    if (priced.isEmpty) return null;
+
+    final receipt = Receipt(
+      id: receiptId,
+      reference: reference,
+      salesOrderId: order?.id,
+      customerId: customer?.id ?? customerId,
+      customerName: customer?.name ?? order?.customerName ?? '',
+      method: method,
+      lines: priced,
+      discount: discount < 0 ? 0 : discount,
+      taxRate: (taxRate ?? _settings.taxRate).clamp(0, 1).toDouble(),
+      taxLabel: _settings.taxLabel,
+      amountPaid: amountPaid < 0 ? 0 : amountPaid,
+      notes: notes,
+      cashier: cashier,
+      movesStock: movesStock,
+      issuedAt: issuedAt ?? now,
+      createdAt: now,
+      updatedAt: now,
+    );
+
+    _applyTouched(touchedItems);
+    for (final movement in movements) {
+      _record(movement);
+    }
+    _receipts = [receipt, ..._receipts];
+    notifyListeners();
+
+    _persist(() async {
+      await _repo.commitStockChange(
+        items: touchedItems,
+        levels: binWrites,
+        movements: movements,
+        receipt: receipt,
+      );
+      if (movements.isNotEmpty) await _repo.trimMovements(maxMovements);
+    });
+    return receipt;
+  }
+
+  /// Books goods back in against a receipt.
+  ///
+  /// [returned] maps line id to the quantity coming back, each clamped to what
+  /// is left un-refunded on that line. When [restock] is true the goods go
+  /// back on the shelf and the ledger says so; a refund of something spoiled
+  /// or already written off passes false, which returns the money without
+  /// inventing stock that is not there.
+  ///
+  /// Returns the number of lines that moved.
+  int refundReceipt(
+    String id,
+    Map<String, int> returned, {
+    bool restock = true,
+    String note = '',
+  }) {
+    final receipt = receiptById(id);
+    if (receipt == null || !receipt.status.isRefundable) return 0;
+
+    final now = DateTime.now();
+    final updatedLines = <ReceiptLine>[];
+    final touchedItems = <Item>[];
+    final movements = <Movement>[];
+    final binWrites = <String, Map<String, int>>{};
+    var refunded = 0;
+
+    for (final line in receipt.lines) {
+      final wanted = returned[line.id] ?? 0;
+      final quantity = wanted.clamp(0, line.quantityKept);
+      if (quantity <= 0) {
+        updatedLines.add(line);
+        continue;
+      }
+
+      refunded++;
+      updatedLines.add(
+        line.copyWith(quantityRefunded: line.quantityRefunded + quantity),
+      );
+
+      final item = byId(line.itemId);
+      if (!restock || item == null) continue;
+
+      final after = item.quantity + quantity;
+      final updatedItem = item.copyWith(quantity: after, updatedAt: now);
+      touchedItems.add(updatedItem);
+      _putLevels(item.id, _settled(item.id, quantity, item.location));
+      binWrites[item.id] = _levels[item.id] ?? const <String, int>{};
+      movements.add(
+        _movement(
+          updatedItem,
+          MovementKind.stockIn,
+          item.quantity,
+          after,
+          note.isEmpty ? 'Returned on ${receipt.reference}' : note,
+          documentId: receipt.id,
+        ),
+      );
+    }
+
+    if (refunded == 0) return 0;
+
+    final settled = updatedLines.every((l) => l.isFullyRefunded);
+    final updated = receipt.copyWith(
+      lines: updatedLines,
+      status: settled ? ReceiptStatus.refunded : ReceiptStatus.partRefunded,
+      refundedAt: now,
+      updatedAt: now,
+    );
+
+    _applyTouched(touchedItems);
+    for (final movement in movements) {
+      _record(movement);
+    }
+    _receipts = _receipts.map((r) => r.id == id ? updated : r).toList();
+    notifyListeners();
+
+    _persist(() async {
+      await _repo.commitStockChange(
+        items: touchedItems,
+        levels: binWrites,
+        movements: movements,
+        receipt: updated,
+      );
+      if (movements.isNotEmpty) await _repo.trimMovements(maxMovements);
+    });
+    return refunded;
+  }
+
+  /// Strikes a receipt off in full — the counter equivalent of tearing it up.
+  ///
+  /// Only a receipt nothing has come back against can be voided; once goods
+  /// have been returned the document has a history worth keeping, and the rest
+  /// should be refunded rather than erased. A void puts back exactly the stock
+  /// the receipt took, and nothing when the receipt never moved any.
+  bool voidReceipt(String id, {String reason = ''}) {
+    final receipt = receiptById(id);
+    if (receipt == null ||
+        receipt.status != ReceiptStatus.issued ||
+        receipt.unitsRefunded > 0) {
+      return false;
+    }
+
+    final now = DateTime.now();
+    final touchedItems = <Item>[];
+    final movements = <Movement>[];
+    final binWrites = <String, Map<String, int>>{};
+
+    if (receipt.movesStock) {
+      // Summed by item first: a receipt may name the same item on two lines,
+      // and each has to be put back against the running total, not the one
+      // the item started with.
+      final byItem = <String, int>{};
+      for (final line in receipt.lines) {
+        if (line.quantity <= 0) continue;
+        byItem[line.itemId] = (byItem[line.itemId] ?? 0) + line.quantity;
+      }
+      for (final entry in byItem.entries) {
+        final item = byId(entry.key);
+        if (item == null) continue;
+        final after = item.quantity + entry.value;
+        final updatedItem = item.copyWith(quantity: after, updatedAt: now);
+        touchedItems.add(updatedItem);
+        _putLevels(item.id, _settled(item.id, entry.value, item.location));
+        binWrites[item.id] = _levels[item.id] ?? const <String, int>{};
+        movements.add(
+          _movement(
+            updatedItem,
+            MovementKind.stockIn,
+            item.quantity,
+            after,
+            'Voided ${receipt.reference}',
+            documentId: receipt.id,
+          ),
+        );
+      }
+    }
+
+    final updated = receipt.copyWith(
+      status: ReceiptStatus.voided,
+      voidedAt: now,
+      voidReason: reason,
+      updatedAt: now,
+    );
+
+    _applyTouched(touchedItems);
+    for (final movement in movements) {
+      _record(movement);
+    }
+    _receipts = _receipts.map((r) => r.id == id ? updated : r).toList();
+    notifyListeners();
+
+    _persist(() async {
+      await _repo.commitStockChange(
+        items: touchedItems,
+        levels: binWrites,
+        movements: movements,
+        receipt: updated,
+      );
+      if (movements.isNotEmpty) await _repo.trimMovements(maxMovements);
+    });
+    return true;
+  }
+
+  /// Records money received against a receipt that was left owing — settling
+  /// an account sale. Never takes the paid figure past the total, so a
+  /// receipt can not end up showing change it never gave.
+  void settleReceipt(String id, double amount, {PaymentMethod? method}) {
+    final receipt = receiptById(id);
+    if (receipt == null || amount <= 0 || !receipt.status.countsAsSale) return;
+
+    final updated = receipt.copyWith(
+      amountPaid: receipt.amountPaid + amount.clamp(0, receipt.balanceDue),
+      method: method,
+      updatedAt: DateTime.now(),
+    );
+    _receipts = _receipts.map((r) => r.id == id ? updated : r).toList();
+    notifyListeners();
+    _persist(() => _repo.saveReceipt(updated));
+  }
+
+  /// Removes a voided receipt from the file. Only a void is ever deletable:
+  /// a live receipt is the customer's proof of purchase, and one with refunds
+  /// against it carries history that has to stay.
+  void deleteReceipt(String id) {
+    final receipt = receiptById(id);
+    if (receipt == null || receipt.status != ReceiptStatus.voided) return;
+    _receipts = _receipts.where((r) => r.id != id).toList();
+    notifyListeners();
+    _persist(() => _repo.deleteReceipt(id));
+  }
+
   // --- Stock by location ---------------------------------------------------
 
   /// One item's stock broken down by bin, fullest first. The values always
@@ -1292,6 +1686,7 @@ class InventoryController extends ChangeNotifier {
     _customers = const [];
     _purchaseOrders = const [];
     _salesOrders = const [];
+    _receipts = const [];
     _transfers = const [];
     _rebuildBins(_items);
     _settings = settings;

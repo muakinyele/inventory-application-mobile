@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/widgets.dart';
 import 'package:share_plus/share_plus.dart';
@@ -19,7 +20,25 @@ class ExportService {
       mimeType: mimeType,
       name: filename,
     );
-    await SharePlus.instance.share(
+    await _share(file, filename, originRect);
+  }
+
+  /// The same, for a file that is not text — a generated PDF.
+  Future<void> shareBytes({
+    required String filename,
+    required Uint8List bytes,
+    required String mimeType,
+    Rect? originRect,
+  }) async {
+    await _share(
+      XFile.fromData(bytes, mimeType: mimeType, name: filename),
+      filename,
+      originRect,
+    );
+  }
+
+  Future<void> _share(XFile file, String filename, Rect? originRect) {
+    return SharePlus.instance.share(
       ShareParams(
         files: [file],
         fileNameOverrides: [filename],

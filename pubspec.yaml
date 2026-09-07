@@ -18,6 +18,7 @@ dependencies:
   intl: ^0.20.3
   mobile_scanner: ^7.4.0
   path_provider: ^2.1.6
+  pdf: ^3.13.0
   provider: ^6.1.5+1
   share_plus: ^13.3.0
   shared_preferences: ^2.5.5
@@ -37,6 +38,10 @@ flutter:
 
   assets:
     - assets/branding/
+    # Also declared as an asset directory, not only as a font family: the
+    # receipt PDF loads these TTFs itself, since the built-in PDF faces are
+    # WinAnsi-only and cannot render a naira sign.
+    - assets/fonts/
 
   # Inter ships two optical sizes: "Text" is spaced for small UI sizes, and
   # "Display" is tightened for large headings. Using both from one family gives

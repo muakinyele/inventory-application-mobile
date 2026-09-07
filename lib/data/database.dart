@@ -305,6 +305,87 @@ class Preferences extends Table {
   Set<Column> get primaryKey => {key};
 }
 
+/// A proof-of-sale document — what the customer was handed at the counter.
+///
+/// Never edited once written: a mistake is voided and re-raised, and goods
+/// coming back are refunded, so the row always reads as what actually
+/// happened. Money is stored as it was charged, tax rate included, so
+/// re-printing an old receipt years later reproduces it exactly.
+@DataClassName('ReceiptRow')
+class Receipts extends Table {
+  TextColumn get id => text()();
+
+  /// Human reference such as RC-0007, unique and never reused.
+  TextColumn get reference => text()();
+
+  /// Set when the receipt settles a sales order rather than standing alone.
+  TextColumn get salesOrderId => text().nullable()();
+
+  TextColumn get customerId => text().nullable()();
+
+  /// Denormalised so an old receipt still prints with a name on it after the
+  /// customer record is deleted.
+  TextColumn get customerName => text().withDefault(const Constant(''))();
+
+  /// issued | partRefunded | refunded | voided
+  TextColumn get status => text().withDefault(const Constant('issued'))();
+
+  /// cash | card | transfer | mobile | credit
+  TextColumn get method => text().withDefault(const Constant('cash'))();
+
+  /// Money off the whole bill, on top of any per-line discounts.
+  RealColumn get discount => real().withDefault(const Constant(0))();
+
+  /// Frozen at the moment of issue, so changing the rate in settings never
+  /// rewrites what a customer was actually charged.
+  RealColumn get taxRate => real().withDefault(const Constant(0))();
+  TextColumn get taxLabel => text().withDefault(const Constant('Tax'))();
+
+  RealColumn get amountPaid => real().withDefault(const Constant(0))();
+  TextColumn get notes => text().withDefault(const Constant(''))();
+  TextColumn get cashier => text().withDefault(const Constant(''))();
+
+  /// Whether issuing this receipt is what took the stock off the shelf. False
+  /// for one raised against a sales order, whose despatch already moved it.
+  BoolColumn get movesStock => boolean().withDefault(const Constant(true))();
+
+  DateTimeColumn get issuedAt => dateTime()();
+  DateTimeColumn get refundedAt => dateTime().nullable()();
+  DateTimeColumn get voidedAt => dateTime().nullable()();
+  TextColumn get voidReason => text().withDefault(const Constant(''))();
+  DateTimeColumn get createdAt => dateTime()();
+  DateTimeColumn get updatedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+/// One item on a receipt, priced as it was sold.
+@DataClassName('ReceiptLineRow')
+class ReceiptLines extends Table {
+  TextColumn get id => text()();
+  TextColumn get receiptId => text()();
+  TextColumn get itemId => text()();
+  TextColumn get itemName => text()();
+  TextColumn get sku => text().withDefault(const Constant(''))();
+  TextColumn get unit => text().withDefault(const Constant('pcs'))();
+  IntColumn get quantity => integer()();
+  RealColumn get unitPrice => real().withDefault(const Constant(0))();
+
+  /// Money off this line, as an amount rather than a rate.
+  RealColumn get discount => real().withDefault(const Constant(0))();
+
+  IntColumn get quantityRefunded => integer().withDefault(const Constant(0))();
+
+  /// What the goods cost, banked when they left the shelf.
+  RealColumn get costOfGoods => real().withDefault(const Constant(0))();
+
+  IntColumn get position => integer().withDefault(const Constant(0))();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
 @DriftDatabase(
   tables: [
     Items,
@@ -315,6 +396,8 @@ class Preferences extends Table {
     PurchaseOrderLines,
     SalesOrders,
     SalesOrderLines,
+    Receipts,
+    ReceiptLines,
     StockLevels,
     Transfers,
     TransferLines,
@@ -331,7 +414,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _open());
 
   @override
-  int get schemaVersion => 7;
+  int get schemaVersion => 8;
 
   /// Store timestamps as ISO-8601 text rather than drift's default Unix
   /// *seconds*. Several movements are routinely recorded inside one second —
@@ -365,6 +448,12 @@ class AppDatabase extends _$AppDatabase {
         await m.addColumn(items, items.retailerPrice);
       }
 
+      if (from < 8) {
+        if (!await _tableExists('receipts')) await m.createTable(receipts);
+        if (!await _tableExists('receipt_lines')) {
+          await m.createTable(receiptLines);
+        }
+      }
       if (from < 7) {
         if (!await _tableExists('stock_levels')) {
           await m.createTable(stockLevels);

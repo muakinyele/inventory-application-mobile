@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/design.dart';
 import '../../core/palette.dart';
 import '../../models/purchase_order.dart';
+import '../../models/receipt.dart';
 import '../../models/sales_order.dart';
 
 /// The coloured state chip on a document. Like the stock badges, it always
@@ -84,6 +85,49 @@ class SalesStatusPill extends StatelessWidget {
       label: status.label,
       overdue: overdue,
       overdueLabel: 'Late',
+    );
+  }
+}
+
+/// The same chip for a receipt. A receipt has no "in progress" state — it is
+/// issued, partly or wholly handed back, or struck off — so the colours run
+/// good, warning, neutral, critical rather than the two orders' timelines.
+class ReceiptStatusPill extends StatelessWidget {
+  const ReceiptStatusPill({
+    super.key,
+    required this.status,
+    this.unpaid = false,
+  });
+
+  final ReceiptStatus status;
+
+  /// Money still owed on a receipt that is not an account sale.
+  final bool unpaid;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    final (color, wash) = switch (status) {
+      ReceiptStatus.issued => (p.goodText, p.goodWash),
+      ReceiptStatus.partRefunded => (p.warningText, p.warningWash),
+      ReceiptStatus.refunded => (p.inkSecondary, p.surfaceSunken),
+      ReceiptStatus.voided => (p.critical, p.criticalWash),
+    };
+
+    final icon = switch (status) {
+      ReceiptStatus.issued => Icons.receipt_rounded,
+      ReceiptStatus.partRefunded => Icons.undo_rounded,
+      ReceiptStatus.refunded => Icons.assignment_return_outlined,
+      ReceiptStatus.voided => Icons.block_rounded,
+    };
+
+    return _Pill(
+      icon: icon,
+      color: color,
+      wash: wash,
+      label: status.label,
+      overdue: unpaid,
+      overdueLabel: 'Unpaid',
     );
   }
 }
