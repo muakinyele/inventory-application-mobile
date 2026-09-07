@@ -78,6 +78,61 @@ void main() {
       expect(find.text(settingsItem.label), findsWidgets);
     });
 
+    testWidgets('the phone tab bar badges the reorder count', (tester) async {
+      final controller = await _pumpApp(tester, size: _phone);
+      final expected = controller.items
+          .where((i) => i.status != StockStatus.ok)
+          .length;
+
+      expect(
+        expected,
+        greaterThan(0),
+        reason: 'the sample catalogue must flag something to badge',
+      );
+      expect(find.byType(Badge), findsOneWidget);
+      expect(find.text('$expected'), findsWidgets);
+    });
+
+    testWidgets('the badge sits on Alerts, not whichever branch is fourth', (
+      tester,
+    ) async {
+      await _pumpApp(tester, size: _phone);
+
+      // The regression this guards: the badge was pinned to a hardcoded
+      // branch index, so inserting a destination ahead of Alerts in the
+      // sidebar silently moved the count onto the wrong tab — or, as it
+      // happened, onto a branch that is not on the tab bar at all, which
+      // made it disappear entirely.
+      expect(
+        find.descendant(
+          of: find.widgetWithText(NavigationDestination, 'Alerts'),
+          matching: find.byType(Badge),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('nothing is badged when no item needs reordering', (
+      tester,
+    ) async {
+      tester.view.physicalSize = _phone;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final controller = await newController();
+      controller.createItem(draft(name: 'Bolt', quantity: 50, reorderLevel: 5));
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: const StockpileApp(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byType(Badge), findsNothing);
+    });
+
     testWidgets('destinations not on the phone tab bar live behind More', (
       tester,
     ) async {

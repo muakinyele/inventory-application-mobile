@@ -14,6 +14,12 @@ import 'widgets/app_sidebar.dart';
 /// in the sidebar can never silently promote the wrong one to the tab bar.
 const _phoneRoutes = <String>['/', '/items', '/activity', '/alerts'];
 
+/// The destination that carries the reorder count. Named rather than indexed
+/// for the same reason as above: the badge used to be pinned to a hardcoded
+/// branch number, which quietly stopped matching when a destination was
+/// inserted ahead of it and left the count showing on nothing at all.
+const _alertsRoute = '/alerts';
+
 final _phoneTabs = <int>[
   for (final route in _phoneRoutes)
     if (navItems.indexWhere((i) => i.route == route) >= 0)
@@ -139,7 +145,7 @@ class _PhoneTabs extends StatelessWidget {
         destinations: [
           for (final branch in _phoneTabs)
             NavigationDestination(
-              icon: branch == 4 && alertCount > 0
+              icon: navItems[branch].route == _alertsRoute && alertCount > 0
                   ? Badge.count(
                       count: alertCount,
                       backgroundColor: p.critical,
