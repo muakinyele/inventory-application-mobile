@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:stockpile/app.dart';
 import 'package:stockpile/models/item.dart';
 import 'package:stockpile/models/purchase_order.dart';
+import 'package:stockpile/models/invoice.dart';
 import 'package:stockpile/models/receipt.dart';
 import 'package:stockpile/models/sales_order.dart';
 import 'package:stockpile/models/transfer.dart';
@@ -612,6 +613,158 @@ void main() {
     });
   });
 
+  group('invoices and trading reports', () {
+    testWidgets('the invoices page offers a way to raise one when empty', (
+      tester,
+    ) async {
+      await _pumpApp(tester, size: _tallDesktop, initialLocation: '/invoices');
+
+      expect(find.text('Invoices'), findsWidgets);
+      expect(find.text('No invoices yet'), findsOneWidget);
+      expect(find.text('New Invoice'), findsWidgets);
+    });
+
+    testWidgets('an invoice shows what is owed and by when', (tester) async {
+      tester.view.physicalSize = _tallDesktop;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final controller = await newController();
+      final item = controller.createItem(
+        draft(name: 'Bolt', quantity: 50, unitCost: 100),
+      );
+      final invoice = controller.issueInvoice(
+        lines: [
+          InvoiceLine(
+            id: 'a',
+            itemId: item.id,
+            itemName: 'Bolt',
+            quantity: 4,
+            unitPrice: 500,
+          ),
+        ],
+        termDays: 30,
+      )!;
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: StockpileApp(initialLocation: '/invoices/${invoice.id}'),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('INV-0001'), findsWidgets);
+      expect(find.byType(InvoiceStatusPill), findsWidgets);
+      expect(find.text('Balance due'), findsOneWidget);
+      expect(find.text('Record payment'), findsOneWidget);
+      expect(find.text('Download PDF'), findsOneWidget);
+      // Nothing paid yet, so nothing to list.
+      expect(find.text('Receipts issued'), findsNothing);
+      expect(invoice.balanceDue, 2000);
+    });
+
+    testWidgets('paying an invoice lists the receipt it issued', (
+      tester,
+    ) async {
+      tester.view.physicalSize = _tallDesktop;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final controller = await newController();
+      final item = controller.createItem(
+        draft(name: 'Bolt', quantity: 50, unitCost: 100),
+      );
+      final invoice = controller.issueInvoice(
+        lines: [
+          InvoiceLine(
+            id: 'a',
+            itemId: item.id,
+            itemName: 'Bolt',
+            quantity: 4,
+            unitPrice: 500,
+          ),
+        ],
+      )!;
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: StockpileApp(initialLocation: '/invoices/${invoice.id}'),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      controller.payInvoice(invoice.id, 800, method: PaymentMethod.transfer);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Receipts issued'), findsOneWidget);
+      expect(find.text('RC-0001'), findsWidgets);
+      expect(find.text('Part paid'), findsWidgets);
+    });
+
+    testWidgets('the report shows revenue, cost, profit and margin', (
+      tester,
+    ) async {
+      tester.view.physicalSize = _tallDesktop;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final controller = await newController();
+      final item = controller.createItem(
+        draft(name: 'Bolt', quantity: 50, unitCost: 100),
+      );
+      controller.issueReceipt(
+        lines: [
+          ReceiptLine(
+            id: 'a',
+            itemId: item.id,
+            itemName: 'Bolt',
+            quantity: 10,
+            unitPrice: 500,
+          ),
+        ],
+      );
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: const StockpileApp(initialLocation: '/reports'),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // The four figures the whole report exists for.
+      expect(find.text('Revenue'), findsWidgets);
+      expect(find.text('Cost of Goods'), findsWidgets);
+      expect(find.text('Gross Profit'), findsWidgets);
+      expect(find.text('Profit Margin'), findsWidgets);
+      // And the per-item table under them.
+      expect(find.text('Profit by item'), findsOneWidget);
+      expect(find.text('Total'), findsWidgets);
+      expect(find.text('80.0%'), findsWidgets);
+    });
+
+    testWidgets('every reporting period is offered', (tester) async {
+      await _pumpApp(tester, size: _tallDesktop, initialLocation: '/reports');
+
+      for (final label in ['Daily', 'Weekly', 'Monthly', 'Yearly', 'Custom']) {
+        expect(find.text(label), findsOneWidget, reason: label);
+      }
+      expect(find.text('PDF'), findsOneWidget);
+      expect(find.text('Excel'), findsOneWidget);
+    });
+
+    testWidgets('a period with no sales says so rather than showing zeroes '
+        'as facts', (tester) async {
+      await _pumpApp(tester, size: _tallDesktop, initialLocation: '/reports');
+
+      // The seeded catalogue has stock but no sales.
+      expect(find.text('Nothing sold in this period'), findsOneWidget);
+      expect(find.text('Stock on hand'), findsOneWidget);
+    });
+  });
+
   group('transfers', () {
     testWidgets('the page offers a way to move stock when empty', (
       tester,
@@ -777,9 +930,11 @@ void main() {
       tester,
     ) async {
       // Tall so the whole page lays out; narrow so the two-up rows collapse.
+      // The height has to clear both report sections — trading and stock —
+      // or a ListView simply never builds the charts further down.
       await _pumpApp(
         tester,
-        size: const Size(390, 3200),
+        size: const Size(390, 5000),
         initialLocation: '/reports',
       );
 

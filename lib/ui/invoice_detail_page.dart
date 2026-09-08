@@ -1,0 +1,768 @@
+import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
+import 'package:provider/provider.dart';
+
+import '../core/design.dart';
+import '../core/formatters.dart';
+import '../core/palette.dart';
+import '../data/export_service.dart';
+import '../data/invoice_document.dart';
+import '../models/invoice.dart';
+import '../models/receipt.dart';
+import '../state/inventory_controller.dart';
+import 'widgets/empty_state.dart';
+import 'widgets/page_header.dart';
+import 'widgets/section_card.dart';
+import 'widgets/status_pill.dart';
+
+class InvoiceDetailPage extends StatefulWidget {
+  const InvoiceDetailPage({super.key, required this.invoiceId});
+
+  final String invoiceId;
+
+  @override
+  State<InvoiceDetailPage> createState() => _InvoiceDetailPageState();
+}
+
+class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
+  bool _exporting = false;
+
+  void _notify(String message) {
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = context.watch<InventoryController>();
+    final invoice = controller.invoiceById(widget.invoiceId);
+    final p = context.palette;
+
+    if (invoice == null) {
+      return Scaffold(
+        appBar: AppBar(leading: const BackButton()),
+        body: EmptyState(
+          icon: Icons.help_outline,
+          title: 'Invoice not found',
+          body: 'It may have been deleted.',
+          action: FilledButton(
+            onPressed: () => context.go('/invoices'),
+            child: const Text('Back to invoices'),
+          ),
+        ),
+      );
+    }
+
+    final currency = controller.settings.currency;
+    final payments = controller.paymentsForInvoice(invoice.id);
+    final cancelled = invoice.status == InvoiceStatus.cancelled;
+
+    return Scaffold(
+      backgroundColor: p.plane,
+      body: SafeArea(
+        child: PageBody(
+          children: [
+            PageHeader(
+              title: invoice.reference,
+              subtitle: [
+                invoice.customerName.isEmpty
+                    ? 'Account customer'
+                    : invoice.customerName,
+                'issued ${dayLabel(invoice.issuedAt)}',
+                if (invoice.dueAt != null) 'due ${dayLabel(invoice.dueAt!)}',
+              ].join(' · '),
+              showBack: true,
+              actions: [
+                if (invoice.status.isCollectable)
+                  FilledButton.icon(
+                    onPressed: () => _takePayment(controller, invoice),
+                    icon: const Icon(Icons.payments_outlined, size: 18),
+                    label: const Text('Record payment'),
+                  ),
+                Builder(
+                  builder: (buttonContext) => OutlinedButton.icon(
+                    onPressed: _exporting
+                        ? null
+                        : () => _exportPdf(
+                            shareOriginOf(buttonContext),
+                            invoice,
+                            payments,
+                          ),
+                    icon: _exporting
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.picture_as_pdf_outlined, size: 18),
+                    label: const Text('Download PDF'),
+                  ),
+                ),
+              ],
+            ),
+            if (cancelled) ...[
+              _Banner(
+                icon: Icons.block_rounded,
+                title: 'This invoice has been cancelled',
+                body: invoice.cancelledReason.isEmpty
+                    ? 'It does not count as a sale.'
+                    : invoice.cancelledReason,
+                tone: p.critical,
+                wash: p.criticalWash,
+              ),
+              const SizedBox(height: Insets.lg),
+            ] else if (invoice.isOverdue) ...[
+              _Banner(
+                icon: Icons.priority_high_rounded,
+                title:
+                    'Overdue by ${invoice.daysOverdue} '
+                    '${invoice.daysOverdue == 1 ? 'day' : 'days'}',
+                body:
+                    '${money(invoice.balanceDue, currency)} was due on '
+                    '${dayLabel(invoice.dueAt!)}.',
+                tone: p.critical,
+                wash: p.criticalWash,
+              ),
+              const SizedBox(height: Insets.lg),
+            ],
+            SectionCard(
+              child: Wrap(
+                spacing: Insets.section,
+                runSpacing: Insets.md,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  InvoiceStatusPill(
+                    status: invoice.status,
+                    overdue: invoice.isOverdue,
+                  ),
+                  _Fact(label: 'Total', value: money(invoice.total, currency)),
+                  _Fact(
+                    label: 'Paid',
+                    value: money(invoice.amountPaid, currency),
+                  ),
+                  _Fact(
+                    label: 'Balance',
+                    value: money(invoice.balanceDue, currency),
+                    tone: invoice.isSettled ? p.goodText : p.warningText,
+                  ),
+                  if (invoice.terms.isNotEmpty)
+                    _Fact(label: 'Terms', value: invoice.terms),
+                ],
+              ),
+            ),
+            const SizedBox(height: Insets.lg),
+            SectionCard(
+              title: 'Lines',
+              child: Column(
+                children: [
+                  for (final (index, line) in invoice.lines.indexed) ...[
+                    if (index > 0) Divider(color: p.line, height: Insets.xl),
+                    _LineRow(line: line, currency: currency),
+                  ],
+                  if (invoice.lines.isEmpty)
+                    Text(
+                      'This invoice has no lines.',
+                      style: TextStyle(fontSize: 13.5, color: p.inkMuted),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: Insets.lg),
+            SectionCard(
+              title: 'Totals',
+              child: Column(
+                children: [
+                  _Total(
+                    label: 'Subtotal',
+                    value: money(invoice.gross, currency),
+                  ),
+                  if (invoice.discountTotal > 0)
+                    _Total(
+                      label: 'Discount',
+                      value: '-${money(invoice.discountTotal, currency)}',
+                    ),
+                  if (invoice.taxRate > 0)
+                    _Total(
+                      label:
+                          '${invoice.taxLabel} '
+                          '(${_percent(invoice.taxRate)})',
+                      value: money(invoice.tax, currency),
+                    ),
+                  Divider(color: p.line, height: Insets.xl),
+                  _Total(
+                    label: 'Invoice total',
+                    value: money(invoice.total, currency),
+                    strong: true,
+                  ),
+                  for (final payment in payments)
+                    _Total(
+                      label:
+                          '${payment.reference} · ${payment.method.label} · '
+                          '${dayLabel(payment.at)}',
+                      value: '-${money(payment.amount, currency)}',
+                      tone: p.goodText,
+                    ),
+                  Divider(color: p.line, height: Insets.xl),
+                  _Total(
+                    label: invoice.isSettled ? 'Paid in full' : 'Balance due',
+                    value: money(invoice.balanceDue, currency),
+                    strong: true,
+                    tone: invoice.isSettled
+                        ? p.goodText
+                        : (invoice.isOverdue ? p.critical : p.warningText),
+                  ),
+                ],
+              ),
+            ),
+            if (!cancelled && invoice.revenue > 0) ...[
+              const SizedBox(height: Insets.lg),
+              SectionCard(
+                title: 'Margin on this sale',
+                child: Wrap(
+                  spacing: Insets.section,
+                  runSpacing: Insets.md,
+                  children: [
+                    _Fact(
+                      label: 'Revenue',
+                      value: money(invoice.revenue, currency),
+                    ),
+                    _Fact(
+                      label: 'Cost of goods',
+                      value: money(invoice.costOfGoods, currency),
+                    ),
+                    _Fact(
+                      label: 'Gross profit',
+                      value: money(invoice.grossProfit, currency),
+                      tone: invoice.grossProfit < 0 ? p.critical : p.goodText,
+                    ),
+                    _Fact(
+                      label: 'Margin',
+                      value: invoice.marginRate == null
+                          ? '—'
+                          : '${(invoice.marginRate! * 100).toStringAsFixed(1)}%',
+                      tone: (invoice.marginRate ?? 0) < 0
+                          ? p.critical
+                          : p.goodText,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            if (payments.isNotEmpty) ...[
+              const SizedBox(height: Insets.lg),
+              SectionCard(
+                title: 'Receipts issued',
+                child: Column(
+                  children: [
+                    for (final (index, payment) in payments.indexed) ...[
+                      if (index > 0) Divider(color: p.line, height: Insets.lg),
+                      InkWell(
+                        onTap: () =>
+                            context.go('/receipts/${payment.receiptId}'),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 6),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      payment.reference,
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w700,
+                                        color: p.ink,
+                                      ),
+                                    ),
+                                    Text(
+                                      '${payment.method.label} · '
+                                      '${dateTimeLabel(payment.at)}',
+                                      style: TextStyle(
+                                        fontSize: 12.5,
+                                        color: p.inkMuted,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Text(
+                                money(payment.amount, currency),
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                  color: p.ink,
+                                  fontFeatures: const [
+                                    FontFeature.tabularFigures(),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: Insets.sm),
+                              Icon(
+                                Icons.chevron_right,
+                                size: 18,
+                                color: p.inkMuted,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+            if (invoice.notes.isNotEmpty) ...[
+              const SizedBox(height: Insets.lg),
+              SectionCard(
+                title: 'Notes',
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    invoice.notes,
+                    style: TextStyle(fontSize: 13.5, color: p.inkSecondary),
+                  ),
+                ),
+              ),
+            ],
+            const SizedBox(height: Insets.xl),
+            Wrap(
+              spacing: Insets.md,
+              runSpacing: Insets.md,
+              children: [
+                if (invoice.status == InvoiceStatus.open &&
+                    invoice.amountPaid == 0)
+                  OutlinedButton.icon(
+                    onPressed: () => _cancel(controller, invoice),
+                    icon: const Icon(Icons.block_rounded, size: 18),
+                    label: const Text('Cancel invoice'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: p.critical,
+                      side: BorderSide(
+                        color: p.critical.withValues(alpha: 0.4),
+                      ),
+                    ),
+                  ),
+                if (cancelled)
+                  OutlinedButton.icon(
+                    onPressed: () => _delete(controller, invoice),
+                    icon: const Icon(Icons.delete_outline, size: 18),
+                    label: const Text('Delete'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: p.critical,
+                      backgroundColor: p.criticalWash,
+                      side: BorderSide(
+                        color: p.critical.withValues(alpha: 0.4),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static String _percent(double rate) {
+    final percent = rate * 100;
+    return '${percent.toStringAsFixed(percent % 1 == 0 ? 0 : 2)}%';
+  }
+
+  Future<void> _exportPdf(
+    Rect? origin,
+    Invoice invoice,
+    List<InvoicePayment> payments,
+  ) async {
+    final settings = context.read<InventoryController>().settings;
+    setState(() => _exporting = true);
+    try {
+      final doc = InvoiceDocument(invoice, settings, payments: payments);
+      await const ExportService().shareBytes(
+        filename: doc.filename('pdf'),
+        bytes: await doc.toPdf(),
+        mimeType: 'application/pdf',
+        originRect: origin,
+      );
+    } catch (error) {
+      if (mounted) _notify('That file could not be produced: $error');
+      return;
+    } finally {
+      if (mounted) setState(() => _exporting = false);
+    }
+    if (mounted) _notify('${invoice.reference} exported');
+  }
+
+  /// Takes money against the invoice and issues the receipt for it — the
+  /// point where a credit sale turns into a paid one.
+  Future<void> _takePayment(
+    InventoryController controller,
+    Invoice invoice,
+  ) async {
+    final currency = controller.settings.currency;
+    final field = TextEditingController(
+      text: invoice.balanceDue.toStringAsFixed(2),
+    );
+    var method = PaymentMethod.cash;
+
+    final result = await showDialog<(double, PaymentMethod)>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Record payment'),
+        content: StatefulBuilder(
+          builder: (dialogContext, setDialogState) => Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${money(invoice.balanceDue, currency)} outstanding on '
+                '${invoice.reference}.',
+                style: const TextStyle(fontSize: 13.5),
+              ),
+              const SizedBox(height: Insets.lg),
+              TextField(
+                controller: field,
+                autofocus: true,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: InputDecoration(
+                  labelText: 'Amount (${currencySymbol(currency)})',
+                  helperText: 'A receipt is issued for whatever is paid',
+                ),
+              ),
+              const SizedBox(height: Insets.md),
+              DropdownButtonFormField<PaymentMethod>(
+                initialValue: method,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Paid by'),
+                items: [
+                  for (final m in PaymentMethod.values)
+                    if (m != PaymentMethod.credit)
+                      DropdownMenuItem(value: m, child: Text(m.label)),
+                ],
+                onChanged: (value) =>
+                    setDialogState(() => method = value ?? method),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(
+              dialogContext,
+            ).pop((parseAmount(field.text) ?? 0, method)),
+            child: const Text('Record and receipt'),
+          ),
+        ],
+      ),
+    );
+    field.dispose();
+
+    if (result == null) return;
+    final (amount, chosen) = result;
+    if (amount <= 0) return;
+
+    final receipt = controller.payInvoice(invoice.id, amount, method: chosen);
+    if (!mounted) return;
+    if (receipt == null) {
+      _notify('That payment could not be recorded.');
+      return;
+    }
+    _notify('${receipt.reference} issued for ${money(amount, currency)}');
+  }
+
+  Future<void> _cancel(InventoryController controller, Invoice invoice) async {
+    final reason = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Cancel invoice'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              invoice.movesStock
+                  ? 'Strike ${invoice.reference} off. Everything on it goes '
+                        'back on the shelf, and it stops counting as a sale.'
+                  : 'Strike ${invoice.reference} off. It stops counting as a '
+                        'sale. No stock moves — the order it bills is what '
+                        'sent the goods.',
+              style: const TextStyle(fontSize: 13.5),
+            ),
+            const SizedBox(height: Insets.lg),
+            TextField(
+              controller: reason,
+              autofocus: true,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: const InputDecoration(
+                labelText: 'Reason',
+                helperText: 'Optional — printed on the cancelled invoice',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Keep it'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            style: TextButton.styleFrom(
+              foregroundColor: Theme.of(dialogContext).colorScheme.error,
+            ),
+            child: const Text('Cancel invoice'),
+          ),
+        ],
+      ),
+    );
+
+    final text = reason.text.trim();
+    reason.dispose();
+    if (confirmed != true) return;
+
+    final done = controller.cancelInvoice(invoice.id, reason: text);
+    if (mounted) {
+      _notify(
+        done
+            ? '${invoice.reference} cancelled'
+            : 'That invoice cannot be cancelled',
+      );
+    }
+  }
+
+  Future<void> _delete(InventoryController controller, Invoice invoice) async {
+    final router = GoRouter.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete invoice'),
+        content: Text(
+          'Remove ${invoice.reference} from the file for good. It is already '
+          'cancelled, so no stock or figures change.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            style: TextButton.styleFrom(
+              foregroundColor: Theme.of(dialogContext).colorScheme.error,
+            ),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    controller.deleteInvoice(invoice.id);
+    router.go('/invoices');
+  }
+}
+
+class _Banner extends StatelessWidget {
+  const _Banner({
+    required this.icon,
+    required this.title,
+    required this.body,
+    required this.tone,
+    required this.wash,
+  });
+
+  final IconData icon;
+  final String title;
+  final String body;
+  final Color tone;
+  final Color wash;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(Insets.lg),
+      decoration: BoxDecoration(
+        color: wash,
+        borderRadius: BorderRadius.circular(Radii.card),
+        border: Border.all(color: tone.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 20, color: tone),
+          const SizedBox(width: Insets.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: tone,
+                  ),
+                ),
+                Text(
+                  body,
+                  style: TextStyle(fontSize: 12.5, color: p.inkSecondary),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _Fact extends StatelessWidget {
+  const _Fact({required this.label, required this.value, this.tone});
+
+  final String label;
+  final String value;
+  final Color? tone;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(label, style: TextStyle(fontSize: 11.5, color: p.inkMuted)),
+        const SizedBox(height: 1),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w700,
+            color: tone ?? p.ink,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _Total extends StatelessWidget {
+  const _Total({
+    required this.label,
+    required this.value,
+    this.strong = false,
+    this.tone,
+  });
+
+  final String label;
+  final String value;
+  final bool strong;
+  final Color? tone;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: strong ? 15 : 13.5,
+                fontWeight: strong ? FontWeight.w700 : FontWeight.w500,
+                color: tone ?? (strong ? p.ink : p.inkSecondary),
+              ),
+            ),
+          ),
+          const SizedBox(width: Insets.md),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: strong ? 17 : 13.5,
+              fontWeight: FontWeight.w700,
+              color: tone ?? p.ink,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LineRow extends StatelessWidget {
+  const _LineRow({required this.line, required this.currency});
+
+  final InvoiceLine line;
+  final String currency;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    return Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                line.itemName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: p.ink,
+                ),
+              ),
+              Text(
+                [
+                  '${number(line.quantity)} ${line.unit}',
+                  '${money(line.unitPrice, currency)} each',
+                  if (line.sku.isNotEmpty) line.sku,
+                ].join(' · '),
+                style: TextStyle(fontSize: 12.5, color: p.inkMuted),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: Insets.md),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              money(line.net, currency),
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: p.ink,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+            if (line.discount > 0)
+              Text(
+                '-${money(line.discount, currency)} off',
+                style: TextStyle(fontSize: 12, color: p.inkMuted),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+}

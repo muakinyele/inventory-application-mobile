@@ -11,6 +11,9 @@ import 'ui/app_shell.dart';
 import 'ui/categories_page.dart';
 import 'ui/customers_page.dart';
 import 'ui/dashboard_page.dart';
+import 'ui/invoice_detail_page.dart';
+import 'ui/invoice_editor_page.dart';
+import 'ui/invoices_page.dart';
 import 'ui/item_detail_page.dart';
 import 'ui/item_editor_page.dart';
 import 'ui/items_page.dart';
@@ -186,6 +189,30 @@ GoRouter createRouter({String initialLocation = '/'}) => GoRouter(
                   path: ':id',
                   builder: (context, state) =>
                       ReceiptDetailPage(receiptId: state.pathParameters['id']!),
+                ),
+              ],
+            ),
+          ],
+        ),
+        StatefulShellBranch(
+          routes: [
+            GoRoute(
+              path: '/invoices',
+              builder: (context, state) => const InvoicesPage(),
+              routes: [
+                GoRoute(
+                  path: 'new',
+                  // `?sale=` bills a sales order rather than raising a
+                  // standalone credit sale, which fixes the lines to what
+                  // that order actually sent.
+                  builder: (context, state) => InvoiceEditorPage(
+                    salesOrderId: state.uri.queryParameters['sale'],
+                  ),
+                ),
+                GoRoute(
+                  path: ':id',
+                  builder: (context, state) =>
+                      InvoiceDetailPage(invoiceId: state.pathParameters['id']!),
                 ),
               ],
             ),

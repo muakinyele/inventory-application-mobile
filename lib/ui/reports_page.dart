@@ -4,6 +4,9 @@ import 'package:provider/provider.dart';
 import '../core/design.dart';
 import '../core/formatters.dart';
 import '../core/palette.dart';
+import '../data/export_service.dart';
+import '../data/report_document.dart';
+import '../data/sales_report.dart';
 import '../models/app_settings.dart';
 import '../models/item.dart';
 import '../state/inventory_controller.dart';
@@ -12,15 +15,121 @@ import 'widgets/empty_state.dart';
 import 'widgets/page_header.dart';
 import 'widgets/section_card.dart';
 import 'widgets/stat_card.dart';
+import 'widgets/trading_report.dart';
 
-/// A read-only view over figures the controller already derives — no new data
-/// and no new business rules, only different ways of reading the same numbers.
-class ReportsPage extends StatelessWidget {
+/// Two reports on one page, and they answer different questions.
+///
+/// **Trading** is what the business earned over a period: revenue, what those
+/// goods cost, and the profit between them, per item and in total. It is
+/// bounded by a date range and exports to PDF and Excel.
+///
+/// **Stock** is a snapshot of what is on the shelf right now, at cost. It has
+/// no period — it is a photograph, not a film — which is why the two sit in
+/// separate sections rather than under one set of filters.
+class ReportsPage extends StatefulWidget {
   const ReportsPage({super.key});
 
+  @override
+  State<ReportsPage> createState() => _ReportsPageState();
+}
+
+class _ReportsPageState extends State<ReportsPage> {
   /// Six is the honest ceiling for a donut; past that the tail folds into one
   /// "Other" slice rather than sprouting more colours.
   static const _maxSlices = 6;
+
+  ReportPeriod _period = ReportPeriod.monthly;
+
+  /// The day the current period is resolved around. Stepping moves this.
+  DateTime _anchor = DateTime.now();
+
+  /// Set only while [_period] is custom.
+  DateTimeRange? _customRange;
+
+  bool _exporting = false;
+
+  ReportRange get _range {
+    if (_period == ReportPeriod.custom) {
+      final custom = _customRange;
+      if (custom == null) return ReportRange.of(ReportPeriod.monthly, _anchor);
+      return ReportRange.between(custom.start, custom.end);
+    }
+    return ReportRange.of(_period, _anchor);
+  }
+
+  /// A period that already covers today has nothing beyond it to show.
+  bool get _canStepForward => _range.end.isBefore(DateTime.now());
+
+  void _step(int direction) {
+    setState(() {
+      _anchor = switch (_period) {
+        ReportPeriod.daily => _anchor.add(Duration(days: direction)),
+        ReportPeriod.weekly => _anchor.add(Duration(days: 7 * direction)),
+        // Day 1 avoids the 31st-of-January problem, where adding a month
+        // lands on the wrong side of a short February.
+        ReportPeriod.monthly => DateTime(
+          _anchor.year,
+          _anchor.month + direction,
+        ),
+        ReportPeriod.yearly => DateTime(_anchor.year + direction),
+        ReportPeriod.custom => _anchor,
+      };
+    });
+  }
+
+  Future<void> _pickCustom() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(now.year - 5),
+      lastDate: now,
+      initialDateRange: _customRange,
+      helpText: 'Report period',
+    );
+    if (picked != null) setState(() => _customRange = picked);
+  }
+
+  void _notify(String message) {
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _export(
+    Rect? origin,
+    SalesReport report,
+    AppSettings settings, {
+    required bool asPdf,
+  }) async {
+    final doc = ReportDocument(report, settings);
+    setState(() => _exporting = true);
+    try {
+      if (asPdf) {
+        await const ExportService().shareBytes(
+          filename: doc.filename('pdf'),
+          bytes: await doc.toPdf(),
+          mimeType: 'application/pdf',
+          originRect: origin,
+        );
+      } else {
+        await const ExportService().shareBytes(
+          filename: doc.filename('xlsx'),
+          bytes: doc.toXlsx(),
+          mimeType:
+              'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          originRect: origin,
+        );
+      }
+    } catch (error) {
+      if (mounted) _notify('That file could not be produced: $error');
+      return;
+    } finally {
+      if (mounted) setState(() => _exporting = false);
+    }
+    if (mounted) {
+      _notify('${asPdf ? 'PDF' : 'Excel'} report exported');
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -72,6 +181,13 @@ class ReportsPage extends StatelessWidget {
       measure: (item) => item.quantity.toDouble(),
     );
     final flow = _flow(controller);
+    final report = SalesReport.build(
+      range: _range,
+      receipts: controller.receipts,
+      invoices: controller.invoices,
+      salesOrders: controller.salesOrders,
+      currency: currency,
+    );
 
     String asMoney(double v) => money(v, currency);
     String asUnits(double v) => '${number(v.round())} units';
@@ -81,10 +197,114 @@ class ReportsPage extends StatelessWidget {
       body: SafeArea(
         child: PageBody(
           children: [
-            const PageHeader(
+            PageHeader(
               title: 'Reports',
-              subtitle: 'Where your stock and its value actually sit',
+              subtitle: 'What you earned, and where your stock sits',
+              actions: [
+                Builder(
+                  builder: (buttonContext) => FilledButton.icon(
+                    onPressed: _exporting
+                        ? null
+                        : () => _export(
+                            shareOriginOf(buttonContext),
+                            report,
+                            settings,
+                            asPdf: true,
+                          ),
+                    icon: _exporting
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.picture_as_pdf_outlined, size: 18),
+                    label: const Text('PDF'),
+                  ),
+                ),
+                Builder(
+                  builder: (buttonContext) => OutlinedButton.icon(
+                    onPressed: _exporting
+                        ? null
+                        : () => _export(
+                            shareOriginOf(buttonContext),
+                            report,
+                            settings,
+                            asPdf: false,
+                          ),
+                    icon: const Icon(Icons.table_chart_outlined, size: 18),
+                    label: const Text('Excel'),
+                  ),
+                ),
+              ],
             ),
+
+            // --- Trading ----------------------------------------------------
+            SectionCard(
+              title: 'Trading',
+              trailing: _Caption(
+                '${number(report.documentCount)} '
+                '${report.documentCount == 1 ? 'sale' : 'sales'}',
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  PeriodPicker(
+                    period: _period,
+                    range: _range,
+                    canStepForward: _canStepForward,
+                    onPeriodChanged: (value) => setState(() {
+                      _period = value;
+                      if (value == ReportPeriod.custom &&
+                          _customRange == null) {
+                        // Opening Custom with nothing chosen would show a
+                        // range the user never picked, so it asks straight
+                        // away.
+                        WidgetsBinding.instance.addPostFrameCallback(
+                          (_) => _pickCustom(),
+                        );
+                      }
+                    }),
+                    onStep: _step,
+                    onPickCustom: _pickCustom,
+                  ),
+                  const SizedBox(height: Insets.lg),
+                  TradingSummary(report: report),
+                ],
+              ),
+            ),
+            const SizedBox(height: Insets.lg),
+            _TwoUp(
+              left: SectionCard(
+                title: 'Revenue by source',
+                trailing: const _Caption('before tax'),
+                child: RevenueSources(report: report),
+              ),
+              right: SectionCard(
+                title: 'Top sellers',
+                trailing: const _Caption('by gross profit'),
+                child: _TopSellers(report: report),
+              ),
+            ),
+            const SizedBox(height: Insets.lg),
+            SectionCard(
+              title: 'Profit by item',
+              trailing: _Caption(_range.label),
+              child: TradingTable(report: report),
+            ),
+            const SizedBox(height: Insets.section),
+
+            // --- Stock on hand ----------------------------------------------
+            Text(
+              'Stock on hand',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 2),
+            Text(
+              'A snapshot of the shelf as it is now, at cost — not bounded by '
+              'the period above.',
+              style: TextStyle(fontSize: 13, color: p.inkMuted),
+            ),
+            const SizedBox(height: Insets.lg),
             StatGrid(
               cards: [
                 StatCard(
@@ -292,6 +512,7 @@ class _Caption extends StatelessWidget {
   Widget build(BuildContext context) {
     return Text(
       text,
+      textAlign: TextAlign.right,
       style: TextStyle(fontSize: 12, color: context.palette.inkMuted),
     );
   }
@@ -371,6 +592,111 @@ class _TopItems extends StatelessWidget {
                     ),
                   );
                 },
+              ),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// The period's best earners, ranked by what they actually made rather than
+/// what they sold for — volume at no margin is not a top seller.
+class _TopSellers extends StatelessWidget {
+  const _TopSellers({required this.report});
+
+  final SalesReport report;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    final top = report.lines.take(6).toList();
+
+    if (top.isEmpty) {
+      return Text(
+        'Nothing sold in this period.',
+        style: TextStyle(fontSize: 13.5, color: p.inkMuted),
+      );
+    }
+
+    final leader = top.first.grossProfit;
+
+    return Column(
+      children: [
+        for (final line in top) ...[
+          if (line != top.first) const SizedBox(height: Insets.md),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      line.itemName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w600,
+                        color: p.ink,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: Insets.sm),
+                  Text(
+                    money(line.grossProfit, report.currency),
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: line.grossProfit < 0 ? p.critical : p.goodText,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 3),
+              Row(
+                children: [
+                  Expanded(
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final fraction = leader <= 0
+                            ? 0.0
+                            : (line.grossProfit / leader).clamp(0.0, 1.0);
+                        return Container(
+                          height: 6,
+                          decoration: BoxDecoration(
+                            color: p.surfaceSunken,
+                            borderRadius: BorderRadius.circular(3),
+                          ),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Container(
+                              width: constraints.maxWidth * fraction,
+                              decoration: BoxDecoration(
+                                color: p.good,
+                                borderRadius: BorderRadius.circular(3),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: Insets.sm),
+                  SizedBox(
+                    width: 62,
+                    child: Text(
+                      line.marginRate == null
+                          ? '—'
+                          : '${(line.marginRate! * 100).toStringAsFixed(1)}%',
+                      textAlign: TextAlign.right,
+                      style: TextStyle(fontSize: 12, color: p.inkMuted),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),

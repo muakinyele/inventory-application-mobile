@@ -77,13 +77,21 @@ class SalesOrderDetailPage extends StatelessWidget {
                   ),
                 // Only once something has actually gone out: a receipt is
                 // proof of goods handed over, not of a promise to send them.
-                if (order.unitsFulfilled > 0)
+                if (order.unitsFulfilled > 0) ...[
                   OutlinedButton.icon(
                     onPressed: () =>
                         context.go('/receipts/new?sale=${order.id}'),
                     icon: const Icon(Icons.receipt_rounded, size: 18),
                     label: const Text('Issue receipt'),
                   ),
+                  // The same goods, billed rather than paid for now.
+                  OutlinedButton.icon(
+                    onPressed: () =>
+                        context.go('/invoices/new?sale=${order.id}'),
+                    icon: const Icon(Icons.description_outlined, size: 18),
+                    label: const Text('Invoice'),
+                  ),
+                ],
               ],
             ),
             SectionCard(

@@ -143,6 +143,7 @@ class Receipt {
     required this.id,
     required this.reference,
     this.salesOrderId,
+    this.invoiceId,
     this.customerId,
     this.customerName = '',
     this.status = ReceiptStatus.issued,
@@ -168,6 +169,15 @@ class Receipt {
 
   /// Set when the receipt settles a sales order rather than standing alone.
   final String? salesOrderId;
+
+  /// Set when the receipt is a payment against a credit sale. Such a receipt
+  /// records money arriving for goods an invoice already billed, so it moves
+  /// no stock and is never counted as revenue in its own right.
+  final String? invoiceId;
+
+  /// Whether this receipt is a payment against an invoice rather than a sale
+  /// in its own right.
+  bool get isInvoicePayment => invoiceId != null;
 
   final String? customerId;
   final String customerName;
@@ -306,6 +316,7 @@ class Receipt {
       id: id,
       reference: reference,
       salesOrderId: salesOrderId,
+      invoiceId: invoiceId,
       customerId: customerId ?? this.customerId,
       customerName: customerName ?? this.customerName,
       status: status ?? this.status,
@@ -331,6 +342,7 @@ class Receipt {
     'id': id,
     'reference': reference,
     'salesOrderId': salesOrderId,
+    'invoiceId': invoiceId,
     'customerId': customerId,
     'customerName': customerName,
     'status': status.name,

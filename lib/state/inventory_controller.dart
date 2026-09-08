@@ -8,6 +8,7 @@ import '../data/csv_codec.dart';
 import '../data/inventory_repository.dart';
 import '../data/seed_data.dart';
 import '../models/app_settings.dart';
+import '../models/invoice.dart';
 import '../models/item.dart';
 import '../models/movement.dart';
 import '../models/party.dart';
@@ -34,6 +35,7 @@ class InventoryController extends ChangeNotifier {
       _purchaseOrders = List.of(initial.purchaseOrders),
       _salesOrders = List.of(initial.salesOrders),
       _receipts = List.of(initial.receipts),
+      _invoices = List.of(initial.invoices),
       _transfers = List.of(initial.transfers),
       _levels = Map.of(initial.levels),
       _sequences = Map.of(initial.sequences),
@@ -51,6 +53,7 @@ class InventoryController extends ChangeNotifier {
   List<PurchaseOrder> _purchaseOrders;
   List<SalesOrder> _salesOrders;
   List<Receipt> _receipts;
+  List<Invoice> _invoices;
   List<Transfer> _transfers;
 
   /// Stock broken down by bin: item id -> location -> quantity. The bins for
@@ -70,6 +73,7 @@ class InventoryController extends ChangeNotifier {
   List<PurchaseOrder> get purchaseOrders => List.unmodifiable(_purchaseOrders);
   List<SalesOrder> get salesOrders => List.unmodifiable(_salesOrders);
   List<Receipt> get receipts => List.unmodifiable(_receipts);
+  List<Invoice> get invoices => List.unmodifiable(_invoices);
 
   /// Orders that can still receive stock, soonest expected first.
   List<PurchaseOrder> get openPurchaseOrders {
@@ -942,17 +946,35 @@ class InventoryController extends ChangeNotifier {
 
   /// Receipts that are still owed money. An account sale is expected to sit
   /// here until it is settled; a cash sale here means someone under-paid.
-  List<Receipt> get unpaidReceipts =>
-      _receipts.where((r) => r.status.countsAsSale && !r.isPaid).toList();
+  ///
+  /// A payment against an invoice is never listed: it is settled by
+  /// definition, and what is still owed lives on the invoice.
+  List<Receipt> get unpaidReceipts => _receipts
+      .where((r) => r.status.countsAsSale && !r.isPaid && !r.isInvoicePayment)
+      .toList();
 
-  /// Everything taken across the counter, net of refunds and voids.
-  double get takings => _receipts.fold(0.0, (sum, r) => sum + r.netTotal);
+  /// What one receipt actually brought in.
+  ///
+  /// A sale is worth its own net total. A payment against an invoice is worth
+  /// the money that changed hands and no more: the receipt reprints the whole
+  /// invoice so the customer can see what they are paying for, but only part
+  /// of it may have been settled — and the sale itself was already counted
+  /// once, at the invoice.
+  static double _collected(Receipt receipt) {
+    if (!receipt.status.countsAsSale) return 0;
+    return receipt.isInvoicePayment ? receipt.amountPaid : receipt.netTotal;
+  }
+
+  /// Everything taken across the counter, net of refunds and voids, plus
+  /// money collected against invoices. This is cash in — a different measure
+  /// from revenue, which is recognised when the goods go out.
+  double get takings => _receipts.fold(0.0, (sum, r) => sum + _collected(r));
 
   /// Takings for one day, which is what a till reconciliation is against.
   double takingsOn(DateTime day) {
     return _receipts
         .where((r) => _sameDay(r.issuedAt, day))
-        .fold(0.0, (sum, r) => sum + r.netTotal);
+        .fold(0.0, (sum, r) => sum + _collected(r));
   }
 
   /// Takings split by how they were paid, so a till can be counted against
@@ -962,7 +984,8 @@ class InventoryController extends ChangeNotifier {
     for (final receipt in _receipts) {
       if (day != null && !_sameDay(receipt.issuedAt, day)) continue;
       if (!receipt.status.countsAsSale) continue;
-      totals[receipt.method] = (totals[receipt.method] ?? 0) + receipt.netTotal;
+      totals[receipt.method] =
+          (totals[receipt.method] ?? 0) + _collected(receipt);
     }
     return totals;
   }
@@ -1309,6 +1332,377 @@ class InventoryController extends ChangeNotifier {
     _receipts = _receipts.where((r) => r.id != id).toList();
     notifyListeners();
     _persist(() => _repo.deleteReceipt(id));
+  }
+
+  // --- Invoices ------------------------------------------------------------
+
+  Invoice? invoiceById(String id) {
+    for (final invoice in _invoices) {
+      if (invoice.id == id) return invoice;
+    }
+    return null;
+  }
+
+  List<Invoice> invoicesForCustomer(String customerId) =>
+      _invoices.where((i) => i.customerId == customerId).toList();
+
+  List<Invoice> invoicesForSalesOrder(String salesOrderId) =>
+      _invoices.where((i) => i.salesOrderId == salesOrderId).toList();
+
+  /// Invoices still owed money, soonest due first. What the business is
+  /// waiting to be paid.
+  List<Invoice> get openInvoices {
+    final open = _invoices.where((i) => i.status.isCollectable).toList();
+    open.sort((a, b) {
+      final aDue = a.dueAt;
+      final bDue = b.dueAt;
+      if (aDue == null && bDue == null) return 0;
+      if (aDue == null) return 1;
+      if (bDue == null) return -1;
+      return aDue.compareTo(bDue);
+    });
+    return open;
+  }
+
+  List<Invoice> get overdueInvoices =>
+      _invoices.where((i) => i.isOverdue).toList();
+
+  /// Total owed across every live invoice — the receivables book.
+  double get totalReceivable =>
+      _invoices.fold(0.0, (sum, i) => sum + i.outstanding);
+
+  /// Payments taken against an invoice, newest first, as the invoice's own
+  /// page shows them.
+  List<InvoicePayment> paymentsForInvoice(String invoiceId) {
+    return [
+      for (final receipt in _receipts)
+        if (receipt.invoiceId == invoiceId && receipt.status.countsAsSale)
+          InvoicePayment(
+            receiptId: receipt.id,
+            reference: receipt.reference,
+            amount: receipt.amountPaid,
+            method: receipt.method,
+            at: receipt.issuedAt,
+          ),
+    ];
+  }
+
+  /// The lines an invoice for [order] would carry: what that sale has sent,
+  /// priced as quoted. Shares the receipt's rule — you bill for goods that
+  /// have actually gone out.
+  List<InvoiceLine> invoiceLinesForSalesOrder(SalesOrder order) {
+    return [
+      for (final line in order.lines)
+        if (line.quantityFulfilled > 0)
+          InvoiceLine(
+            id: _uid(),
+            itemId: line.itemId,
+            itemName: line.itemName,
+            sku: byId(line.itemId)?.sku ?? '',
+            unit: byId(line.itemId)?.unit ?? 'pcs',
+            quantity: line.quantityFulfilled,
+            unitPrice: line.unitPrice,
+            costOfGoods: line.costOfGoods,
+          ),
+    ];
+  }
+
+  /// Raises an invoice for a credit sale.
+  ///
+  /// The mirror of [issueReceipt], and it moves stock on the same rule: a
+  /// standalone credit sale is the moment goods change hands, so it takes
+  /// them off the shelf and banks what they cost. An invoice billing a sales
+  /// order moves nothing — that order's despatch already did.
+  ///
+  /// Quantities on a standalone invoice are clamped to what is on the shelf,
+  /// and a line left with nothing to sell is dropped. Returns null when no
+  /// line survives that.
+  Invoice? issueInvoice({
+    String? salesOrderId,
+    String? customerId,
+    required List<InvoiceLine> lines,
+    double discount = 0,
+    double? taxRate,
+    DateTime? dueAt,
+    int? termDays,
+    String terms = '',
+    String notes = '',
+    DateTime? issuedAt,
+  }) {
+    if (lines.isEmpty) return null;
+
+    final now = DateTime.now();
+    final order = salesOrderId == null ? null : salesOrderById(salesOrderId);
+    final movesStock = order == null;
+    final customer = customerById(customerId ?? order?.customerId);
+
+    final invoiceId = _uid();
+    final reference = _nextReference('INV');
+
+    final billed = <InvoiceLine>[];
+    final touchedItems = <Item>[];
+    final movements = <Movement>[];
+    final binWrites = <String, Map<String, int>>{};
+    // Two lines can name the same item, so the running total is tracked here
+    // rather than read back off `_items`, which has not been written yet.
+    final remaining = <String, int>{};
+
+    for (final line in lines) {
+      if (line.quantity <= 0) continue;
+      final item = byId(line.itemId);
+
+      if (!movesStock || item == null) {
+        billed.add(line);
+        continue;
+      }
+
+      final onHand = remaining[item.id] ?? item.quantity;
+      final quantity = line.quantity.clamp(0, onHand < 0 ? 0 : onHand);
+      if (quantity <= 0) continue;
+
+      final after = onHand - quantity;
+      remaining[item.id] = after;
+
+      billed.add(
+        InvoiceLine(
+          id: line.id,
+          itemId: line.itemId,
+          itemName: line.itemName.isEmpty ? item.name : line.itemName,
+          sku: line.sku.isEmpty ? item.sku : line.sku,
+          unit: line.unit,
+          quantity: quantity,
+          unitPrice: line.unitPrice,
+          discount: line.discount,
+          costOfGoods: quantity * item.unitCost,
+        ),
+      );
+
+      final updatedItem = item.copyWith(quantity: after, updatedAt: now);
+      touchedItems.add(updatedItem);
+      _putLevels(item.id, _settled(item.id, -quantity, item.location));
+      binWrites[item.id] = _levels[item.id] ?? const <String, int>{};
+      movements.add(
+        _movement(
+          updatedItem,
+          MovementKind.stockOut,
+          onHand,
+          after,
+          'Sold on account on $reference',
+          documentId: invoiceId,
+        ),
+      );
+    }
+
+    if (billed.isEmpty) return null;
+
+    final invoice = Invoice(
+      id: invoiceId,
+      reference: reference,
+      salesOrderId: order?.id,
+      customerId: customer?.id ?? customerId,
+      customerName: customer?.name ?? order?.customerName ?? '',
+      lines: billed,
+      discount: discount < 0 ? 0 : discount,
+      taxRate: (taxRate ?? _settings.taxRate).clamp(0, 1).toDouble(),
+      taxLabel: _settings.taxLabel,
+      terms: terms,
+      notes: notes,
+      movesStock: movesStock,
+      issuedAt: issuedAt ?? now,
+      dueAt: dueAt ?? _dueFrom(issuedAt ?? now, termDays),
+      createdAt: now,
+      updatedAt: now,
+    );
+
+    _applyTouched(touchedItems);
+    for (final movement in movements) {
+      _record(movement);
+    }
+    _invoices = [invoice, ..._invoices];
+    notifyListeners();
+
+    _persist(() async {
+      await _repo.commitStockChange(
+        items: touchedItems,
+        levels: binWrites,
+        movements: movements,
+        invoice: invoice,
+      );
+      if (movements.isNotEmpty) await _repo.trimMovements(maxMovements);
+    });
+    return invoice;
+  }
+
+  DateTime? _dueFrom(DateTime from, int? termDays) {
+    if (termDays == null || termDays <= 0) return null;
+    return from.add(Duration(days: termDays));
+  }
+
+  /// Records money received against an invoice, and issues the receipt for it.
+  ///
+  /// This is the whole point of the credit flow: the customer gets a receipt
+  /// for what they just paid, and the invoice's balance comes down by the
+  /// same amount. The receipt moves no stock — the invoice already did — so
+  /// nothing is sold twice, and reporting counts the sale once, at the
+  /// invoice.
+  ///
+  /// A payment is never taken past the balance, so an invoice cannot end up
+  /// showing change it did not give. Returns the receipt, or null when there
+  /// was nothing to collect.
+  Receipt? payInvoice(
+    String id,
+    double amount, {
+    PaymentMethod method = PaymentMethod.cash,
+    String notes = '',
+    String cashier = '',
+    DateTime? paidAt,
+  }) {
+    final invoice = invoiceById(id);
+    if (invoice == null || !invoice.status.isCollectable) return null;
+    if (amount <= 0 || invoice.balanceDue <= 0) return null;
+
+    final now = DateTime.now();
+    final taken = amount.clamp(0, invoice.balanceDue).toDouble();
+
+    // The receipt carries the invoice's own lines so it prints as a proper
+    // document rather than a bare figure, but at zero cost of goods: the cost
+    // was banked when the invoice moved the stock, and counting it again here
+    // would double the cost of the sale.
+    final receipt = Receipt(
+      id: _uid(),
+      reference: _nextReference('RC'),
+      invoiceId: invoice.id,
+      salesOrderId: invoice.salesOrderId,
+      customerId: invoice.customerId,
+      customerName: invoice.customerName,
+      method: method,
+      lines: [
+        for (final line in invoice.lines)
+          ReceiptLine(
+            id: _uid(),
+            itemId: line.itemId,
+            itemName: line.itemName,
+            sku: line.sku,
+            unit: line.unit,
+            quantity: line.quantity,
+            unitPrice: line.unitPrice,
+            discount: line.discount,
+          ),
+      ],
+      discount: invoice.discount,
+      taxRate: invoice.taxRate,
+      taxLabel: invoice.taxLabel,
+      amountPaid: taken,
+      notes: notes.isEmpty ? 'Payment against ${invoice.reference}' : notes,
+      cashier: cashier,
+      movesStock: false,
+      issuedAt: paidAt ?? now,
+      createdAt: now,
+      updatedAt: now,
+    );
+
+    final paid = invoice.amountPaid + taken;
+    final settled = invoice.total - paid < 0.005;
+    final updated = invoice.copyWith(
+      amountPaid: paid,
+      status: settled ? InvoiceStatus.paid : InvoiceStatus.partPaid,
+      closedAt: settled ? now : null,
+      updatedAt: now,
+    );
+
+    _receipts = [receipt, ..._receipts];
+    _invoices = _invoices.map((i) => i.id == id ? updated : i).toList();
+    notifyListeners();
+
+    _persist(() async {
+      await _repo.commitStockChange(receipt: receipt, invoice: updated);
+    });
+    return receipt;
+  }
+
+  /// Strikes an invoice off in full.
+  ///
+  /// Only one nothing has been paid against can be cancelled; once money has
+  /// arrived the document has a history worth keeping. A cancellation puts
+  /// back exactly the stock the invoice took, and nothing when it never moved
+  /// any.
+  bool cancelInvoice(String id, {String reason = ''}) {
+    final invoice = invoiceById(id);
+    if (invoice == null ||
+        invoice.status != InvoiceStatus.open ||
+        invoice.amountPaid > 0) {
+      return false;
+    }
+
+    final now = DateTime.now();
+    final touchedItems = <Item>[];
+    final movements = <Movement>[];
+    final binWrites = <String, Map<String, int>>{};
+
+    if (invoice.movesStock) {
+      // Summed by item first: an invoice may name the same item on two lines,
+      // and each has to go back against the running total.
+      final byItem = <String, int>{};
+      for (final line in invoice.lines) {
+        if (line.quantity <= 0) continue;
+        byItem[line.itemId] = (byItem[line.itemId] ?? 0) + line.quantity;
+      }
+      for (final entry in byItem.entries) {
+        final item = byId(entry.key);
+        if (item == null) continue;
+        final after = item.quantity + entry.value;
+        final updatedItem = item.copyWith(quantity: after, updatedAt: now);
+        touchedItems.add(updatedItem);
+        _putLevels(item.id, _settled(item.id, entry.value, item.location));
+        binWrites[item.id] = _levels[item.id] ?? const <String, int>{};
+        movements.add(
+          _movement(
+            updatedItem,
+            MovementKind.stockIn,
+            item.quantity,
+            after,
+            'Cancelled ${invoice.reference}',
+            documentId: invoice.id,
+          ),
+        );
+      }
+    }
+
+    final updated = invoice.copyWith(
+      status: InvoiceStatus.cancelled,
+      closedAt: now,
+      cancelledReason: reason,
+      updatedAt: now,
+    );
+
+    _applyTouched(touchedItems);
+    for (final movement in movements) {
+      _record(movement);
+    }
+    _invoices = _invoices.map((i) => i.id == id ? updated : i).toList();
+    notifyListeners();
+
+    _persist(() async {
+      await _repo.commitStockChange(
+        items: touchedItems,
+        levels: binWrites,
+        movements: movements,
+        invoice: updated,
+      );
+      if (movements.isNotEmpty) await _repo.trimMovements(maxMovements);
+    });
+    return true;
+  }
+
+  /// Removes a cancelled invoice from the file. Only a cancellation is ever
+  /// deletable: a live invoice is a claim on money, and one with payments
+  /// against it carries history that has to stay.
+  void deleteInvoice(String id) {
+    final invoice = invoiceById(id);
+    if (invoice == null || invoice.status != InvoiceStatus.cancelled) return;
+    _invoices = _invoices.where((i) => i.id != id).toList();
+    notifyListeners();
+    _persist(() => _repo.deleteInvoice(id));
   }
 
   // --- Stock by location ---------------------------------------------------
@@ -1685,6 +2079,7 @@ class InventoryController extends ChangeNotifier {
     _purchaseOrders = const [];
     _salesOrders = const [];
     _receipts = const [];
+    _invoices = const [];
     _transfers = const [];
     _rebuildBins(_items);
     _settings = settings;
