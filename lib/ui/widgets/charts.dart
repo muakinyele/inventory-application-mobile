@@ -180,6 +180,18 @@ class CategoryDonutChart extends StatefulWidget {
 }
 
 class _CategoryDonutChartState extends State<CategoryDonutChart> {
+  /// Bounds on the drawn circle. The floor keeps it readable on a phone; the
+  /// ceiling stops it ballooning to fill a wide desktop card.
+  static const _minDiameter = 240.0;
+  static const _maxDiameter = 340.0;
+
+  /// Ring thickness as a fraction of the diameter. Thin enough to leave a
+  /// generous hole for the total, thick enough to carry a "69%" label.
+  static const _ringFraction = 0.16;
+
+  /// How far the touched slice grows outward.
+  static const _touchGrowth = 6.0;
+
   int _touched = -1;
 
   @override
@@ -191,76 +203,108 @@ class _CategoryDonutChartState extends State<CategoryDonutChart> {
 
     double share(ChartSlice s) => s.value / widget.total * 100;
 
-    final chart = SizedBox(
-      height: 220,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          PieChart(
-            PieChartData(
-              sectionsSpace: 2,
-              centerSpaceRadius: 58,
-              startDegreeOffset: -90,
-              pieTouchData: PieTouchData(
-                touchCallback: (event, response) {
-                  setState(() {
-                    _touched = event.isInterestedForInteractions
-                        ? response?.touchedSection?.touchedSectionIndex ?? -1
-                        : -1;
-                  });
-                },
-              ),
-              sections: [
-                for (final (index, slice) in widget.slices.indexed)
-                  PieChartSectionData(
-                    value: slice.value,
-                    color: slice.color,
-                    radius: _touched == index ? 46 : 40,
-                    // Below ~7% the label cannot sit inside the arc legibly;
-                    // the legend carries those values instead.
-                    showTitle: share(slice) >= 7,
-                    title: '${share(slice).round()}%',
-                    titleStyle: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      color: Colors.white,
-                      shadows: [Shadow(blurRadius: 2, color: Colors.black38)],
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          Column(
-            mainAxisSize: MainAxisSize.min,
+    // Sized from the space the card actually gives it rather than a fixed
+    // height. The centre has to hold a full currency total — which for a
+    // six-figure inventory is a long string — so the hole is derived from the
+    // ring rather than the other way round, and the text is fitted to the
+    // square that inscribes it. A fixed 58pt hole used to let the total spill
+    // out over the arcs and collide with the slice labels.
+    final chart = LayoutBuilder(
+      builder: (context, constraints) {
+        final diameter = constraints.maxWidth.isFinite
+            ? constraints.maxWidth.clamp(_minDiameter, _maxDiameter)
+            : _maxDiameter;
+        final outer = diameter / 2;
+        final ring = diameter * _ringFraction;
+        // The touched slice grows outward, so the resting radius leaves room
+        // for it and the chart never overflows its own box.
+        final centerRadius = outer - ring - _touchGrowth;
+        // Side of the largest square inside the hole, less a little padding.
+        final holeWidth = centerRadius * 1.42;
+
+        return SizedBox(
+          height: diameter,
+          width: diameter,
+          child: Stack(
+            alignment: Alignment.center,
             children: [
-              Text(
-                _touched >= 0
-                    ? widget.formatValue(widget.slices[_touched].value)
-                    : widget.formatValue(widget.total),
-                style: TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: -0.4,
-                  color: p.ink,
+              PieChart(
+                PieChartData(
+                  sectionsSpace: 2,
+                  centerSpaceRadius: centerRadius,
+                  startDegreeOffset: -90,
+                  pieTouchData: PieTouchData(
+                    touchCallback: (event, response) {
+                      setState(() {
+                        _touched = event.isInterestedForInteractions
+                            ? response?.touchedSection?.touchedSectionIndex ??
+                                  -1
+                            : -1;
+                      });
+                    },
+                  ),
+                  sections: [
+                    for (final (index, slice) in widget.slices.indexed)
+                      PieChartSectionData(
+                        value: slice.value,
+                        color: slice.color,
+                        radius: _touched == index ? ring + _touchGrowth : ring,
+                        // Below ~7% the label cannot sit inside the arc legibly;
+                        // the legend carries those values instead.
+                        showTitle: share(slice) >= 7,
+                        title: '${share(slice).round()}%',
+                        titleStyle: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                          shadows: [
+                            Shadow(blurRadius: 2, color: Colors.black38),
+                          ],
+                        ),
+                      ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 2),
               SizedBox(
-                width: 96,
-                child: Text(
-                  _touched >= 0
-                      ? widget.slices[_touched].label
-                      : widget.centerLabel,
-                  maxLines: 2,
-                  textAlign: TextAlign.center,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 11.5, color: p.inkMuted),
+                width: holeWidth,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Scaled down rather than clipped or wrapped: a total is only
+                    // useful if the whole figure is legible, and how long it runs
+                    // depends on the currency and the size of the business.
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        _touched >= 0
+                            ? widget.formatValue(widget.slices[_touched].value)
+                            : widget.formatValue(widget.total),
+                        maxLines: 1,
+                        style: TextStyle(
+                          fontSize: 19,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.4,
+                          color: p.ink,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _touched >= 0
+                          ? widget.slices[_touched].label
+                          : widget.centerLabel,
+                      maxLines: 2,
+                      textAlign: TextAlign.center,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12, color: p.inkMuted),
+                    ),
+                  ],
                 ),
               ),
             ],
           ),
-        ],
-      ),
+        );
+      },
     );
 
     return Column(
@@ -301,15 +345,23 @@ class _CategoryDonutChartState extends State<CategoryDonutChart> {
                 ),
                 const SizedBox(width: Insets.md),
                 SizedBox(
-                  width: 92,
-                  child: Text(
-                    widget.formatValue(slice.value),
-                    textAlign: TextAlign.right,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: p.ink,
-                      fontFeatures: const [FontFeature.tabularFigures()],
+                  width: 116,
+                  // Same reasoning as the centre: shrink to fit rather than
+                  // wrap. At 92pt a figure like the one above broke across two
+                  // lines and split the number in half.
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      widget.formatValue(slice.value),
+                      maxLines: 1,
+                      textAlign: TextAlign.right,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: p.ink,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
                     ),
                   ),
                 ),

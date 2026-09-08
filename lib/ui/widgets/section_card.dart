@@ -35,8 +35,11 @@ class SectionCard extends StatelessWidget {
         children: [
           if (title != null) ...[
             Row(
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
               children: [
                 Expanded(
+                  flex: 3,
                   child: Text(
                     title!,
                     style: TextStyle(
@@ -47,7 +50,14 @@ class SectionCard extends StatelessWidget {
                     ),
                   ),
                 ),
-                ?trailing,
+                // Capped rather than free: a caption long enough to fill the
+                // row used to push the title to zero width, which wrapped it
+                // one letter per line and overflowed the card. Loose fit, so
+                // a short caption still takes only what it needs.
+                if (trailing != null) ...[
+                  const SizedBox(width: Insets.sm),
+                  Flexible(flex: 2, child: trailing!),
+                ],
               ],
             ),
             const SizedBox(height: Insets.md),
