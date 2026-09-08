@@ -63,9 +63,7 @@ class _SettingsPageState extends State<SettingsPage> {
     // Held as a percentage in the field and a fraction in the model, which is
     // the way round each is easiest to read.
     _taxRate = TextEditingController(
-      text: settings.taxRate == 0
-          ? ''
-          : _trimZeroes(settings.taxRate * 100),
+      text: settings.taxRate == 0 ? '' : _trimZeroes(settings.taxRate * 100),
     );
     _receiptFooter = TextEditingController(text: settings.receiptFooter);
   }
@@ -84,9 +82,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
   static String _trimZeroes(double value) {
     final text = value.toStringAsFixed(3);
-    return text.contains('.')
-        ? text.replaceFirst(RegExp(r'\.?0+$'), '')
-        : text;
+    return text.contains('.') ? text.replaceFirst(RegExp(r'\.?0+$'), '') : text;
   }
 
   void _notify(String message) {
@@ -329,9 +325,7 @@ class _SettingsPageState extends State<SettingsPage> {
                         child: TextField(
                           controller: _companyPhone,
                           keyboardType: TextInputType.phone,
-                          decoration: const InputDecoration(
-                            labelText: 'Phone',
-                          ),
+                          decoration: const InputDecoration(labelText: 'Phone'),
                           onChanged: (value) => controller.updateSettings(
                             settings.copyWith(companyPhone: value),
                           ),
@@ -342,9 +336,7 @@ class _SettingsPageState extends State<SettingsPage> {
                         child: TextField(
                           controller: _companyEmail,
                           keyboardType: TextInputType.emailAddress,
-                          decoration: const InputDecoration(
-                            labelText: 'Email',
-                          ),
+                          decoration: const InputDecoration(labelText: 'Email'),
                           onChanged: (value) => controller.updateSettings(
                             settings.copyWith(companyEmail: value),
                           ),
@@ -373,8 +365,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       Expanded(
                         child: TextField(
                           controller: _taxRate,
-                          keyboardType:
-                              const TextInputType.numberWithOptions(
+                          keyboardType: const TextInputType.numberWithOptions(
                             decimal: true,
                           ),
                           decoration: const InputDecoration(

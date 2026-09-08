@@ -563,8 +563,7 @@ class InventoryRepository {
       taxLabel: prefs['taxLabel']?.isNotEmpty == true
           ? prefs['taxLabel']!
           : 'VAT',
-      receiptFooter:
-          prefs['receiptFooter'] ?? 'Thank you for your custom.',
+      receiptFooter: prefs['receiptFooter'] ?? 'Thank you for your custom.',
       themeMode: ThemeMode.values.firstWhere(
         (m) => m.name == prefs['themeMode'],
         orElse: () => ThemeMode.system,

@@ -53,12 +53,7 @@ const navItems = <NavItem>[
     Icons.request_quote_outlined,
     section: 'Selling',
   ),
-  NavItem(
-    '/receipts',
-    'Receipts',
-    Icons.receipt_rounded,
-    section: 'Selling',
-  ),
+  NavItem('/receipts', 'Receipts', Icons.receipt_rounded, section: 'Selling'),
   NavItem('/customers', 'Customers', Icons.groups_outlined, section: 'Selling'),
 
   NavItem('/reports', 'Reports', Icons.bar_chart_rounded, section: 'Insights'),

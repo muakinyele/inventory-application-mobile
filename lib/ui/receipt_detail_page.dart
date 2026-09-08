@@ -68,9 +68,7 @@ class _ReceiptDetailPageState extends State<ReceiptDetailPage> {
             PageHeader(
               title: receipt.reference,
               subtitle: [
-                receipt.customerName.isEmpty
-                    ? 'Walk-in'
-                    : receipt.customerName,
+                receipt.customerName.isEmpty ? 'Walk-in' : receipt.customerName,
                 dateTimeLabel(receipt.issuedAt),
               ].join(' · '),
               showBack: true,
@@ -126,10 +124,7 @@ class _ReceiptDetailPageState extends State<ReceiptDetailPage> {
                         '${number(receipt.unitsKept)} of '
                         '${number(receipt.units)}',
                   ),
-                  _Fact(
-                    label: 'Total',
-                    value: money(receipt.total, currency),
-                  ),
+                  _Fact(label: 'Total', value: money(receipt.total, currency)),
                   if (receipt.cashier.isNotEmpty)
                     _Fact(label: 'Served by', value: receipt.cashier),
                 ],
@@ -311,7 +306,9 @@ class _ReceiptDetailPageState extends State<ReceiptDetailPage> {
                     label: const Text('Void'),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: p.critical,
-                      side: BorderSide(color: p.critical.withValues(alpha: 0.4)),
+                      side: BorderSide(
+                        color: p.critical.withValues(alpha: 0.4),
+                      ),
                     ),
                   ),
                 if (voided)
@@ -322,7 +319,9 @@ class _ReceiptDetailPageState extends State<ReceiptDetailPage> {
                     style: OutlinedButton.styleFrom(
                       foregroundColor: p.critical,
                       backgroundColor: p.criticalWash,
-                      side: BorderSide(color: p.critical.withValues(alpha: 0.4)),
+                      side: BorderSide(
+                        color: p.critical.withValues(alpha: 0.4),
+                      ),
                     ),
                   ),
               ],
@@ -371,10 +370,7 @@ class _ReceiptDetailPageState extends State<ReceiptDetailPage> {
     await _export(origin, receipt, format);
   }
 
-  Future<void> _settle(
-    InventoryController controller,
-    Receipt receipt,
-  ) async {
+  Future<void> _settle(InventoryController controller, Receipt receipt) async {
     final currency = controller.settings.currency;
     final field = TextEditingController(
       text: receipt.balanceDue.toStringAsFixed(2),
@@ -414,9 +410,8 @@ class _ReceiptDetailPageState extends State<ReceiptDetailPage> {
                   for (final m in PaymentMethod.values)
                     DropdownMenuItem(value: m, child: Text(m.label)),
                 ],
-                onChanged: (value) => setDialogState(
-                  () => method = value ?? method,
-                ),
+                onChanged: (value) =>
+                    setDialogState(() => method = value ?? method),
               ),
             ],
           ),
@@ -427,9 +422,8 @@ class _ReceiptDetailPageState extends State<ReceiptDetailPage> {
             child: const Text('Cancel'),
           ),
           FilledButton(
-            onPressed: () => Navigator.of(
-              dialogContext,
-            ).pop(parseAmount(field.text) ?? 0),
+            onPressed: () =>
+                Navigator.of(dialogContext).pop(parseAmount(field.text) ?? 0),
             child: const Text('Record'),
           ),
         ],
@@ -442,10 +436,7 @@ class _ReceiptDetailPageState extends State<ReceiptDetailPage> {
     if (mounted) _notify('${money(amount, currency)} recorded');
   }
 
-  Future<void> _refund(
-    InventoryController controller,
-    Receipt receipt,
-  ) async {
+  Future<void> _refund(InventoryController controller, Receipt receipt) async {
     final result = await showModalBottomSheet<(Map<String, int>, bool)>(
       context: context,
       isScrollControlled: true,
@@ -522,14 +513,13 @@ class _ReceiptDetailPageState extends State<ReceiptDetailPage> {
 
     final done = controller.voidReceipt(receipt.id, reason: text);
     if (mounted) {
-      _notify(done ? '${receipt.reference} voided' : 'That receipt cannot be voided');
+      _notify(
+        done ? '${receipt.reference} voided' : 'That receipt cannot be voided',
+      );
     }
   }
 
-  Future<void> _delete(
-    InventoryController controller,
-    Receipt receipt,
-  ) async {
+  Future<void> _delete(InventoryController controller, Receipt receipt) async {
     final router = GoRouter.of(context);
     final confirmed = await showDialog<bool>(
       context: context,

@@ -184,9 +184,8 @@ GoRouter createRouter({String initialLocation = '/'}) => GoRouter(
                 ),
                 GoRoute(
                   path: ':id',
-                  builder: (context, state) => ReceiptDetailPage(
-                    receiptId: state.pathParameters['id']!,
-                  ),
+                  builder: (context, state) =>
+                      ReceiptDetailPage(receiptId: state.pathParameters['id']!),
                 ),
               ],
             ),

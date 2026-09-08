@@ -177,10 +177,10 @@ class SalesOrderDetailPage extends StatelessWidget {
                 child: Column(
                   children: [
                     for (final (index, receipt)
-                        in controller.receiptsForSalesOrder(order.id).indexed)
-                      ...[
-                      if (index > 0)
-                        Divider(color: p.line, height: Insets.lg),
+                        in controller
+                            .receiptsForSalesOrder(order.id)
+                            .indexed) ...[
+                      if (index > 0) Divider(color: p.line, height: Insets.lg),
                       InkWell(
                         onTap: () => context.go('/receipts/${receipt.id}'),
                         child: Padding(
@@ -189,8 +189,7 @@ class SalesOrderDetailPage extends StatelessWidget {
                             children: [
                               Expanded(
                                 child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.start,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     Text(

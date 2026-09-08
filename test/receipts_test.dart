@@ -28,7 +28,9 @@ void main() {
   group('issuing', () {
     test('a counter sale takes the stock off the shelf', () async {
       final c = await newController();
-      final item = c.createItem(draft(name: 'Bolt', quantity: 20, unitCost: 100));
+      final item = c.createItem(
+        draft(name: 'Bolt', quantity: 20, unitCost: 100),
+      );
 
       final receipt = c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', quantity: 3, price: 500)],
@@ -267,27 +269,30 @@ void main() {
   });
 
   group('refunds', () {
-    test('goods coming back go on the shelf and net the receipt down', () async {
-      final c = await newController();
-      final item = c.createItem(draft(quantity: 20, unitCost: 100));
-      final receipt = c.issueReceipt(
-        lines: [receiptLine(item.id, 'Bolt', quantity: 4, price: 500)],
-        amountPaid: 2000,
-      )!;
-      expect(c.byId(item.id)!.quantity, 16);
+    test(
+      'goods coming back go on the shelf and net the receipt down',
+      () async {
+        final c = await newController();
+        final item = c.createItem(draft(quantity: 20, unitCost: 100));
+        final receipt = c.issueReceipt(
+          lines: [receiptLine(item.id, 'Bolt', quantity: 4, price: 500)],
+          amountPaid: 2000,
+        )!;
+        expect(c.byId(item.id)!.quantity, 16);
 
-      final moved = c.refundReceipt(receipt.id, {'rl1': 1});
+        final moved = c.refundReceipt(receipt.id, {'rl1': 1});
 
-      expect(moved, 1);
-      expect(c.byId(item.id)!.quantity, 17);
-      final after = c.receiptById(receipt.id)!;
-      expect(after.status, ReceiptStatus.partRefunded);
-      expect(after.refundTotal, 500);
-      expect(after.netTotal, 1500);
-      expect(after.unitsKept, 3);
-      expect(c.movements.first.kind, MovementKind.stockIn);
-      expect(c.movements.first.documentId, receipt.id);
-    });
+        expect(moved, 1);
+        expect(c.byId(item.id)!.quantity, 17);
+        final after = c.receiptById(receipt.id)!;
+        expect(after.status, ReceiptStatus.partRefunded);
+        expect(after.refundTotal, 500);
+        expect(after.netTotal, 1500);
+        expect(after.unitsKept, 3);
+        expect(c.movements.first.kind, MovementKind.stockIn);
+        expect(c.movements.first.documentId, receipt.id);
+      },
+    );
 
     test('refunding everything closes the receipt', () async {
       final c = await newController();
@@ -418,9 +423,7 @@ void main() {
     test('only a voided receipt can be deleted', () async {
       final c = await newController();
       final item = c.createItem(draft(quantity: 20));
-      final receipt = c.issueReceipt(
-        lines: [receiptLine(item.id, 'Bolt')],
-      )!;
+      final receipt = c.issueReceipt(lines: [receiptLine(item.id, 'Bolt')])!;
 
       c.deleteReceipt(receipt.id);
       expect(c.receipts, hasLength(1));
@@ -566,7 +569,8 @@ void main() {
       );
       final receipt = c.issueReceipt(
         lines: [receiptLine(item.id, item.name)],
-        notes: 'Delivered to the Ikeja site on the customer own transport, '
+        notes:
+            'Delivered to the Ikeja site on the customer own transport, '
             'received by the site foreman.',
       )!;
 
@@ -583,17 +587,22 @@ void main() {
       expect(text, contains('foreman.'));
     });
 
-    test('a word wider than the paper is cut rather than overhanging', () async {
-      final c = await newController();
-      final item = c.createItem(draft(name: 'A' * 95));
-      final receipt = c.issueReceipt(lines: [receiptLine(item.id, 'A' * 95)])!;
+    test(
+      'a word wider than the paper is cut rather than overhanging',
+      () async {
+        final c = await newController();
+        final item = c.createItem(draft(name: 'A' * 95));
+        final receipt = c.issueReceipt(
+          lines: [receiptLine(item.id, 'A' * 95)],
+        )!;
 
-      final text = ReceiptDocument(receipt, c.settings).toPlainText();
-      for (final line in text.trimRight().split('\n')) {
-        expect(line.length, lessThanOrEqualTo(40), reason: line);
-      }
-      expect('A' * 40, isIn(text.split('\n')));
-    });
+        final text = ReceiptDocument(receipt, c.settings).toPlainText();
+        for (final line in text.trimRight().split('\n')) {
+          expect(line.length, lessThanOrEqualTo(40), reason: line);
+        }
+        expect('A' * 40, isIn(text.split('\n')));
+      },
+    );
 
     test('a voided receipt says so in plain text', () async {
       final (receipt, settings, c) = await sample();
@@ -644,7 +653,9 @@ void main() {
         updatedAt: now,
       );
 
-      final rows = receiptsToCsv([empty], const AppSettings()).trim().split('\n');
+      final rows = receiptsToCsv([
+        empty,
+      ], const AppSettings()).trim().split('\n');
       expect(rows, hasLength(2));
       expect(rows[1], startsWith('RC-0009'));
     });

@@ -106,8 +106,7 @@ class _ReceiptsPageState extends State<ReceiptsPage> {
                 if (all.isNotEmpty)
                   Builder(
                     builder: (buttonContext) => OutlinedButton.icon(
-                      onPressed: () =>
-                          _openExportMenu(buttonContext, visible),
+                      onPressed: () => _openExportMenu(buttonContext, visible),
                       icon: const Icon(Icons.download_outlined, size: 18),
                       label: const Text('Export'),
                     ),
@@ -146,9 +145,7 @@ class _ReceiptsPageState extends State<ReceiptsPage> {
                     glyph: currencySymbol(currency),
                     value: moneyCompact(refunded, currency),
                     label: 'Refunded',
-                    tone: refunded > 0
-                        ? StatTone.warning
-                        : StatTone.neutral,
+                    tone: refunded > 0 ? StatTone.warning : StatTone.neutral,
                   ),
                 ],
               ),
@@ -175,10 +172,7 @@ class _ReceiptsPageState extends State<ReceiptsPage> {
                 options: const [
                   FilterOption(null, 'All'),
                   FilterOption(ReceiptStatus.issued, 'Issued'),
-                  FilterOption(
-                    ReceiptStatus.partRefunded,
-                    'Part refunded',
-                  ),
+                  FilterOption(ReceiptStatus.partRefunded, 'Part refunded'),
                   FilterOption(ReceiptStatus.refunded, 'Refunded'),
                   FilterOption(ReceiptStatus.voided, 'Voided'),
                 ],
@@ -190,9 +184,7 @@ class _ReceiptsPageState extends State<ReceiptsPage> {
                 padding: const EdgeInsets.only(top: Insets.section),
                 child: EmptyState(
                   icon: Icons.receipt_long_outlined,
-                  title: all.isEmpty
-                      ? 'No receipts yet'
-                      : 'Nothing matches',
+                  title: all.isEmpty ? 'No receipts yet' : 'Nothing matches',
                   body: all.isEmpty
                       ? 'Raise a receipt to record a counter sale. It takes '
                             'the stock off the shelf and gives the customer '
@@ -332,16 +324,15 @@ class _ReceiptCard extends StatelessWidget {
                         fontSize: 15,
                         fontWeight: FontWeight.w700,
                         color: p.ink,
-                        decoration: voided
-                            ? TextDecoration.lineThrough
-                            : null,
+                        decoration: voided ? TextDecoration.lineThrough : null,
                       ),
                     ),
                     const SizedBox(width: Insets.md),
                     Flexible(
                       child: ReceiptStatusPill(
                         status: receipt.status,
-                        unpaid: !receipt.isPaid &&
+                        unpaid:
+                            !receipt.isPaid &&
                             receipt.status.countsAsSale &&
                             !receipt.method.isDeferred,
                       ),

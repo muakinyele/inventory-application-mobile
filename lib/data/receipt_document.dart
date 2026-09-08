@@ -213,7 +213,9 @@ class ReceiptDocument {
     final facts = <(String, String)>[
       (
         'Billed to',
-        receipt.customerName.isEmpty ? 'Walk-in customer' : receipt.customerName
+        receipt.customerName.isEmpty
+            ? 'Walk-in customer'
+            : receipt.customerName,
       ),
       ('Payment', receipt.method.label),
       ('Status', receipt.status.label),
@@ -262,21 +264,20 @@ class ReceiptDocument {
       String text, {
       bool head = false,
       pw.Alignment align = pw.Alignment.centerLeft,
-    }) =>
-        pw.Container(
-          alignment: align,
-          padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-          child: pw.Text(
-            text,
-            style: head
-                ? pw.TextStyle(
-                    font: semiBold,
-                    fontSize: 8,
-                    color: PdfColors.grey700,
-                  )
-                : const pw.TextStyle(fontSize: 9.5),
-          ),
-        );
+    }) => pw.Container(
+      alignment: align,
+      padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+      child: pw.Text(
+        text,
+        style: head
+            ? pw.TextStyle(
+                font: semiBold,
+                fontSize: 8,
+                color: PdfColors.grey700,
+              )
+            : const pw.TextStyle(fontSize: 9.5),
+      ),
+    );
 
     return pw.Table(
       border: pw.TableBorder(
@@ -339,34 +340,34 @@ class ReceiptDocument {
       String value, {
       bool strong = false,
       PdfColor? color,
-    }) =>
-        pw.Padding(
-          padding: const pw.EdgeInsets.symmetric(vertical: 2.5),
-          child: pw.Row(
-            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-            children: [
-              pw.Text(
-                label,
-                style: pw.TextStyle(
-                  font: strong ? bold : null,
-                  fontSize: strong ? 11 : 9.5,
-                  color: color ?? (strong ? null : PdfColors.grey700),
-                ),
-              ),
-              pw.Text(
-                value,
-                style: pw.TextStyle(
-                  font: strong ? bold : semiBold,
-                  fontSize: strong ? 11 : 9.5,
-                  color: color,
-                ),
-              ),
-            ],
+    }) => pw.Padding(
+      padding: const pw.EdgeInsets.symmetric(vertical: 2.5),
+      child: pw.Row(
+        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+        children: [
+          pw.Text(
+            label,
+            style: pw.TextStyle(
+              font: strong ? bold : null,
+              fontSize: strong ? 11 : 9.5,
+              color: color ?? (strong ? null : PdfColors.grey700),
+            ),
           ),
-        );
+          pw.Text(
+            value,
+            style: pw.TextStyle(
+              font: strong ? bold : semiBold,
+              fontSize: strong ? 11 : 9.5,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
 
-    final taxPercent = (receipt.taxRate * 100)
-        .toStringAsFixed(receipt.taxRate * 100 % 1 == 0 ? 0 : 2);
+    final taxPercent = (receipt.taxRate * 100).toStringAsFixed(
+      receipt.taxRate * 100 % 1 == 0 ? 0 : 2,
+    );
 
     return pw.Column(
       children: [
@@ -449,12 +450,12 @@ class ReceiptDocument {
         );
 
     pw.Widget pair(String label, String value, {pw.Font? font}) => pw.Row(
-          mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-          children: [
-            pw.Text(label, style: pw.TextStyle(font: font, fontSize: 8.5)),
-            pw.Text(value, style: pw.TextStyle(font: font, fontSize: 8.5)),
-          ],
-        );
+      mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+      children: [
+        pw.Text(label, style: pw.TextStyle(font: font, fontSize: 8.5)),
+        pw.Text(value, style: pw.TextStyle(font: font, fontSize: 8.5)),
+      ],
+    );
 
     final rule = pw.Padding(
       padding: const pw.EdgeInsets.symmetric(vertical: 4),
@@ -477,7 +478,10 @@ class ReceiptDocument {
       ),
       rule,
       for (final line in receipt.lines) ...[
-        pw.Text(line.itemName, style: pw.TextStyle(font: semiBold, fontSize: 8.5)),
+        pw.Text(
+          line.itemName,
+          style: pw.TextStyle(font: semiBold, fontSize: 8.5),
+        ),
         pair(
           '  ${number(line.quantity)} x ${_money(line.unitPrice)}',
           _money(line.net),
@@ -491,7 +495,8 @@ class ReceiptDocument {
       pair('TOTAL', _money(receipt.total), font: bold),
       pair(receipt.method.label, _money(receipt.amountPaid)),
       if (receipt.change > 0) pair('Change', _money(receipt.change)),
-      if (receipt.balanceDue > 0) pair('Balance due', _money(receipt.balanceDue)),
+      if (receipt.balanceDue > 0)
+        pair('Balance due', _money(receipt.balanceDue)),
       if (receipt.status == ReceiptStatus.voided) ...[
         rule,
         centred('*** VOIDED ***', font: bold, size: 10),
