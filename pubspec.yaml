@@ -7,6 +7,7 @@ environment:
   sdk: ^3.12.1
 
 dependencies:
+  archive: ^4.0.9
   drift: ^2.34.4
   drift_flutter: ^0.3.1
   file_picker: ^12.2.0

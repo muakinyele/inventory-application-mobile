@@ -298,6 +298,24 @@ class _ReceiptEditorPageState extends State<ReceiptEditorPage> {
                       }
                     }),
                   ),
+                  // An unpaid receipt is still supported — a customer who
+                  // is short at the till — but a planned credit sale belongs
+                  // on an invoice, which tracks what is owed and issues a
+                  // receipt for each payment.
+                  if (_method.isDeferred && !_fromSale) ...[
+                    const SizedBox(height: Insets.sm),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        onPressed: () => context.go('/invoices/new'),
+                        icon: const Icon(Icons.description_outlined, size: 16),
+                        label: const Text('Raise an invoice instead'),
+                        style: TextButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: Insets.md),
                   TextField(
                     controller: _cashier,

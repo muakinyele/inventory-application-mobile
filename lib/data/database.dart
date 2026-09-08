@@ -321,6 +321,11 @@ class Receipts extends Table {
   /// Set when the receipt settles a sales order rather than standing alone.
   TextColumn get salesOrderId => text().nullable()();
 
+  /// Set when the receipt is a payment against a credit sale. Such a receipt
+  /// never moves stock — the invoice already did — and its total is the
+  /// payment, not a fresh sale, so reporting counts it once only.
+  TextColumn get invoiceId => text().nullable()();
+
   TextColumn get customerId => text().nullable()();
 
   /// Denormalised so an old receipt still prints with a name on it after the
@@ -386,6 +391,84 @@ class ReceiptLines extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+/// A credit sale: goods handed over now, money owed later.
+///
+/// The counterpart to [Receipts] and deliberately the same shape — the two
+/// differ in when payment arrives, not in what was sold. Payments against it
+/// are receipts carrying this invoice's id, so the running balance and the
+/// customer's proof of each payment stay the same set of facts.
+@DataClassName('InvoiceRow')
+class Invoices extends Table {
+  TextColumn get id => text()();
+
+  /// Human reference such as INV-0007, unique and never reused.
+  TextColumn get reference => text()();
+
+  /// Set when the invoice bills a sales order rather than standing alone.
+  TextColumn get salesOrderId => text().nullable()();
+
+  TextColumn get customerId => text().nullable()();
+
+  /// Denormalised so an old invoice still prints with a name on it after the
+  /// customer record is deleted.
+  TextColumn get customerName => text().withDefault(const Constant(''))();
+
+  /// open | partPaid | paid | cancelled
+  TextColumn get status => text().withDefault(const Constant('open'))();
+
+  /// Money off the whole bill, on top of any per-line discounts.
+  RealColumn get discount => real().withDefault(const Constant(0))();
+
+  /// Frozen at issue, so changing the rate in settings never rewrites what a
+  /// customer was already billed.
+  RealColumn get taxRate => real().withDefault(const Constant(0))();
+  TextColumn get taxLabel => text().withDefault(const Constant('Tax'))();
+
+  /// Kept in step by the controller as payments land, so a screen can read a
+  /// balance without gathering every receipt first.
+  RealColumn get amountPaid => real().withDefault(const Constant(0))();
+
+  /// Free text such as "30 days net".
+  TextColumn get terms => text().withDefault(const Constant(''))();
+  TextColumn get notes => text().withDefault(const Constant(''))();
+
+  /// Whether issuing this invoice is what took the stock off the shelf. False
+  /// for one billing a sales order, whose despatch already moved it.
+  BoolColumn get movesStock => boolean().withDefault(const Constant(true))();
+
+  DateTimeColumn get issuedAt => dateTime()();
+  DateTimeColumn get dueAt => dateTime().nullable()();
+  DateTimeColumn get closedAt => dateTime().nullable()();
+  TextColumn get cancelledReason => text().withDefault(const Constant(''))();
+  DateTimeColumn get createdAt => dateTime()();
+  DateTimeColumn get updatedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+/// One item on an invoice, priced as it was sold.
+@DataClassName('InvoiceLineRow')
+class InvoiceLines extends Table {
+  TextColumn get id => text()();
+  TextColumn get invoiceId => text()();
+  TextColumn get itemId => text()();
+  TextColumn get itemName => text()();
+  TextColumn get sku => text().withDefault(const Constant(''))();
+  TextColumn get unit => text().withDefault(const Constant('pcs'))();
+  IntColumn get quantity => integer()();
+  RealColumn get unitPrice => real().withDefault(const Constant(0))();
+  RealColumn get discount => real().withDefault(const Constant(0))();
+
+  /// What the goods cost, banked when they left the shelf.
+  RealColumn get costOfGoods => real().withDefault(const Constant(0))();
+
+  IntColumn get position => integer().withDefault(const Constant(0))();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
 @DriftDatabase(
   tables: [
     Items,
@@ -398,6 +481,8 @@ class ReceiptLines extends Table {
     SalesOrderLines,
     Receipts,
     ReceiptLines,
+    Invoices,
+    InvoiceLines,
     StockLevels,
     Transfers,
     TransferLines,
@@ -414,7 +499,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor]) : super(executor ?? _open());
 
   @override
-  int get schemaVersion => 8;
+  int get schemaVersion => 9;
 
   /// Store timestamps as ISO-8601 text rather than drift's default Unix
   /// *seconds*. Several movements are routinely recorded inside one second —
@@ -448,6 +533,20 @@ class AppDatabase extends _$AppDatabase {
         await m.addColumn(items, items.retailerPrice);
       }
 
+      if (from < 9) {
+        if (!await _tableExists('invoices')) await m.createTable(invoices);
+        if (!await _tableExists('invoice_lines')) {
+          await m.createTable(invoiceLines);
+        }
+        // Added to a table that may already exist from v8, so the column is
+        // checked for rather than assumed missing.
+        if (await _tableExists('receipts')) {
+          final columns = await _columnNames('receipts');
+          if (!columns.contains('invoice_id')) {
+            await m.addColumn(receipts, receipts.invoiceId);
+          }
+        }
+      }
       if (from < 8) {
         if (!await _tableExists('receipts')) await m.createTable(receipts);
         if (!await _tableExists('receipt_lines')) {

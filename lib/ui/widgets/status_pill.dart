@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/design.dart';
 import '../../core/palette.dart';
+import '../../models/invoice.dart';
 import '../../models/purchase_order.dart';
 import '../../models/receipt.dart';
 import '../../models/sales_order.dart';
@@ -128,6 +129,47 @@ class ReceiptStatusPill extends StatelessWidget {
       label: status.label,
       overdue: unpaid,
       overdueLabel: 'Unpaid',
+    );
+  }
+}
+
+/// The same chip for an invoice. Unpaid is the resting state rather than a
+/// problem — that is what credit means — so it reads neutral, and only the
+/// separate overdue chip raises the alarm.
+class InvoiceStatusPill extends StatelessWidget {
+  const InvoiceStatusPill({
+    super.key,
+    required this.status,
+    this.overdue = false,
+  });
+
+  final InvoiceStatus status;
+  final bool overdue;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    final (color, wash) = switch (status) {
+      InvoiceStatus.open => (p.info, p.infoWash),
+      InvoiceStatus.partPaid => (p.warningText, p.warningWash),
+      InvoiceStatus.paid => (p.goodText, p.goodWash),
+      InvoiceStatus.cancelled => (p.critical, p.criticalWash),
+    };
+
+    final icon = switch (status) {
+      InvoiceStatus.open => Icons.schedule_rounded,
+      InvoiceStatus.partPaid => Icons.incomplete_circle_rounded,
+      InvoiceStatus.paid => Icons.check_circle_outline,
+      InvoiceStatus.cancelled => Icons.block_rounded,
+    };
+
+    return _Pill(
+      icon: icon,
+      color: color,
+      wash: wash,
+      label: status.label,
+      overdue: overdue,
+      overdueLabel: 'Overdue',
     );
   }
 }

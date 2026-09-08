@@ -10,6 +10,28 @@ import '../core/formatters.dart';
 import '../models/app_settings.dart';
 import '../models/receipt.dart';
 
+Future<(pw.Font, pw.Font, pw.Font)>? _fontsFuture;
+
+/// Regular, semi-bold and bold Inter, for anything this app renders to PDF.
+///
+/// Inter is embedded rather than using a built-in PDF face because the base-14
+/// fonts are WinAnsi-only and cannot render "₦" — which would silently drop
+/// the currency symbol from every total on a Nigerian document.
+///
+/// Cached: parsing three TTFs is the slow part of producing a PDF, and a
+/// report and a receipt want exactly the same three.
+Future<(pw.Font, pw.Font, pw.Font)> loadReportFonts() {
+  return _fontsFuture ??= () async {
+    Future<pw.Font> load(String name) async =>
+        pw.Font.ttf(await rootBundle.load('assets/fonts/$name.ttf'));
+    return (
+      await load('Inter-Regular'),
+      await load('Inter-SemiBold'),
+      await load('Inter-Bold'),
+    );
+  }();
+}
+
 /// Turns a receipt into the files a customer or an accountant can be handed.
 ///
 /// The document is built from what is stored on the receipt itself — its own
@@ -36,27 +58,10 @@ class ReceiptDocument {
 
   // --- PDF -----------------------------------------------------------------
 
-  /// Inter is loaded rather than a built-in PDF face because the base-14 fonts
-  /// are WinAnsi-only and cannot render "₦" — which would silently drop the
-  /// currency symbol from every total on a Nigerian receipt.
-  static Future<(pw.Font, pw.Font, pw.Font)>? _fontsFuture;
-
-  static Future<(pw.Font, pw.Font, pw.Font)> _fonts() {
-    return _fontsFuture ??= () async {
-      Future<pw.Font> load(String name) async =>
-          pw.Font.ttf(await rootBundle.load('assets/fonts/$name.ttf'));
-      return (
-        await load('Inter-Regular'),
-        await load('Inter-SemiBold'),
-        await load('Inter-Bold'),
-      );
-    }();
-  }
-
   /// A4 by default. Pass [roll] for an 80mm till-roll page, which is what a
   /// thermal printer wants.
   Future<Uint8List> toPdf({bool roll = false}) async {
-    final (regular, semiBold, bold) = await _fonts();
+    final (regular, semiBold, bold) = await loadReportFonts();
     final theme = pw.ThemeData.withFont(
       base: regular,
       bold: bold,
