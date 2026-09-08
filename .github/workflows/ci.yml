@@ -20,7 +20,11 @@ jobs:
     timeout-minutes: 25
 
     steps:
-      - uses: actions/checkout@v4
+      # v7: v4 runs on Node 20, which GitHub has deprecated and now forces
+      # onto Node 24 anyway. v7's breaking change only narrows fork checkouts
+      # under pull_request_target and workflow_run, neither of which this
+      # workflow uses, and no inputs are passed here — so it is a drop-in.
+      - uses: actions/checkout@v7
 
       - uses: subosito/flutter-action@v2
         with:
