@@ -11,6 +11,7 @@ import '../models/app_settings.dart';
 import '../models/item.dart';
 import '../state/inventory_controller.dart';
 import 'widgets/charts.dart';
+import 'widgets/custom_period_dialog.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/page_header.dart';
 import 'widgets/section_card.dart';
@@ -78,14 +79,7 @@ class _ReportsPageState extends State<ReportsPage> {
   }
 
   Future<void> _pickCustom() async {
-    final now = DateTime.now();
-    final picked = await showDateRangePicker(
-      context: context,
-      firstDate: DateTime(now.year - 5),
-      lastDate: now,
-      initialDateRange: _customRange,
-      helpText: 'Report period',
-    );
+    final picked = await showCustomPeriodDialog(context, initial: _customRange);
     if (picked != null) setState(() => _customRange = picked);
   }
 
