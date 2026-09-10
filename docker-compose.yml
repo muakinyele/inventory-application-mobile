@@ -1,0 +1,138 @@
+# Development stack: build from source, expose the database, reload-friendly.
+# Production uses docker-compose.prod.yml, which pulls published images instead.
+#
+#   cp .env.example .env      # then fill in TOKEN_PEPPER at least
+#   docker compose up --build
+#   open http://localhost:8080
+#
+# The `version:` key is deliberately absent — Compose v2 ignores it and warns.
+
+name: stockpile
+
+services:
+  # ---------------------------------------------------------------------
+  # PostgreSQL
+  # ---------------------------------------------------------------------
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-stockpile}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-stockpile}
+      # Deterministic collation, so ORDER BY does not depend on the host's
+      # locale — which is how a query sorts differently in CI than in prod.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    ports:
+      # Bound to loopback only: convenient for psql on this machine, not
+      # reachable from the network. Production publishes no database port.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      # `-d` and `-U` matter: the bare command checks the *server*, which is
+      # ready before this particular database is, so the API would still race
+      # it on a first run.
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------
+  # Migrations — runs to completion, then exits
+  # ---------------------------------------------------------------------
+  migrate:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    entrypoint: ["/app/bin/migrate"]
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment: &api-env
+      APP_ENV: ${APP_ENV:-development}
+      APP_NAME: ${APP_NAME:-Stockpile}
+      APP_URL: ${APP_URL:-http://localhost:8080}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
+      PORT: "8080"
+      DATABASE_URL: postgres://${POSTGRES_USER:-stockpile}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-stockpile}
+      TOKEN_PEPPER: ${TOKEN_PEPPER}
+      EMAIL_HOST: ${EMAIL_HOST:-}
+      EMAIL_PORT: ${EMAIL_PORT:-587}
+      EMAIL_SSL: ${EMAIL_SSL:-false}
+      EMAIL_ALLOW_INSECURE: ${EMAIL_ALLOW_INSECURE:-false}
+      EMAIL_USERNAME: ${EMAIL_USERNAME:-}
+      EMAIL_PASSWORD: ${EMAIL_PASSWORD:-}
+      EMAIL_FROM: ${EMAIL_FROM:-Stockpile <no-reply@localhost>}
+      MAX_FAILED_LOGINS: ${MAX_FAILED_LOGINS:-8}
+      LOCKOUT_MINUTES: ${LOCKOUT_MINUTES:-15}
+      # The proxy in front overwrites X-Forwarded-For, so it can be believed.
+      TRUST_PROXY_HEADERS: "true"
+    logging: *logging
+
+  # ---------------------------------------------------------------------
+  # API
+  # ---------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        # Nothing serves until the schema is in place, so a fresh stack has no
+        # window where a request can hit a half-created database.
+        condition: service_completed_successfully
+    environment: *api-env
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging: *logging
+
+  # ---------------------------------------------------------------------
+  # Web client + reverse proxy
+  # ---------------------------------------------------------------------
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Relative on purpose: the client calls its own origin and nginx
+        # proxies /api onward, so this image is not tied to an environment.
+        API_BASE_URL: /api
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      API_UPSTREAM: http://api:8080
+      DNS_RESOLVER: 127.0.0.11
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    logging: *logging
+
+volumes:
+  db-data:
+    # Named, so `docker compose down` keeps the data and only `down -v`
+    # destroys it. An anonymous volume would be discarded on any recreate.
+    driver: local

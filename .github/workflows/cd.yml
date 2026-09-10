@@ -1,0 +1,221 @@
+name: Deploy
+
+# Publishing and deploying are deliberately separate from CI. CI proves a
+# commit is sound; this ships it. Splitting them means a pull request can
+# never push an image, and a deploy can never happen from an unverified tree.
+
+on:
+  push:
+    branches: [main, develop]
+  # Manual promotion, and the rollback path: pick an environment and a tag.
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Where to deploy
+        type: choice
+        options: [staging, production]
+        default: staging
+        required: true
+      image_tag:
+        description: >-
+          Image tag to deploy. Leave empty for the current commit. Set it to a
+          previous commit SHA to roll back.
+        type: string
+        required: false
+
+concurrency:
+  # One deploy per environment at a time, and never cancelled halfway: a
+  # half-applied migration is worse than a queued deploy.
+  group: deploy-${{ github.event.inputs.environment || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  # Lowercased below: GHCR rejects uppercase, and GitHub owners can contain it.
+  IMAGE_NAMESPACE: ${{ github.repository }}
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Publish
+  # ---------------------------------------------------------------------
+  publish:
+    name: Build and push images
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    permissions:
+      contents: read
+      # Lets the job push to GHCR with the run's own token — no long-lived
+      # registry credential has to exist as a secret at all.
+      packages: write
+
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Work out the tag
+        id: meta
+        run: |
+          # The commit SHA is the real identity of a build. `latest` and the
+          # branch name are moving pointers for convenience; the SHA is what a
+          # rollback names, because it can never drift.
+          tag="${{ github.event.inputs.image_tag }}"
+          [ -n "$tag" ] || tag="${GITHUB_SHA::12}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "namespace=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Sign in to the registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: server/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ steps.meta.outputs.namespace }}/api:${{ steps.meta.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ steps.meta.outputs.namespace }}/api:${{ github.ref_name }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+      - name: Push web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ steps.meta.outputs.namespace }}/web:${{ steps.meta.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ steps.meta.outputs.namespace }}/web:${{ github.ref_name }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+
+  # ---------------------------------------------------------------------
+  # Deploy
+  # ---------------------------------------------------------------------
+  deploy:
+    name: Deploy to ${{ github.event.inputs.environment || (github.ref_name == 'main' && 'production' || 'staging') }}
+    runs-on: ubuntu-latest
+    needs: publish
+    timeout-minutes: 20
+
+    # Gates on the repository's environment rules, so production can require a
+    # human approval before this job starts.
+    environment:
+      name: ${{ github.event.inputs.environment || (github.ref_name == 'main' && 'production' || 'staging') }}
+      url: ${{ vars.APP_URL }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check the host is configured
+        id: guard
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          # A repository with no host configured should skip cleanly rather
+          # than fail red on every push — the images are still published and
+          # can be deployed by hand.
+          if [ -z "$HOST" ]; then
+            echo "::notice::DEPLOY_HOST is not set; skipping remote deploy. Images were published and can be rolled out manually."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up the SSH key
+        if: steps.guard.outputs.configured == 'true'
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # Pinned from a secret rather than `StrictHostKeyChecking=no`, which
+          # would accept whatever answers on that address — including someone
+          # who has taken over the DNS record.
+          echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Deploy
+        if: steps.guard.outputs.configured == 'true'
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          IMAGE_TAG: ${{ needs.publish.outputs.tag }}
+          NAMESPACE: ${{ github.repository }}
+          # Every value the stack needs, from GitHub Secrets. Nothing
+          # sensitive is committed, and nothing is typed on the host by hand.
+          APP_URL: ${{ vars.APP_URL }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          TOKEN_PEPPER: ${{ secrets.TOKEN_PEPPER }}
+          EMAIL_HOST: ${{ secrets.EMAIL_HOST }}
+          EMAIL_PORT: ${{ vars.EMAIL_PORT }}
+          EMAIL_USERNAME: ${{ secrets.EMAIL_USERNAME }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_FROM: ${{ vars.EMAIL_FROM }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          namespace=$(echo "$NAMESPACE" | tr '[:upper:]' '[:lower:]')
+
+          # The compose file and the deploy script travel with the commit, so
+          # the host always runs the version this build was tested against.
+          scp -i ~/.ssh/id_ed25519 \
+            docker-compose.prod.yml scripts/deploy.sh \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/"
+
+          # The environment file is written over the SSH pipe, never left in
+          # the workspace or echoed — it holds the pepper and the SMTP
+          # credential.
+          ssh -i ~/.ssh/id_ed25519 "$DEPLOY_USER@$DEPLOY_HOST" \
+            "cat > $DEPLOY_PATH/.env && chmod 600 $DEPLOY_PATH/.env" <<ENVFILE
+          APP_ENV=production
+          APP_NAME=Stockpile
+          APP_URL=${APP_URL}
+          CORS_ORIGINS=${APP_URL}
+          WEB_PORT=8080
+          POSTGRES_USER=stockpile
+          POSTGRES_DB=stockpile
+          POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+          TOKEN_PEPPER=${TOKEN_PEPPER}
+          EMAIL_HOST=${EMAIL_HOST}
+          EMAIL_PORT=${EMAIL_PORT:-587}
+          EMAIL_SSL=false
+          EMAIL_USERNAME=${EMAIL_USERNAME}
+          EMAIL_PASSWORD=${EMAIL_PASSWORD}
+          EMAIL_FROM=${EMAIL_FROM}
+          IMAGE_REGISTRY=ghcr.io
+          IMAGE_NAMESPACE=${namespace}
+          IMAGE_TAG=${IMAGE_TAG}
+          ENVFILE
+
+          ssh -i ~/.ssh/id_ed25519 "$DEPLOY_USER@$DEPLOY_HOST" \
+            "cd $DEPLOY_PATH && \
+             echo '$GHCR_TOKEN' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin && \
+             chmod +x deploy.sh && ./deploy.sh"
+
+      - name: Verify the deployment is serving
+        if: steps.guard.outputs.configured == 'true'
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+        run: |
+          # An external check, from outside the host: the containers reporting
+          # healthy to themselves is not the same as the site answering.
+          for attempt in $(seq 1 20); do
+            if curl -fsS --max-time 10 "$APP_URL/healthz" >/dev/null; then
+              echo "Serving at $APP_URL"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::$APP_URL did not respond after the deploy. The host keeps the previous release; roll back with the Deploy workflow and a previous image tag."
+          exit 1

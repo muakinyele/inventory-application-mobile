@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
   # So a red main can be re-checked without an empty commit.
   workflow_dispatch:
@@ -14,8 +14,11 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  check:
-    name: Analyze, test and build
+  # ---------------------------------------------------------------------
+  # Flutter client
+  # ---------------------------------------------------------------------
+  client:
+    name: Client — analyze, test and build
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -80,3 +83,134 @@ jobs:
         # The app ships to the browser, so a change that compiles for the VM
         # but not for the web is a broken release, not a broken test.
         run: flutter build web --no-tree-shake-icons
+
+  # ---------------------------------------------------------------------
+  # Dart API
+  # ---------------------------------------------------------------------
+  api:
+    name: API — analyze and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      # The server's tests run against a real PostgreSQL rather than a fake:
+      # they assert on partial unique indexes, transactional rollback and
+      # `ON CONFLICT` behaviour, none of which a stub would reproduce.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: stockpile_auth_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    defaults:
+      run:
+        working-directory: server
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dart-lang/setup-dart@v1
+        with:
+          # Matches the SDK in server/pubspec.yaml and the Dockerfile, so all
+          # three agree on what "builds" means.
+          sdk: "3.12"
+
+      - name: Install dependencies
+        run: dart pub get
+
+      - name: Verify formatting
+        run: dart format --output=none --set-exit-if-changed lib bin test
+
+      - name: Analyze
+        run: dart analyze --fatal-infos --fatal-warnings
+
+      - name: Verify generated database code is up to date
+        # database.g.dart is committed. A schema change with a stale
+        # regeneration would otherwise only surface at runtime, as a missing
+        # column on a live deployment.
+        run: |
+          dart run build_runner build
+          if ! git diff --quiet -- lib/src/db/database.g.dart; then
+            echo "::error file=server/lib/src/db/database.g.dart::Generated code is stale. Run 'dart run build_runner build' in server/ and commit the result."
+            git diff --stat -- lib/src/db/database.g.dart
+            exit 1
+          fi
+
+      - name: Test
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/stockpile_auth_test
+        # Serially: every test truncates the shared database, so parallel
+        # suites would pull each other's rows out from under them.
+        run: dart test -j 1
+
+  # ---------------------------------------------------------------------
+  # Container images — built on every PR, pushed only by the deploy workflow
+  # ---------------------------------------------------------------------
+  images:
+    name: Build container images
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    # No point burning 40 minutes on an image whose contents already failed.
+    needs: [client, api]
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api
+            dockerfile: server/Dockerfile
+          - name: web
+            dockerfile: Dockerfile
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build ${{ matrix.name }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          # Never pushed from CI. Publishing is the deploy workflow's job, and
+          # only from a branch that has already passed everything.
+          push: false
+          load: true
+          tags: stockpile-${{ matrix.name }}:ci
+          # A registry-backed cache, so an unchanged dependency layer is not
+          # rebuilt on every pull request.
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+      - name: Smoke-test the image
+        run: |
+          if [ "${{ matrix.name }}" = "api" ]; then
+            # Starts, reads its configuration, and refuses to run without a
+            # database URL — which proves the binary and its shared libraries
+            # actually resolve inside the runtime image.
+            output=$(docker run --rm stockpile-api:ci 2>&1 || true)
+            echo "$output"
+            echo "$output" | grep -q "DATABASE_URL is not set" \
+              || { echo "::error::API image did not start as expected"; exit 1; }
+            docker run --rm --entrypoint id stockpile-api:ci | grep -q "uid=10001" \
+              || { echo "::error::API image must not run as root"; exit 1; }
+          else
+            # nginx renders its template at start, so a config error only
+            # appears when the container actually runs.
+            docker run -d --name web-smoke -p 18080:8080 stockpile-web:ci
+            for i in $(seq 1 30); do
+              if curl -fsS http://127.0.0.1:18080/healthz >/dev/null 2>&1; then ok=1; break; fi
+              sleep 2
+            done
+            docker logs web-smoke
+            docker rm -f web-smoke
+            [ "${ok:-0}" = "1" ] || { echo "::error::web image never became healthy"; exit 1; }
+          fi
