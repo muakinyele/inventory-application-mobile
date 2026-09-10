@@ -117,20 +117,54 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Check the host is configured
+      - name: Check the deployment is fully configured
         id: guard
         env:
-          HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          TOKEN_PEPPER: ${{ secrets.TOKEN_PEPPER }}
+          EMAIL_HOST: ${{ secrets.EMAIL_HOST }}
+          APP_URL: ${{ vars.APP_URL }}
         run: |
-          # A repository with no host configured should skip cleanly rather
-          # than fail red on every push — the images are still published and
-          # can be deployed by hand.
-          if [ -z "$HOST" ]; then
-            echo "::notice::DEPLOY_HOST is not set; skipping remote deploy. Images were published and can be rolled out manually."
+          # Three outcomes, not two.
+          #
+          # Nothing configured at all -> skip cleanly. A repository without a
+          # host should not have a permanently red pipeline; the images are
+          # published and can be rolled out by hand.
+          #
+          # Everything configured -> deploy.
+          #
+          # *Partially* configured -> fail here, naming exactly what is
+          # missing. This is the case that used to slip through: the guard
+          # only checked DEPLOY_HOST, so a run with a host but no
+          # POSTGRES_PASSWORD went ahead and wrote an .env with empty values
+          # onto the server. Compose would then refuse to start — the
+          # production file guards those with `:?` — leaving the host in a
+          # worse state than before the deploy, for a failure that was
+          # knowable before a single byte was copied.
+          if [ -z "$DEPLOY_HOST" ]; then
+            echo "::notice::No DEPLOY_HOST configured; skipping remote deploy. Images were published and can be rolled out manually."
             echo "configured=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "configured=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+
+          missing=""
+          for name in DEPLOY_USER DEPLOY_PATH DEPLOY_SSH_KEY DEPLOY_KNOWN_HOSTS \
+                      POSTGRES_PASSWORD TOKEN_PEPPER EMAIL_HOST; do
+            [ -z "${!name}" ] && missing="$missing  - secret $name\n"
+          done
+          [ -z "$APP_URL" ] && missing="$missing  - variable APP_URL\n"
+
+          if [ -n "$missing" ]; then
+            printf '%b' "::error::DEPLOY_HOST is set, so this is a real deploy — but the configuration is incomplete and would put a broken .env on the host. Missing:\n$missing\nSee docs/DEPLOYMENT.md. Nothing was copied and the running release is untouched."
+            exit 1
+          fi
+
+          echo "configured=true" >> "$GITHUB_OUTPUT"
 
       - name: Set up the SSH key
         if: steps.guard.outputs.configured == 'true'
