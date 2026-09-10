@@ -211,17 +211,6 @@ ThemeData buildTheme(Brightness brightness) {
       contentTextStyle: TextStyle(fontSize: 14, color: p.inkSecondary),
     ),
 
-    snackBarTheme: SnackBarThemeData(
-      backgroundColor: p.ink,
-      contentTextStyle: TextStyle(color: p.plane, fontSize: 13.5),
-      actionTextColor: p.plane,
-      behavior: SnackBarBehavior.floating,
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(Radii.control),
-      ),
-    ),
-
     chipTheme: ChipThemeData(
       backgroundColor: p.surfaceSunken,
       selectedColor: p.accent,

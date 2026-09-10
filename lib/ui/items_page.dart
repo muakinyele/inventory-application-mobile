@@ -11,6 +11,7 @@ import '../models/app_settings.dart';
 import '../models/item.dart';
 import '../state/inventory_controller.dart';
 import 'scanner_page.dart';
+import 'widgets/app_message.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/filter_chips.dart';
 import 'widgets/page_header.dart';
@@ -92,10 +93,12 @@ class _ItemsPageState extends State<ItemsPage> {
     super.dispose();
   }
 
-  void _notify(String message, {SnackBarAction? action}) {
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(message), action: action));
+  Future<void> _notify(
+    String message, {
+    MessageTone tone = MessageTone.success,
+    MessageAction? action,
+  }) {
+    return showAppMessage(context, message, tone: tone, action: action);
   }
 
   Future<void> _scan() async {
@@ -109,7 +112,12 @@ class _ItemsPageState extends State<ItemsPage> {
     if (match != null) {
       context.go('/items/${match.id}');
     } else {
-      _notify('No item matches that code — starting a new one.');
+      // Awaited: routing away takes the dialog down with the page it sits on.
+      await _notify(
+        'No item matches that code — starting a new one.',
+        tone: MessageTone.info,
+      );
+      if (!mounted) return;
       context.go('/items/new?barcode=${Uri.encodeComponent(code)}');
     }
   }
@@ -144,7 +152,7 @@ class _ItemsPageState extends State<ItemsPage> {
   Future<void> _export(BuildContext buttonContext) async {
     final controller = context.read<InventoryController>();
     if (controller.items.isEmpty) {
-      _notify('Nothing to export yet.');
+      _notify('Nothing to export yet.', tone: MessageTone.warning);
       return;
     }
     await const ExportService().shareText(
@@ -305,7 +313,7 @@ class _ItemsPageState extends State<ItemsPage> {
     );
     _notify(
       '${item.name}: ${signed(delta)} ${item.unit}',
-      action: SnackBarAction(
+      action: MessageAction(
         label: 'Undo',
         onPressed: () =>
             controller.adjustStock(item.id, -delta, note: 'Undo quick change'),

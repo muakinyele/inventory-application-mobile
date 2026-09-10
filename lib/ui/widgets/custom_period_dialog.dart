@@ -6,18 +6,19 @@ import '../../core/formatters.dart';
 import '../../core/palette.dart';
 import '../../data/sales_report.dart';
 
-/// The spans people actually ask for, so the common case is one tap rather
-/// than two trips through a calendar.
-enum _Preset { last7, last30, thisMonth, lastMonth, thisQuarter, yearToDate }
+/// The spans the named periods cannot reach.
+///
+/// Deliberately short. Daily, Weekly, Monthly and Yearly are on the report
+/// itself and step backwards, so "this month" or "last month" is already one
+/// tap there; repeating them here would be the same span offered twice. What
+/// is left is the rolling windows that no amount of stepping produces.
+enum _Preset { last7, last30, thisQuarter }
 
 extension _PresetDetail on _Preset {
   String get label => switch (this) {
     _Preset.last7 => 'Last 7 days',
     _Preset.last30 => 'Last 30 days',
-    _Preset.thisMonth => 'This month',
-    _Preset.lastMonth => 'Last month',
     _Preset.thisQuarter => 'This quarter',
-    _Preset.yearToDate => 'Year to date',
   };
 
   /// Resolved against [today], inclusive at both ends. Nothing runs past
@@ -27,29 +28,20 @@ extension _PresetDetail on _Preset {
     return switch (this) {
       _Preset.last7 => (day.subtract(const Duration(days: 6)), day),
       _Preset.last30 => (day.subtract(const Duration(days: 29)), day),
-      _Preset.thisMonth => (DateTime(day.year, day.month), day),
-      _Preset.lastMonth => (
-        DateTime(day.year, day.month - 1),
-        // Day zero of this month is the last day of the previous one, which
-        // avoids caring how long that month was.
-        DateTime(day.year, day.month, 0),
-      ),
       _Preset.thisQuarter => (
         DateTime(day.year, ((day.month - 1) ~/ 3) * 3 + 1),
         day,
       ),
-      _Preset.yearToDate => (DateTime(day.year), day),
     };
   }
 }
 
-/// Asks for a custom reporting period in a modal, rather than handing the
-/// screen over to a full-page calendar.
+/// Asks for a span the named periods cannot express.
 ///
-/// A report period is two dates and a decision, and the full-screen picker
-/// hides the page it applies to while you make it. This keeps the report
-/// behind the dialog, offers the spans people ask for by name, and only
-/// reaches for a calendar when the dates are genuinely arbitrary.
+/// This is the other half of the period control on the report, not a second
+/// copy of it: the report picks and steps through named periods, and this
+/// picks a rolling window or two arbitrary dates. It stays a modal so the
+/// figures it applies to are still on screen behind it.
 ///
 /// Returns the chosen span, or null when dismissed.
 Future<DateTimeRange?> showCustomPeriodDialog(
@@ -151,23 +143,25 @@ class _CustomPeriodDialogState extends State<_CustomPeriodDialog> {
 
     return AlertDialog(
       title: const Text('Custom period'),
+      titlePadding: const EdgeInsets.fromLTRB(
+        Insets.xl,
+        Insets.xl,
+        Insets.xl,
+        Insets.md,
+      ),
+      contentPadding: const EdgeInsets.symmetric(horizontal: Insets.xl),
       // Bounded so the dialog stays a dialog on a wide window and does not
       // stretch across it.
       content: SizedBox(
-        width: 420,
+        width: 380,
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(
-                'Report on any span of trading. Both dates are included.',
-                style: TextStyle(fontSize: 13, color: p.inkSecondary),
-              ),
-              const SizedBox(height: Insets.lg),
               Wrap(
-                spacing: Insets.sm,
-                runSpacing: Insets.sm,
+                spacing: Insets.xs,
+                runSpacing: Insets.xs,
                 children: [
                   for (final preset in _Preset.values)
                     _PresetChip(
@@ -187,7 +181,7 @@ class _CustomPeriodDialogState extends State<_CustomPeriodDialog> {
                       onTap: () => _pick(isStart: true),
                     ),
                   ),
-                  const SizedBox(width: Insets.md),
+                  const SizedBox(width: Insets.sm),
                   Expanded(
                     child: _DateField(
                       label: 'To',
@@ -198,36 +192,44 @@ class _CustomPeriodDialogState extends State<_CustomPeriodDialog> {
                 ],
               ),
               const SizedBox(height: Insets.md),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(Insets.md),
-                decoration: BoxDecoration(
-                  color: p.surfaceSunken,
-                  borderRadius: BorderRadius.circular(Radii.control),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
+              // What Apply will do, in one line: the span as the report will
+              // title it, and how long it runs. Both dates count.
+              Row(
+                children: [
+                  Icon(
+                    Icons.event_available_outlined,
+                    size: 15,
+                    color: p.accent,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
                       range.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontSize: 14,
+                        fontSize: 13,
                         fontWeight: FontWeight.w700,
                         color: p.ink,
                       ),
                     ),
-                    const SizedBox(height: 1),
-                    Text(
-                      '${number(_days)} ${_days == 1 ? 'day' : 'days'}',
-                      style: TextStyle(fontSize: 12.5, color: p.inkMuted),
-                    ),
-                  ],
-                ),
+                  ),
+                  const SizedBox(width: Insets.sm),
+                  Text(
+                    '${number(_days)} ${_days == 1 ? 'day' : 'days'}',
+                    style: TextStyle(fontSize: 12.5, color: p.inkMuted),
+                  ),
+                ],
               ),
             ],
           ),
         ),
+      ),
+      actionsPadding: const EdgeInsets.fromLTRB(
+        Insets.md,
+        Insets.md,
+        Insets.md,
+        Insets.md,
       ),
       actions: [
         TextButton(

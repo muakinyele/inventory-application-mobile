@@ -7,8 +7,11 @@ import '../core/design.dart';
 import '../core/formatters.dart';
 import '../core/palette.dart';
 import '../data/export_service.dart';
+import '../data/receipt_document.dart';
 import '../models/receipt.dart';
 import '../state/inventory_controller.dart';
+import 'document_view_page.dart';
+import 'widgets/app_message.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/page_header.dart';
 import 'widgets/receipt_export_sheet.dart';
@@ -29,10 +32,11 @@ class _ReceiptDetailPageState extends State<ReceiptDetailPage> {
   /// on this screen slow enough to need saying so.
   bool _exporting = false;
 
-  void _notify(String message) {
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(message)));
+  Future<void> _notify(
+    String message, {
+    MessageTone tone = MessageTone.success,
+  }) {
+    return showAppMessage(context, message, tone: tone);
   }
 
   @override
@@ -73,6 +77,11 @@ class _ReceiptDetailPageState extends State<ReceiptDetailPage> {
               ].join(' · '),
               showBack: true,
               actions: [
+                OutlinedButton.icon(
+                  onPressed: () => context.go('/receipts/${receipt.id}/view'),
+                  icon: const Icon(Icons.visibility_outlined, size: 18),
+                  label: const Text('View'),
+                ),
                 Builder(
                   builder: (buttonContext) => FilledButton.icon(
                     onPressed: _exporting
@@ -255,22 +264,48 @@ class _ReceiptDetailPageState extends State<ReceiptDetailPage> {
                 ),
               ),
             ],
-            if (receipt.salesOrderId != null) ...[
+            if (receipt.salesOrderId != null || receipt.invoiceId != null) ...[
               const SizedBox(height: Insets.lg),
               SectionCard(
                 title: 'Raised against',
                 child: Align(
                   alignment: Alignment.centerLeft,
-                  child: OutlinedButton.icon(
-                    onPressed: () =>
-                        context.go('/sales-orders/${receipt.salesOrderId}'),
-                    icon: const Icon(Icons.request_quote_outlined, size: 18),
-                    label: Text(
-                      controller
-                              .salesOrderById(receipt.salesOrderId!)
-                              ?.reference ??
-                          'The sale it settles',
-                    ),
+                  child: Wrap(
+                    spacing: Insets.sm,
+                    runSpacing: Insets.sm,
+                    children: [
+                      if (receipt.invoiceId != null)
+                        OutlinedButton.icon(
+                          onPressed: () =>
+                              context.go('/invoices/${receipt.invoiceId}'),
+                          icon: const Icon(
+                            Icons.description_outlined,
+                            size: 18,
+                          ),
+                          label: Text(
+                            controller
+                                    .invoiceById(receipt.invoiceId!)
+                                    ?.reference ??
+                                'The invoice it pays',
+                          ),
+                        ),
+                      if (receipt.salesOrderId != null)
+                        OutlinedButton.icon(
+                          onPressed: () => context.go(
+                            '/sales-orders/${receipt.salesOrderId}',
+                          ),
+                          icon: const Icon(
+                            Icons.request_quote_outlined,
+                            size: 18,
+                          ),
+                          label: Text(
+                            controller
+                                    .salesOrderById(receipt.salesOrderId!)
+                                    ?.reference ??
+                                'The sale it settles',
+                          ),
+                        ),
+                    ],
                   ),
                 ),
               ),
@@ -354,7 +389,12 @@ class _ReceiptDetailPageState extends State<ReceiptDetailPage> {
         originRect: origin,
       );
     } catch (error) {
-      if (mounted) _notify('That file could not be produced: $error');
+      if (mounted) {
+        _notify(
+          'That file could not be produced: $error',
+          tone: MessageTone.failure,
+        );
+      }
       return;
     } finally {
       if (mounted) setState(() => _exporting = false);
@@ -456,6 +496,7 @@ class _ReceiptDetailPageState extends State<ReceiptDetailPage> {
           ? 'Nothing to refund'
           : 'Refunded ${refunded == 1 ? '1 line' : '$refunded lines'}'
                 '${restock ? ' and put the goods back' : ''}',
+      tone: refunded == 0 ? MessageTone.warning : MessageTone.success,
     );
   }
 
@@ -515,6 +556,7 @@ class _ReceiptDetailPageState extends State<ReceiptDetailPage> {
     if (mounted) {
       _notify(
         done ? '${receipt.reference} voided' : 'That receipt cannot be voided',
+        tone: done ? MessageTone.success : MessageTone.failure,
       );
     }
   }
@@ -547,6 +589,36 @@ class _ReceiptDetailPageState extends State<ReceiptDetailPage> {
     if (confirmed != true) return;
     controller.deleteReceipt(receipt.id);
     router.go('/receipts');
+  }
+}
+
+/// The receipt as the document it prints, on its own URL. Read once and not
+/// listened to, for the same reason as the invoice: it is a snapshot.
+class ReceiptDocumentPage extends StatelessWidget {
+  const ReceiptDocumentPage({super.key, required this.receiptId});
+
+  final String receiptId;
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = context.read<InventoryController>();
+    final receipt = controller.receiptById(receiptId);
+    if (receipt == null) {
+      return DocumentGone(
+        what: 'Receipt',
+        onBack: () => context.go('/receipts'),
+      );
+    }
+
+    final doc = ReceiptDocument(receipt, controller.settings);
+    return DocumentViewPage(
+      title: receipt.reference,
+      subtitle: receipt.customerName.isEmpty
+          ? 'Receipt'
+          : 'Receipt for ${receipt.customerName}',
+      filename: doc.filename('pdf'),
+      build: doc.toPdf,
+    );
   }
 }
 
