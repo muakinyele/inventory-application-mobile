@@ -46,7 +46,7 @@ Future<void> main(List<String> arguments) async {
   }
 
   final db = AuthDatabase(
-    openPostgres(env.databaseUrl, requireSsl: env.isProduction),
+    openPostgres(env.databaseUrl, requireSsl: env.databaseRequiresSsl),
   );
   final bootstrap = Bootstrap(db);
   await bootstrap.run();

@@ -74,7 +74,7 @@ Future<AuthDatabase?> _connectWithRetry(
 }) async {
   for (var attempt = 1; attempt <= attempts; attempt++) {
     final db = AuthDatabase(
-      openPostgres(env.databaseUrl, requireSsl: env.isProduction),
+      openPostgres(env.databaseUrl, requireSsl: env.databaseRequiresSsl),
     );
     try {
       // Any statement forces the connection to actually open; constructing

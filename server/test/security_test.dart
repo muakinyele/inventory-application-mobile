@@ -9,6 +9,8 @@ import 'package:test/test.dart';
 import 'support.dart';
 
 void main() {
+  _databaseSslGroup();
+
   group('token service', () {
     test('mints unguessable, URL-safe tokens', () {
       final service = TokenService('a-pepper-of-sufficient-length-here');
@@ -440,6 +442,80 @@ void main() {
         );
       },
     );
+  });
+}
+
+void _databaseSslGroup() {
+  group('database TLS is decided by the connection string', () {
+    Env envWith(String url, {String appEnv = 'production'}) => Env.load(
+      envFile: '.env.test.absent',
+      overrides: {
+        'APP_ENV': appEnv,
+        'DATABASE_URL': url,
+        'TOKEN_PEPPER': 'a-pepper-that-is-long-enough-to-pass!!',
+        'EMAIL_HOST': 'smtp.example.com',
+        'APP_URL': 'https://secure.example',
+      },
+    );
+
+    test('a compose-network host does not require TLS, even in production', () {
+      // The bug this exists for: `postgres` on a Docker bridge ships without
+      // TLS, so requiring it there fails every connection forever.
+      expect(
+        envWith('postgres://u:p@db:5432/stockpile').databaseRequiresSsl,
+        isFalse,
+      );
+      expect(
+        envWith('postgres://u:p@localhost:5432/stockpile').databaseRequiresSsl,
+        isFalse,
+      );
+      expect(
+        envWith('postgres://u:p@127.0.0.1:5432/stockpile').databaseRequiresSsl,
+        isFalse,
+      );
+    });
+
+    test('a managed host does require TLS in production', () {
+      expect(
+        envWith(
+          'postgres://u:p@db.eu-west-1.rds.amazonaws.com:5432/s',
+        ).databaseRequiresSsl,
+        isTrue,
+      );
+    });
+
+    test('an explicit sslmode always wins', () {
+      expect(
+        envWith('postgres://u:p@db:5432/s?sslmode=require').databaseRequiresSsl,
+        isTrue,
+        reason: 'asking for TLS on a local host is still asking for it',
+      );
+      expect(
+        envWith(
+          'postgres://u:p@remote.example.com:5432/s?sslmode=disable',
+        ).databaseRequiresSsl,
+        isFalse,
+      );
+      for (final lax in ['prefer', 'allow']) {
+        expect(
+          envWith(
+            'postgres://u:p@remote.example.com:5432/s?sslmode=$lax',
+          ).databaseRequiresSsl,
+          isFalse,
+          reason: '$lax must not be treated as a hard requirement',
+        );
+      }
+    });
+
+    test('development never requires it', () {
+      expect(
+        envWith(
+          'postgres://u:p@remote.example.com:5432/s',
+          appEnv: 'development',
+        ).databaseRequiresSsl,
+        isFalse,
+      );
+    });
   });
 }
 
