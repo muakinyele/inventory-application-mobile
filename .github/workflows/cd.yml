@@ -283,11 +283,36 @@ jobs:
           # "rsync is not installed" when the truth was that ssh never got a
           # session at all — the probe suppressed stderr, so a failed login
           # and a missing package produced the same empty string.
-          if ! $ssh_cmd -n "$DEPLOY_USER@$DEPLOY_HOST" true 2>/tmp/ssh_auth.err; then
+          # Retried, because the first failure here was a *timeout* rather
+          # than a refusal — a host that is up but briefly unresponsive should
+          # not fail a deploy on one attempt.
+          ssh_ok=""
+          for attempt in 1 2 3; do
+            if $ssh_cmd -n "$DEPLOY_USER@$DEPLOY_HOST" true 2>/tmp/ssh_auth.err; then
+              ssh_ok=1
+              break
+            fi
+            echo "SSH attempt $attempt failed: $(tr -d '\r' < /tmp/ssh_auth.err | tail -1)"
+            [ "$attempt" -lt 3 ] && sleep 10
+          done
+
+          if [ -z "$ssh_ok" ]; then
             echo "::group::ssh output"
             sed 's/^/  /' /tmp/ssh_auth.err || true
             echo "::endgroup::"
-            echo "::error::Could not open an SSH session as the deploy user. The host key verified, so this is authentication or the account itself: check that DEPLOY_SSH_KEY's public half is in ~<DEPLOY_USER>/.ssh/authorized_keys on the host, that the file is mode 600 and its directory 700, and that DEPLOY_USER is correct."
+
+            # The two failures need opposite responses, and reporting the
+            # wrong one sends you to change things that were never broken.
+            # "Permission denied" is a key problem. "Timeout" is not — the
+            # credentials may be perfect and the host simply unreachable from
+            # the runner, which is a firewall, a load or an sshd limit.
+            if grep -qi "permission denied" /tmp/ssh_auth.err; then
+              echo "::error::The host refused the key. Check that DEPLOY_SSH_KEY's public half is in ~<DEPLOY_USER>/.ssh/authorized_keys, that the file is mode 600 and its directory 700, and that DEPLOY_USER owns it."
+            elif grep -qiE "timeout|timed out|not responding|connection closed|broken pipe" /tmp/ssh_auth.err; then
+              echo "::error::The host did not respond within the timeout. This is not an authentication problem — the key may be fine. Check that the host is up and not overloaded, that port ${port} is reachable from GitHub's runners (they use many changing IP ranges, so an allowlist will block them), and that fail2ban or sshd MaxStartups is not rejecting repeated connections. 'journalctl -u sshd --since \"1 hour ago\"' on the host usually says which."
+            else
+              echo "::error::Could not open an SSH session. The host key verified, so the machine is right; the group above has ssh's own words."
+            fi
             exit 1
           fi
           echo "SSH authentication OK."
