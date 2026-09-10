@@ -128,8 +128,14 @@ jobs:
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           TOKEN_PEPPER: ${{ secrets.TOKEN_PEPPER }}
           EMAIL_HOST: ${{ secrets.EMAIL_HOST }}
-          APP_URL: ${{ vars.APP_URL }}
+          APP_URL: ${{ secrets.APP_URL || vars.APP_URL }}
         run: |
+          # APP_URL, EMAIL_PORT and EMAIL_FROM are read as either a secret or
+          # a variable. Nothing about them is sensitive, so the documentation
+          # suggests variables — but a repository that has them as secrets is
+          # configured correctly, and should not be told a value is missing
+          # when it is plainly there.
+          #
           # Three outcomes, not two.
           #
           # Nothing configured at all -> skip cleanly. A repository without a
@@ -188,14 +194,14 @@ jobs:
           NAMESPACE: ${{ github.repository }}
           # Every value the stack needs, from GitHub Secrets. Nothing
           # sensitive is committed, and nothing is typed on the host by hand.
-          APP_URL: ${{ vars.APP_URL }}
+          APP_URL: ${{ secrets.APP_URL || vars.APP_URL }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           TOKEN_PEPPER: ${{ secrets.TOKEN_PEPPER }}
           EMAIL_HOST: ${{ secrets.EMAIL_HOST }}
-          EMAIL_PORT: ${{ vars.EMAIL_PORT }}
+          EMAIL_PORT: ${{ secrets.EMAIL_PORT || vars.EMAIL_PORT }}
           EMAIL_USERNAME: ${{ secrets.EMAIL_USERNAME }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-          EMAIL_FROM: ${{ vars.EMAIL_FROM }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM || vars.EMAIL_FROM }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
@@ -240,7 +246,7 @@ jobs:
       - name: Verify the deployment is serving
         if: steps.guard.outputs.configured == 'true'
         env:
-          APP_URL: ${{ vars.APP_URL }}
+          APP_URL: ${{ secrets.APP_URL || vars.APP_URL }}
         run: |
           # An external check, from outside the host: the containers reporting
           # healthy to themselves is not the same as the site answering.
