@@ -101,7 +101,11 @@ docker compose down -v                  # stop and destroy the database
 ### What the host needs
 
 - Docker Engine with the Compose plugin.
+- **rsync** — the deploy syncs the compose file and the deploy script with it.
+  `sudo apt-get install -y rsync`. The workflow checks for it and says so
+  rather than failing on rsync's exit 127.
 - A directory to deploy into, owned by the deploy user.
+- SSH on port 22, or `DEPLOY_PORT` set to whatever it listens on.
 - TLS terminated in front of the stack — a load balancer, or a host nginx with
   a certificate, proxying to `127.0.0.1:8080`. The `web` container speaks
   plain HTTP and is not meant to face the internet directly.
@@ -131,8 +135,23 @@ own `GITHUB_TOKEN`.
 
 ### What a deploy does
 
-`main` deploys to production, `develop` to staging. Both go through
-`scripts/deploy.sh` on the host, which:
+`main` deploys to production, `develop` to staging.
+
+The compose file and the deploy script are **rsynced** into the deploy
+directory as a mirror: only changed bytes cross the wire, modes are preserved
+so `deploy.sh` arrives executable, and `--delete` means a file removed from
+the repository stops lingering on the host.
+
+`.env` and `.previous-tag` are excluded from that mirror, and the exclusion is
+load-bearing rather than tidiness. Both are written *on the host* — one by the
+workflow, one by `deploy.sh` to record what to roll back to — so a `--delete`
+without them would erase the database password and the rollback target on
+every deploy.
+
+The environment file is never rsynced. It is written over the SSH pipe, so it
+is never a file on the runner's disk.
+
+Then `scripts/deploy.sh` runs on the host, which:
 
 1. **Pulls first.** A bad tag or an unreachable registry fails while the
    current release is still serving.
