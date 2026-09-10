@@ -1,0 +1,10 @@
+targets:
+  $default:
+    builders:
+      drift_dev:
+        options:
+          # The server talks to PostgreSQL, so generated SQL must use its
+          # dialect and parameter syntax rather than SQLite's.
+          sql:
+            dialect: postgres
+          named_parameters: true
