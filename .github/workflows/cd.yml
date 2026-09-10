@@ -266,7 +266,31 @@ jobs:
           namespace=$(echo "$NAMESPACE" | tr '[:upper:]' '[:lower:]')
 
           port="${DEPLOY_PORT:-22}"
-          ssh_cmd="ssh -i $HOME/.ssh/id_ed25519 -p $port"
+          # BatchMode is the important one. Without it, an ssh whose key is
+          # refused falls back to keyboard-interactive auth and *waits for a
+          # password that will never be typed* — which on a runner looks like
+          # a four-minute silence ending in exit 255, with no clue that
+          # authentication was the problem at all. With it, a refused key
+          # fails immediately and says so.
+          #
+          # The keepalives cover the other shape of the same symptom: a
+          # connection that establishes and then stalls.
+          ssh_opts="-o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
+          ssh_cmd="ssh -i $HOME/.ssh/id_ed25519 -p $port $ssh_opts"
+
+          # Authentication is checked on its own, first, because every later
+          # failure is indistinguishable from it. The previous run reported
+          # "rsync is not installed" when the truth was that ssh never got a
+          # session at all — the probe suppressed stderr, so a failed login
+          # and a missing package produced the same empty string.
+          if ! $ssh_cmd -n "$DEPLOY_USER@$DEPLOY_HOST" true 2>/tmp/ssh_auth.err; then
+            echo "::group::ssh output"
+            sed 's/^/  /' /tmp/ssh_auth.err || true
+            echo "::endgroup::"
+            echo "::error::Could not open an SSH session as the deploy user. The host key verified, so this is authentication or the account itself: check that DEPLOY_SSH_KEY's public half is in ~<DEPLOY_USER>/.ssh/authorized_keys on the host, that the file is mode 600 and its directory 700, and that DEPLOY_USER is correct."
+            exit 1
+          fi
+          echo "SSH authentication OK."
 
           # rsync has to exist on both ends. Finding it is less simple than it
           # sounds: `ssh host command` runs a *non-login, non-interactive*
@@ -279,7 +303,7 @@ jobs:
           # rather than declaring it missing. That flag exists for exactly
           # this.
           remote_rsync=$(
-            $ssh_cmd "$DEPLOY_USER@$DEPLOY_HOST" \
+            $ssh_cmd -n "$DEPLOY_USER@$DEPLOY_HOST" \
               'command -v rsync 2>/dev/null \
                || for p in /usr/bin/rsync /bin/rsync /usr/local/bin/rsync /opt/homebrew/bin/rsync; do
                     [ -x "$p" ] && { echo "$p"; break; }
@@ -292,7 +316,7 @@ jobs:
             # at — a package installed as root but invisible to DEPLOY_USER
             # looks identical to one that was never installed.
             echo "::group::What the host reports"
-            $ssh_cmd "$DEPLOY_USER@$DEPLOY_HOST" \
+            $ssh_cmd -n "$DEPLOY_USER@$DEPLOY_HOST" \
               'echo "user:  $(id -un)"; echo "shell: $SHELL"; echo "PATH:  $PATH";
                echo "--- candidates ---";
                ls -l /usr/bin/rsync /bin/rsync /usr/local/bin/rsync 2>&1 | sed "s/^/  /";
@@ -337,7 +361,7 @@ jobs:
           # The environment file is written over the SSH pipe, never left in
           # the workspace or echoed — it holds the pepper and the SMTP
           # credential.
-          ssh -i ~/.ssh/id_ed25519 -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" \
+          ssh -i ~/.ssh/id_ed25519 -p "$port" $ssh_opts "$DEPLOY_USER@$DEPLOY_HOST" \
             "cat > $DEPLOY_PATH/.env && chmod 600 $DEPLOY_PATH/.env" <<ENVFILE
           APP_ENV=production
           APP_NAME=Stockpile
@@ -359,7 +383,7 @@ jobs:
           IMAGE_TAG=${IMAGE_TAG}
           ENVFILE
 
-          ssh -i ~/.ssh/id_ed25519 -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" \
+          ssh -i ~/.ssh/id_ed25519 -p "$port" $ssh_opts -n "$DEPLOY_USER@$DEPLOY_HOST" \
             "cd $DEPLOY_PATH && \
              echo '$GHCR_TOKEN' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin && \
              ./deploy.sh"
