@@ -64,6 +64,36 @@ class Env {
   final int maxFailedLogins;
   final Duration lockoutDuration;
 
+  /// Whether the database connection must be TLS.
+  ///
+  /// Derived from the connection string rather than from `APP_ENV`, because
+  /// production covers two quite different situations. A managed database
+  /// reached across a network must have TLS. A container on the same Docker
+  /// bridge cannot: the official `postgres` image ships with TLS switched
+  /// off, so demanding it there fails every connection forever — which is
+  /// exactly what it did.
+  ///
+  /// So the connection string decides, the way libpq's own `sslmode` does:
+  ///   * `?sslmode=require` (or verify-full) — TLS, and fail without it.
+  ///   * `?sslmode=disable` — no TLS.
+  ///   * neither — TLS if the host looks remote, off for a local or
+  ///     compose-network host, which is the case that has no TLS to offer.
+  bool get databaseRequiresSsl {
+    final uri = Uri.tryParse(databaseUrl);
+    final mode = uri?.queryParameters['sslmode']?.toLowerCase();
+    if (mode != null) {
+      return mode != 'disable' && mode != 'allow' && mode != 'prefer';
+    }
+
+    final host = uri?.host ?? '';
+    const localish = {'localhost', '127.0.0.1', '::1', 'db', 'postgres'};
+    if (localish.contains(host)) return false;
+    // A bare name with no dots is a container or LAN hostname, not a managed
+    // service endpoint.
+    if (!host.contains('.')) return false;
+    return isProduction;
+  }
+
   /// Only trust `X-Forwarded-For` when a reverse proxy is genuinely in front,
   /// otherwise a client can spoof its own IP and slip past per-IP throttling.
   final bool trustProxyHeaders;

@@ -383,7 +383,13 @@ jobs:
           IMAGE_TAG=${IMAGE_TAG}
           ENVFILE
 
-          ssh -i ~/.ssh/id_ed25519 -p "$port" $ssh_opts -n "$DEPLOY_USER@$DEPLOY_HOST" \
+          # -tt forces a pseudo-terminal, so the remote side gets a signal
+          # and the channel closes when the script exits. Without it, ssh
+          # waits on any descriptor the remote still holds — which is how a
+          # deploy that had already failed and printed its error went on to
+          # occupy the job for another nineteen minutes, until the job
+          # timeout cancelled it and reported nothing useful.
+          ssh -i ~/.ssh/id_ed25519 -p "$port" $ssh_opts -tt "$DEPLOY_USER@$DEPLOY_HOST" \
             "cd $DEPLOY_PATH && \
              echo '$GHCR_TOKEN' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin && \
              ./deploy.sh"

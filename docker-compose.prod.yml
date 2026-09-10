@@ -30,7 +30,12 @@ x-api-env: &api-env
   APP_URL: ${APP_URL:?set APP_URL to the public https URL}
   CORS_ORIGINS: ${CORS_ORIGINS:-${APP_URL}}
   PORT: "8080"
-  DATABASE_URL: postgres://${POSTGRES_USER:-stockpile}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-stockpile}
+  # sslmode=disable is explicit rather than implied: `db` is a container on
+  # this compose network, and the official postgres image ships without TLS,
+  # so requiring it fails every connection. Traffic never leaves the Docker
+  # bridge. A *managed* database instead of this container should use
+  # ?sslmode=require, and the server will then insist on TLS.
+  DATABASE_URL: postgres://${POSTGRES_USER:-stockpile}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-stockpile}?sslmode=disable
   TOKEN_PEPPER: ${TOKEN_PEPPER:?set TOKEN_PEPPER}
   EMAIL_HOST: ${EMAIL_HOST:?production must be able to send mail}
   EMAIL_PORT: ${EMAIL_PORT:-587}

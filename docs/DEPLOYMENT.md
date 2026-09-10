@@ -229,6 +229,14 @@ release stops thrashing and stays visible in `docker compose ps`.
 PostgreSQL 16 with a named volume, `db-data`. Named rather than anonymous, so
 `docker compose down` keeps the data and only `down -v` destroys it.
 
+**TLS to the database** is decided by the connection string, not by
+`APP_ENV`. The bundled `db` container is on the compose network and the
+official postgres image ships without TLS, so requiring it there would fail
+every connection — the compose files therefore pass `?sslmode=disable`, and
+the traffic never leaves the Docker bridge. Point `DATABASE_URL` at a managed
+database instead and add `?sslmode=require`; the server will then insist on
+TLS and refuse a plaintext connection.
+
 Migrations are drift's, and they run in two places: the server applies them at
 boot, and `bin/migrate` applies them as a discrete deploy step. Both are
 idempotent — drift applies only what the database has not seen, and the
