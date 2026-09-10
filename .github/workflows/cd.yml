@@ -174,15 +174,73 @@ jobs:
 
       - name: Set up the SSH key
         if: steps.guard.outputs.configured == 'true'
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
         run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
+
           # Pinned from a secret rather than `StrictHostKeyChecking=no`, which
           # would accept whatever answers on that address — including someone
           # who has taken over the DNS record.
-          echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
+
+          port="${DEPLOY_PORT:-22}"
+          echo "DEPLOY_PORT=$port" >> "$GITHUB_ENV"
+
+          # `Host key verification failed` from scp says nothing about *why*,
+          # and the two usual causes are invisible from the log: the pinned
+          # key was taken for a different name than the one being connected
+          # to, or the host listens on a non-standard port and the entry
+          # therefore needs the [host]:port form. Both are diagnosed here,
+          # where the answer can actually be printed.
+          if ! grep -qE '^[^#[:space:]]' ~/.ssh/known_hosts; then
+            echo "::error::DEPLOY_KNOWN_HOSTS is empty or contains only comments. Generate it with: ssh-keyscan -p $port <host>"
+            exit 1
+          fi
+
+          echo "Pinned host key entries: $(grep -cE '^[^#[:space:]]' ~/.ssh/known_hosts)"
+          echo "Fingerprints pinned:"
+          ssh-keygen -lf ~/.ssh/known_hosts | sed 's/^/  /' || true
+
+          # What the server actually presents, right now.
+          if ! ssh-keyscan -T 10 -p "$port" "$DEPLOY_HOST" > /tmp/presented 2>/tmp/keyscan.err; then
+            echo "::error::Could not reach the host on port $port to read its key. Is DEPLOY_HOST correct and the port open to GitHub's runners?"
+            sed 's/^/  /' /tmp/keyscan.err
+            exit 1
+          fi
+          if ! grep -qE '^[^#[:space:]]' /tmp/presented; then
+            echo "::error::The host answered but offered no SSH host key on port $port."
+            exit 1
+          fi
+
+          echo "Fingerprints the host presents:"
+          ssh-keygen -lf /tmp/presented | sed 's/^/  /' || true
+
+          # Compare on the key material itself, ignoring the name field, so a
+          # mismatch caused purely by the hostname is reported as such.
+          awk '{print $(NF-1), $NF}' /tmp/presented | sort -u > /tmp/presented.keys
+          awk '{print $(NF-1), $NF}' ~/.ssh/known_hosts | sort -u > /tmp/pinned.keys
+          if ! comm -12 /tmp/presented.keys /tmp/pinned.keys | grep -q .; then
+            echo "::error::None of the pinned keys match what the host presents. Replace DEPLOY_KNOWN_HOSTS with the output of: ssh-keyscan -p $port <the exact DEPLOY_HOST value>"
+            exit 1
+          fi
+
+          # The keys match, so any remaining failure is the *name* the entry
+          # is filed under. ssh matches on name first, so an entry keyscanned
+          # from an IP will not satisfy a connection made by hostname.
+          if ! ssh-keygen -F "$DEPLOY_HOST" -f ~/.ssh/known_hosts >/dev/null 2>&1 \
+             && ! ssh-keygen -F "[$DEPLOY_HOST]:$port" -f ~/.ssh/known_hosts >/dev/null 2>&1; then
+            echo "::error::The host key material matches, but no entry is filed under the name being connected to. Regenerate with the exact DEPLOY_HOST value: ssh-keyscan -p $port <host>"
+            exit 1
+          fi
+
+          echo "Host key verified against DEPLOY_KNOWN_HOSTS."
 
       - name: Deploy
         if: steps.guard.outputs.configured == 'true'
@@ -209,14 +267,16 @@ jobs:
 
           # The compose file and the deploy script travel with the commit, so
           # the host always runs the version this build was tested against.
-          scp -i ~/.ssh/id_ed25519 \
+          port="${DEPLOY_PORT:-22}"
+
+          scp -i ~/.ssh/id_ed25519 -P "$port" \
             docker-compose.prod.yml scripts/deploy.sh \
             "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/"
 
           # The environment file is written over the SSH pipe, never left in
           # the workspace or echoed — it holds the pepper and the SMTP
           # credential.
-          ssh -i ~/.ssh/id_ed25519 "$DEPLOY_USER@$DEPLOY_HOST" \
+          ssh -i ~/.ssh/id_ed25519 -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" \
             "cat > $DEPLOY_PATH/.env && chmod 600 $DEPLOY_PATH/.env" <<ENVFILE
           APP_ENV=production
           APP_NAME=Stockpile
@@ -238,7 +298,7 @@ jobs:
           IMAGE_TAG=${IMAGE_TAG}
           ENVFILE
 
-          ssh -i ~/.ssh/id_ed25519 "$DEPLOY_USER@$DEPLOY_HOST" \
+          ssh -i ~/.ssh/id_ed25519 -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" \
             "cd $DEPLOY_PATH && \
              echo '$GHCR_TOKEN' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin && \
              chmod +x deploy.sh && ./deploy.sh"
