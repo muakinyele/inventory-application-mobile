@@ -34,3 +34,14 @@ legacy-pwa/dev-dist/
 .idea/
 .vscode/
 .DS_Store
+
+# Secrets — never commit. `server/.env.example` is the committed template.
+.env
+.env.*
+!.env.example
+server/.env
+server/.env.*
+!server/.env.example
+
+# Compiled server binary
+server/build/

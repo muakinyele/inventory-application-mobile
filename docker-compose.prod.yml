@@ -1,0 +1,138 @@
+# Production stack. **Standalone — not an overlay.**
+#
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Deliberately a complete file rather than a set of overrides on
+# docker-compose.yml. Compose's override semantics differ by version: `ports`
+# merges by appending, and the `!override` / `!reset` tags that would undo
+# that need Compose 2.24+. On 2.20 they are silently ignored — which quietly
+# leaves the database port published in production. A standalone file cannot
+# fail that way on any version, and the repetition is worth that.
+#
+# What differs from development:
+#   * pulls published images instead of building — a deploy ships the artefact
+#     CI already tested rather than rebuilding and hoping it matches;
+#   * every image is pinned to IMAGE_TAG, so a rollback is one value;
+#   * the database publishes no host port at all;
+#   * restart policies, resource limits and log rotation.
+
+name: stockpile
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-api-env: &api-env
+  APP_ENV: production
+  APP_NAME: ${APP_NAME:-Stockpile}
+  APP_URL: ${APP_URL:?set APP_URL to the public https URL}
+  CORS_ORIGINS: ${CORS_ORIGINS:-${APP_URL}}
+  PORT: "8080"
+  DATABASE_URL: postgres://${POSTGRES_USER:-stockpile}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-stockpile}
+  TOKEN_PEPPER: ${TOKEN_PEPPER:?set TOKEN_PEPPER}
+  EMAIL_HOST: ${EMAIL_HOST:?production must be able to send mail}
+  EMAIL_PORT: ${EMAIL_PORT:-587}
+  EMAIL_SSL: ${EMAIL_SSL:-false}
+  EMAIL_ALLOW_INSECURE: "false"
+  EMAIL_USERNAME: ${EMAIL_USERNAME:-}
+  EMAIL_PASSWORD: ${EMAIL_PASSWORD:-}
+  EMAIL_FROM: ${EMAIL_FROM:-Stockpile <no-reply@localhost>}
+  MAX_FAILED_LOGINS: ${MAX_FAILED_LOGINS:-8}
+  LOCKOUT_MINUTES: ${LOCKOUT_MINUTES:-15}
+  # nginx overwrites X-Forwarded-For rather than appending, so it cannot be
+  # forged by a client and the per-IP throttle can believe it.
+  TRUST_PROXY_HEADERS: "true"
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: always
+    # No `ports`. The database is reachable only on the compose network; use
+    # `docker compose exec db psql -U stockpile stockpile` to get a shell.
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-stockpile}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-stockpile}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+    logging: *logging
+
+  migrate:
+    image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:?set IMAGE_NAMESPACE}/api:${IMAGE_TAG:-latest}
+    entrypoint: ["/app/bin/migrate"]
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment: *api-env
+    logging: *logging
+
+  api:
+    image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:?set IMAGE_NAMESPACE}/api:${IMAGE_TAG:-latest}
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        # Nothing serves until the schema is in place, so there is no window
+        # where a request can hit a half-migrated database.
+        condition: service_completed_successfully
+    environment: *api-env
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+      restart_policy:
+        condition: on-failure
+        max_attempts: 3
+    logging: *logging
+
+  web:
+    image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:?set IMAGE_NAMESPACE}/web:${IMAGE_TAG:-latest}
+    restart: always
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      API_UPSTREAM: http://api:8080
+      DNS_RESOLVER: 127.0.0.11
+    ports:
+      # TLS is terminated in front of this — a load balancer, or a host nginx
+      # with a certificate. This publishes plain HTTP on the host only.
+      - "${WEB_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+    logging: *logging
+
+volumes:
+  db-data:
+    driver: local

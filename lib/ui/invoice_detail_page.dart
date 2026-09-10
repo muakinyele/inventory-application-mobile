@@ -10,6 +10,9 @@ import '../data/invoice_document.dart';
 import '../models/invoice.dart';
 import '../models/receipt.dart';
 import '../state/inventory_controller.dart';
+import 'document_view_page.dart';
+import 'widgets/app_message.dart';
+import 'widgets/document_link_row.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/page_header.dart';
 import 'widgets/section_card.dart';
@@ -27,10 +30,11 @@ class InvoiceDetailPage extends StatefulWidget {
 class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
   bool _exporting = false;
 
-  void _notify(String message) {
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(message)));
+  Future<void> _notify(
+    String message, {
+    MessageTone tone = MessageTone.success,
+  }) {
+    return showAppMessage(context, message, tone: tone);
   }
 
   @override
@@ -80,6 +84,11 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
                     icon: const Icon(Icons.payments_outlined, size: 18),
                     label: const Text('Record payment'),
                   ),
+                OutlinedButton.icon(
+                  onPressed: () => context.go('/invoices/${invoice.id}/view'),
+                  icon: const Icon(Icons.visibility_outlined, size: 18),
+                  label: const Text('View'),
+                ),
                 Builder(
                   builder: (buttonContext) => OutlinedButton.icon(
                     onPressed: _exporting
@@ -257,57 +266,14 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
                   children: [
                     for (final (index, payment) in payments.indexed) ...[
                       if (index > 0) Divider(color: p.line, height: Insets.lg),
-                      InkWell(
-                        onTap: () =>
+                      DocumentLinkRow(
+                        reference: payment.reference,
+                        detail:
+                            '${payment.method.label} · '
+                            '${dateTimeLabel(payment.at)}',
+                        amount: money(payment.amount, currency),
+                        onOpen: () =>
                             context.go('/receipts/${payment.receiptId}'),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 6),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Text(
-                                      payment.reference,
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w700,
-                                        color: p.ink,
-                                      ),
-                                    ),
-                                    Text(
-                                      '${payment.method.label} · '
-                                      '${dateTimeLabel(payment.at)}',
-                                      style: TextStyle(
-                                        fontSize: 12.5,
-                                        color: p.inkMuted,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              Text(
-                                money(payment.amount, currency),
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w700,
-                                  color: p.ink,
-                                  fontFeatures: const [
-                                    FontFeature.tabularFigures(),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(width: Insets.sm),
-                              Icon(
-                                Icons.chevron_right,
-                                size: 18,
-                                color: p.inkMuted,
-                              ),
-                            ],
-                          ),
-                        ),
                       ),
                     ],
                   ],
@@ -323,6 +289,26 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
                   child: Text(
                     invoice.notes,
                     style: TextStyle(fontSize: 13.5, color: p.inkSecondary),
+                  ),
+                ),
+              ),
+            ],
+            if (invoice.salesOrderId != null) ...[
+              const SizedBox(height: Insets.lg),
+              SectionCard(
+                title: 'Raised against',
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: OutlinedButton.icon(
+                    onPressed: () =>
+                        context.go('/sales-orders/${invoice.salesOrderId}'),
+                    icon: const Icon(Icons.request_quote_outlined, size: 18),
+                    label: Text(
+                      controller
+                              .salesOrderById(invoice.salesOrderId!)
+                              ?.reference ??
+                          'The sale it bills',
+                    ),
                   ),
                 ),
               ),
@@ -387,7 +373,12 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
         originRect: origin,
       );
     } catch (error) {
-      if (mounted) _notify('That file could not be produced: $error');
+      if (mounted) {
+        _notify(
+          'That file could not be produced: $error',
+          tone: MessageTone.failure,
+        );
+      }
       return;
     } finally {
       if (mounted) setState(() => _exporting = false);
@@ -472,7 +463,7 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
     final receipt = controller.payInvoice(invoice.id, amount, method: chosen);
     if (!mounted) return;
     if (receipt == null) {
-      _notify('That payment could not be recorded.');
+      _notify('That payment could not be recorded.', tone: MessageTone.failure);
       return;
     }
     _notify('${receipt.reference} issued for ${money(amount, currency)}');
@@ -535,6 +526,7 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
         done
             ? '${invoice.reference} cancelled'
             : 'That invoice cannot be cancelled',
+        tone: done ? MessageTone.success : MessageTone.failure,
       );
     }
   }
@@ -567,6 +559,43 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
     if (confirmed != true) return;
     controller.deleteInvoice(invoice.id);
     router.go('/invoices');
+  }
+}
+
+/// The invoice as the document it prints, on its own URL.
+///
+/// The figures are read once, without listening: a document is a snapshot of
+/// what was billed, and re-rendering it under someone who is reading it would
+/// only throw their place away.
+class InvoiceDocumentPage extends StatelessWidget {
+  const InvoiceDocumentPage({super.key, required this.invoiceId});
+
+  final String invoiceId;
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = context.read<InventoryController>();
+    final invoice = controller.invoiceById(invoiceId);
+    if (invoice == null) {
+      return DocumentGone(
+        what: 'Invoice',
+        onBack: () => context.go('/invoices'),
+      );
+    }
+
+    final doc = InvoiceDocument(
+      invoice,
+      controller.settings,
+      payments: controller.paymentsForInvoice(invoice.id),
+    );
+    return DocumentViewPage(
+      title: invoice.reference,
+      subtitle: invoice.customerName.isEmpty
+          ? 'Invoice'
+          : 'Invoice for ${invoice.customerName}',
+      filename: doc.filename('pdf'),
+      build: doc.toPdf,
+    );
   }
 }
 

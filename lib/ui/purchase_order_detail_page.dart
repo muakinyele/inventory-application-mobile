@@ -8,6 +8,7 @@ import '../core/formatters.dart';
 import '../core/palette.dart';
 import '../models/purchase_order.dart';
 import '../state/inventory_controller.dart';
+import 'widgets/app_message.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/page_header.dart';
 import 'widgets/section_card.dart';
@@ -184,7 +185,6 @@ class PurchaseOrderDetailPage extends StatelessWidget {
     InventoryController controller,
     PurchaseOrder order,
   ) async {
-    final messenger = ScaffoldMessenger.of(context);
     final result = await showModalBottomSheet<Map<String, int>>(
       context: context,
       isScrollControlled: true,
@@ -193,17 +193,14 @@ class PurchaseOrderDetailPage extends StatelessWidget {
     if (result == null || result.isEmpty) return;
 
     final moved = controller.receivePurchaseOrder(order.id, result);
-    messenger
-      ..clearSnackBars()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(
-            moved == 0
-                ? 'Nothing to receive'
-                : 'Booked in ${moved == 1 ? '1 line' : '$moved lines'}',
-          ),
-        ),
-      );
+    if (!context.mounted) return;
+    await showAppMessage(
+      context,
+      moved == 0
+          ? 'Nothing to receive'
+          : 'Booked in ${moved == 1 ? '1 line' : '$moved lines'}',
+      tone: moved == 0 ? MessageTone.warning : MessageTone.success,
+    );
   }
 
   Future<void> _cancel(

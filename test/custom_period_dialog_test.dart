@@ -73,7 +73,9 @@ void main() {
       expect(find.text('open'), findsOneWidget);
     });
 
-    testWidgets('offers the spans people ask for by name', (tester) async {
+    testWidgets('offers only the spans the report itself cannot reach', (
+      tester,
+    ) async {
       await open(tester);
 
       // Opening cold lands on a sensible default rather than nothing.
@@ -82,15 +84,14 @@ void main() {
         isSemantics(isSelected: true),
       );
 
-      for (final label in [
-        'Last 7 days',
-        'Last 30 days',
-        'This month',
-        'Last month',
-        'This quarter',
-        'Year to date',
-      ]) {
+      // Rolling windows: no amount of stepping a named period produces these.
+      for (final label in ['Last 7 days', 'Last 30 days', 'This quarter']) {
         expect(find.text(label), findsOneWidget, reason: label);
+      }
+
+      // And nothing the period bar already offers a tap away.
+      for (final label in ['This month', 'Last month', 'Year to date']) {
+        expect(find.text(label), findsNothing, reason: label);
       }
     });
 
@@ -171,7 +172,7 @@ void main() {
       );
     });
 
-    testWidgets('last month is a whole month, whatever its length', (
+    testWidgets('a quarter starts on the first of its own month', (
       tester,
     ) async {
       DateTimeRange? applied;
@@ -194,17 +195,15 @@ void main() {
       );
       await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Last month'));
+      await tester.tap(find.text('This quarter'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Apply'));
       await tester.pumpAndSettle();
 
-      // Starts on the 1st and ends on the last day of that month — the guard
-      // against a naive "same day last month", which breaks on a short one.
+      // Quarters begin in January, April, July or October, on the 1st.
       expect(applied!.start.day, 1);
-      final dayAfter = applied!.end.add(const Duration(days: 1));
-      expect(dayAfter.day, 1, reason: 'must end on the final day');
-      expect(applied!.end.month, isNot(DateTime.now().month));
+      expect(applied!.start.month % 3, 1);
+      expect(applied!.end.difference(applied!.start).isNegative, isFalse);
     });
   });
 

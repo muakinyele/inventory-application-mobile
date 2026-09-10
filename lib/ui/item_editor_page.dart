@@ -14,6 +14,7 @@ import '../models/item.dart';
 import '../models/party.dart';
 import '../state/inventory_controller.dart';
 import 'scanner_page.dart';
+import 'widgets/app_message.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/page_header.dart';
 
@@ -130,7 +131,7 @@ class _ItemEditorPageState extends State<ItemEditorPage> {
   int _int(TextEditingController c) => int.tryParse(c.text.trim()) ?? 0;
   double _double(TextEditingController c) => parseAmount(c.text) ?? 0;
 
-  void _save() {
+  Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
 
     final controller = context.read<InventoryController>();
@@ -163,21 +164,25 @@ class _ItemEditorPageState extends State<ItemEditorPage> {
     );
 
     final existing = _existing;
+    // Awaited: routing away takes the dialog down with the page it sits on.
     if (existing == null) {
       final created = controller.createItem(draft);
-      _notify('${created.name} added');
+      await _notify('${created.name} added');
+      if (!mounted) return;
       context.go('/items/${created.id}');
     } else {
       controller.updateItem(existing.id, draft);
-      _notify('${draft.name} updated');
+      await _notify('${draft.name} updated');
+      if (!mounted) return;
       context.go('/items/${existing.id}');
     }
   }
 
-  void _notify(String message) {
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(message)));
+  Future<void> _notify(
+    String message, {
+    MessageTone tone = MessageTone.success,
+  }) {
+    return showAppMessage(context, message, tone: tone);
   }
 
   Future<void> _pickPhoto() async {
@@ -221,7 +226,9 @@ class _ItemEditorPageState extends State<ItemEditorPage> {
       final encoded = await const PhotoService().pick(source);
       if (encoded != null && mounted) setState(() => _photo = encoded);
     } catch (_) {
-      if (mounted) _notify('That photo could not be used.');
+      if (mounted) {
+        _notify('That photo could not be used.', tone: MessageTone.failure);
+      }
     }
   }
 

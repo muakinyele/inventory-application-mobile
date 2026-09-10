@@ -13,6 +13,7 @@ class AppSettings {
     this.taxRate = 0,
     this.taxLabel = 'VAT',
     this.receiptFooter = 'Thank you for your custom.',
+    this.companyLogo = '',
     this.categories = defaultCategories,
     this.locations = defaultLocations,
     this.units = defaultUnits,
@@ -60,6 +61,16 @@ class AppSettings {
 
   /// The closing line on a printed receipt.
   final String receiptFooter;
+
+  /// The company logo for invoices and receipts: a base64 PNG, or empty for
+  /// none.
+  ///
+  /// Stored inline like item photos, and normalised on the way in — capped at
+  /// 512px on its longest edge — because this row is read on every settings
+  /// load and a two-megapixel original would be carried on every one of them.
+  final String companyLogo;
+
+  bool get hasCompanyLogo => companyLogo.isNotEmpty;
   final List<String> categories;
   final List<String> locations;
   final List<String> units;
@@ -88,6 +99,7 @@ class AppSettings {
     double? taxRate,
     String? taxLabel,
     String? receiptFooter,
+    String? companyLogo,
     List<String>? categories,
     List<String>? locations,
     List<String>? units,
@@ -103,6 +115,9 @@ class AppSettings {
       taxRate: taxRate ?? this.taxRate,
       taxLabel: taxLabel ?? this.taxLabel,
       receiptFooter: receiptFooter ?? this.receiptFooter,
+      // Passing '' is how the logo is removed; there is no separate flag
+      // because empty already means "none" everywhere else.
+      companyLogo: companyLogo ?? this.companyLogo,
       categories: categories ?? this.categories,
       locations: locations ?? this.locations,
       units: units ?? this.units,
@@ -120,6 +135,7 @@ class AppSettings {
     'taxRate': taxRate,
     'taxLabel': taxLabel,
     'receiptFooter': receiptFooter,
+    'companyLogo': companyLogo,
     'categories': categories,
     'locations': locations,
     'units': units,
@@ -151,6 +167,7 @@ class AppSettings {
       receiptFooter: json['receiptFooter'] is String
           ? json['receiptFooter'] as String
           : 'Thank you for your custom.',
+      companyLogo: _text(json['companyLogo']),
       categories: _list(json['categories'], defaultCategories),
       locations: _list(json['locations'], defaultLocations),
       units: _list(json['units'], defaultUnits),

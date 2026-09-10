@@ -12,14 +12,21 @@ dependencies:
   drift_flutter: ^0.3.1
   file_picker: ^12.2.0
   fl_chart: ^1.2.0
+  # Keychain on iOS, EncryptedSharedPreferences on Android, and a
+  # WebCrypto-wrapped store in the browser. Session tokens go here rather than
+  # in SharedPreferences, which is plaintext on disk.
+  flutter_secure_storage: ^11.0.0
   flutter:
     sdk: flutter
   go_router: ^17.5.0
+  # Talks to the identity API in `server/`. The inventory data stays local.
+  http: ^1.6.0
   image_picker: ^1.2.3
   intl: ^0.20.3
   mobile_scanner: ^7.4.0
   path_provider: ^2.1.6
   pdf: ^3.13.0
+  printing: ^5.15.0
   provider: ^6.1.5+1
   share_plus: ^13.3.0
   shared_preferences: ^2.5.5

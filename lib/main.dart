@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'app.dart';
 import 'core/theme.dart';
 import 'data/inventory_repository.dart';
+import 'state/auth_controller.dart';
 import 'state/inventory_controller.dart';
 
 Future<void> main() async {
@@ -15,12 +18,27 @@ Future<void> main() async {
     final repository = await InventoryRepository.open();
     final snapshot = await repository.load();
 
+    // Identity lives on the server; the inventory stays on the device. The
+    // two controllers are independent on purpose — signing out does not touch
+    // the local catalogue, and the app still opens its database offline.
+    final auth = buildAuthController();
+
     runApp(
-      ChangeNotifierProvider(
-        create: (_) => InventoryController(repository, snapshot),
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider(
+            create: (_) => InventoryController(repository, snapshot),
+          ),
+          ChangeNotifierProvider<AuthController>.value(value: auth),
+        ],
         child: const StockpileApp(),
       ),
     );
+
+    // Started after the first frame so the splash is already on screen rather
+    // than the window sitting blank while the server is asked about a stored
+    // session.
+    unawaited(auth.restore());
   } catch (error, stack) {
     // Without this the app renders nothing at all when the database cannot be
     // opened — a blank white page that says neither what broke nor what to do.

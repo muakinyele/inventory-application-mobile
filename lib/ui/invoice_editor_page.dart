@@ -11,6 +11,7 @@ import '../models/item.dart';
 import '../models/party.dart';
 import '../models/sales_order.dart';
 import '../state/inventory_controller.dart';
+import 'widgets/app_message.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/page_header.dart';
 import 'widgets/section_card.dart';
@@ -114,10 +115,11 @@ class _InvoiceEditorPageState extends State<InvoiceEditorPage> {
     return DateTime.now().add(Duration(days: _termDays!));
   }
 
-  void _notify(String message) {
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(message)));
+  Future<void> _notify(
+    String message, {
+    MessageTone tone = MessageTone.success,
+  }) {
+    return showAppMessage(context, message, tone: tone);
   }
 
   Future<void> _pickDue() async {
@@ -132,14 +134,20 @@ class _InvoiceEditorPageState extends State<InvoiceEditorPage> {
     if (picked != null) setState(() => _dueAt = picked);
   }
 
-  void _issue() {
+  Future<void> _issue() async {
     final lines = _buildLines();
     if (lines.isEmpty) {
-      _notify('Add at least one line with an item and a quantity.');
+      _notify(
+        'Add at least one line with an item and a quantity.',
+        tone: MessageTone.warning,
+      );
       return;
     }
     if (_customerId == null && !_fromSale) {
-      _notify('A credit sale needs a customer — that is who owes the money.');
+      _notify(
+        'A credit sale needs a customer — that is who owes the money.',
+        tone: MessageTone.warning,
+      );
       return;
     }
 
@@ -154,6 +162,7 @@ class _InvoiceEditorPageState extends State<InvoiceEditorPage> {
         if (entry.value > item.quantity) {
           _notify(
             'Only ${number(item.quantity)} of ${item.name} on the shelf.',
+            tone: MessageTone.warning,
           );
           return;
         }
@@ -171,10 +180,15 @@ class _InvoiceEditorPageState extends State<InvoiceEditorPage> {
     );
 
     if (invoice == null) {
-      _notify('Nothing could be invoiced — check the quantities.');
+      _notify(
+        'Nothing could be invoiced — check the quantities.',
+        tone: MessageTone.failure,
+      );
       return;
     }
-    _notify('${invoice.reference} issued');
+    // Awaited: routing away takes the dialog down with the page it sits on.
+    await _notify('${invoice.reference} issued');
+    if (!mounted) return;
     context.go('/invoices/${invoice.id}');
   }
 

@@ -6,10 +6,13 @@ import 'package:provider/provider.dart';
 import '../core/design.dart';
 import '../core/formatters.dart';
 import '../core/palette.dart';
+import '../models/invoice.dart';
 import '../models/party.dart';
 import '../models/receipt.dart';
 import '../models/sales_order.dart';
 import '../state/inventory_controller.dart';
+import 'widgets/app_message.dart';
+import 'widgets/document_link_row.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/page_header.dart';
 import 'widgets/section_card.dart';
@@ -43,6 +46,8 @@ class SalesOrderDetailPage extends StatelessWidget {
 
     final currency = controller.settings.currency;
     final margin = order.marginRate;
+    final receipts = controller.receiptsForSalesOrder(order.id);
+    final invoices = controller.invoicesForSalesOrder(order.id);
 
     return Scaffold(
       backgroundColor: p.plane,
@@ -178,67 +183,45 @@ class SalesOrderDetailPage extends StatelessWidget {
                 ],
               ),
             ),
-            if (controller.receiptsForSalesOrder(order.id).isNotEmpty) ...[
+            if (receipts.isNotEmpty) ...[
               const SizedBox(height: Insets.lg),
               SectionCard(
                 title: 'Receipts',
                 child: Column(
                   children: [
-                    for (final (index, receipt)
-                        in controller
-                            .receiptsForSalesOrder(order.id)
-                            .indexed) ...[
+                    for (final (index, receipt) in receipts.indexed) ...[
                       if (index > 0) Divider(color: p.line, height: Insets.lg),
-                      InkWell(
-                        onTap: () => context.go('/receipts/${receipt.id}'),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 6),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Text(
-                                      receipt.reference,
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w700,
-                                        color: p.ink,
-                                      ),
-                                    ),
-                                    Text(
-                                      '${receipt.method.label} · '
-                                      '${dateTimeLabel(receipt.issuedAt)}',
-                                      style: TextStyle(
-                                        fontSize: 12.5,
-                                        color: p.inkMuted,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              Text(
-                                money(receipt.netTotal, currency),
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w700,
-                                  color: p.ink,
-                                  fontFeatures: const [
-                                    FontFeature.tabularFigures(),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(width: Insets.sm),
-                              Icon(
-                                Icons.chevron_right,
-                                size: 18,
-                                color: p.inkMuted,
-                              ),
-                            ],
-                          ),
-                        ),
+                      DocumentLinkRow(
+                        reference: receipt.reference,
+                        detail:
+                            '${receipt.method.label} · '
+                            '${dateTimeLabel(receipt.issuedAt)}',
+                        amount: money(receipt.netTotal, currency),
+                        onOpen: () => context.go('/receipts/${receipt.id}'),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+            // The other half of the paper trail: what was billed on account
+            // rather than paid for at the counter.
+            if (invoices.isNotEmpty) ...[
+              const SizedBox(height: Insets.lg),
+              SectionCard(
+                title: 'Invoices',
+                child: Column(
+                  children: [
+                    for (final (index, invoice) in invoices.indexed) ...[
+                      if (index > 0) Divider(color: p.line, height: Insets.lg),
+                      DocumentLinkRow(
+                        reference: invoice.reference,
+                        detail: [
+                          invoice.isOverdue ? 'Overdue' : invoice.status.label,
+                          'issued ${dayLabel(invoice.issuedAt)}',
+                        ].join(' · '),
+                        amount: money(invoice.total, currency),
+                        onOpen: () => context.go('/invoices/${invoice.id}'),
                       ),
                     ],
                   ],
@@ -306,19 +289,16 @@ class SalesOrderDetailPage extends StatelessWidget {
     InventoryController controller,
     SalesOrder order,
   ) async {
-    final messenger = ScaffoldMessenger.of(context);
     final sendable = {
       for (final line in order.lines)
         line.id: controller.sendableOn(order, line),
     };
     if (sendable.values.every((q) => q <= 0)) {
-      messenger
-        ..clearSnackBars()
-        ..showSnackBar(
-          const SnackBar(
-            content: Text('Nothing on the shelf to send against this sale'),
-          ),
-        );
+      await showAppMessage(
+        context,
+        'Nothing on the shelf to send against this sale',
+        tone: MessageTone.warning,
+      );
       return;
     }
 
@@ -330,17 +310,14 @@ class SalesOrderDetailPage extends StatelessWidget {
     if (result == null || result.isEmpty) return;
 
     final moved = controller.fulfilSalesOrder(order.id, result);
-    messenger
-      ..clearSnackBars()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(
-            moved == 0
-                ? 'Nothing to send'
-                : 'Sent ${moved == 1 ? '1 line' : '$moved lines'}',
-          ),
-        ),
-      );
+    if (!context.mounted) return;
+    await showAppMessage(
+      context,
+      moved == 0
+          ? 'Nothing to send'
+          : 'Sent ${moved == 1 ? '1 line' : '$moved lines'}',
+      tone: moved == 0 ? MessageTone.warning : MessageTone.success,
+    );
   }
 
   Future<void> _cancel(

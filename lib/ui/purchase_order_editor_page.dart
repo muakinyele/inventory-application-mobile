@@ -9,6 +9,7 @@ import '../core/palette.dart';
 import '../models/item.dart';
 import '../models/purchase_order.dart';
 import '../state/inventory_controller.dart';
+import 'widgets/app_message.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/page_header.dart';
 import 'widgets/section_card.dart';
@@ -74,11 +75,14 @@ class _PurchaseOrderEditorPageState extends State<PurchaseOrderEditorPage> {
         ),
   ];
 
-  void _save({required bool place}) {
+  Future<void> _save({required bool place}) async {
     final controller = context.read<InventoryController>();
     final lines = _buildLines();
     if (lines.isEmpty) {
-      _notify('Add at least one line with an item and a quantity.');
+      _notify(
+        'Add at least one line with an item and a quantity.',
+        tone: MessageTone.warning,
+      );
       return;
     }
 
@@ -107,14 +111,17 @@ class _PurchaseOrderEditorPageState extends State<PurchaseOrderEditorPage> {
     }
 
     if (place) controller.placePurchaseOrder(id);
-    _notify(place ? 'Order placed' : 'Draft saved');
+    // Awaited: routing away takes the dialog down with the page it sits on.
+    await _notify(place ? 'Order placed' : 'Draft saved');
+    if (!mounted) return;
     context.go('/purchase-orders/$id');
   }
 
-  void _notify(String message) {
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(message)));
+  Future<void> _notify(
+    String message, {
+    MessageTone tone = MessageTone.success,
+  }) {
+    return showAppMessage(context, message, tone: tone);
   }
 
   Future<void> _pickExpected() async {

@@ -9,6 +9,7 @@ import '../core/theme.dart';
 import '../models/item.dart';
 import '../models/transfer.dart';
 import '../state/inventory_controller.dart';
+import 'widgets/app_message.dart';
 import 'widgets/bin_bar.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/item_thumb.dart';
@@ -263,7 +264,6 @@ class ItemDetailPage extends StatelessWidget {
 
   Future<void> _openMode(BuildContext context, Item item, _Mode mode) async {
     final controller = context.read<InventoryController>();
-    final messenger = ScaffoldMessenger.of(context);
 
     final result = await showModalBottomSheet<(int, String)>(
       context: context,
@@ -280,15 +280,11 @@ class ItemDetailPage extends StatelessWidget {
         amount,
         note: note.isEmpty ? 'Stocktake' : note,
       );
-      messenger
-        ..clearSnackBars()
-        ..showSnackBar(
-          SnackBar(
-            content: Text(
-              '${item.name} counted at ${number(amount)} ${item.unit}',
-            ),
-          ),
-        );
+      if (!context.mounted) return;
+      await showAppMessage(
+        context,
+        '${item.name} counted at ${number(amount)} ${item.unit}',
+      );
       return;
     }
 
@@ -300,24 +296,20 @@ class ItemDetailPage extends StatelessWidget {
           ? (mode == _Mode.stockIn ? 'Stock received' : 'Stock issued')
           : note,
     );
-    messenger
-      ..clearSnackBars()
-      ..showSnackBar(
-        SnackBar(
-          content: Text('${item.name}: ${signed(delta)} ${item.unit}'),
-          action: SnackBarAction(
-            label: 'Undo',
-            onPressed: () =>
-                controller.adjustStock(item.id, -delta, note: 'Undo'),
-          ),
-        ),
-      );
+    if (!context.mounted) return;
+    await showAppMessage(
+      context,
+      '${item.name}: ${signed(delta)} ${item.unit}',
+      action: MessageAction(
+        label: 'Undo',
+        onPressed: () => controller.adjustStock(item.id, -delta, note: 'Undo'),
+      ),
+    );
   }
 
   Future<void> _confirmDelete(BuildContext context, Item item) async {
     final controller = context.read<InventoryController>();
     final router = GoRouter.of(context);
-    final messenger = ScaffoldMessenger.of(context);
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -345,10 +337,10 @@ class ItemDetailPage extends StatelessWidget {
 
     if (confirmed != true) return;
     controller.deleteItem(item.id);
+    // Said before routing away: this page is about to be replaced, and a
+    // dialog goes down with the page it was opened over.
+    if (context.mounted) await showAppMessage(context, '${item.name} deleted');
     router.go('/items');
-    messenger
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text('${item.name} deleted')));
   }
 }
 

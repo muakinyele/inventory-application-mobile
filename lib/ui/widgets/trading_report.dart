@@ -7,8 +7,12 @@ import '../../data/sales_report.dart';
 import 'empty_state.dart';
 import 'stat_card.dart';
 
-/// Picks the span a report covers: a preset period stepped backwards and
-/// forwards, or a pair of dates chosen by hand.
+/// The one control that says what span the trading figures cover: the named
+/// periods, a step either side of the one in force, and the range itself.
+///
+/// Named periods are stepped through here; anything else — a rolling window,
+/// or two arbitrary dates — is what the custom modal is for, so the two never
+/// offer the same span twice.
 class PeriodPicker extends StatelessWidget {
   const PeriodPicker({
     super.key,
@@ -35,74 +39,146 @@ class PeriodPicker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final chips = Wrap(
+      spacing: Insets.xs,
+      runSpacing: Insets.xs,
+      children: [
+        for (final option in ReportPeriod.values)
+          _PeriodChip(
+            label: option.label,
+            selected: option == period,
+            onTap: () => onPeriodChanged(option),
+          ),
+      ],
+    );
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Side by side while both fit; stacked before either has to shrink to
+        // the point of illegibility.
+        if (constraints.maxWidth >= 700) {
+          return Row(
+            children: [
+              Expanded(child: chips),
+              const SizedBox(width: Insets.lg),
+              _RangeNav(
+                period: period,
+                range: range,
+                canStepForward: canStepForward,
+                onStep: onStep,
+                onPickCustom: onPickCustom,
+              ),
+            ],
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            chips,
+            const SizedBox(height: Insets.md),
+            _RangeNav(
+              period: period,
+              range: range,
+              canStepForward: canStepForward,
+              onStep: onStep,
+              onPickCustom: onPickCustom,
+              fill: true,
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// The range in force, with a step either side of it.
+///
+/// A custom span has nothing to step through — the next arbitrary range is
+/// not something that can be guessed — so there the range itself becomes the
+/// button that reopens the picker.
+class _RangeNav extends StatelessWidget {
+  const _RangeNav({
+    required this.period,
+    required this.range,
+    required this.canStepForward,
+    required this.onStep,
+    required this.onPickCustom,
+    this.fill = false,
+  });
+
+  final ReportPeriod period;
+  final ReportRange range;
+  final bool canStepForward;
+  final ValueChanged<int> onStep;
+  final VoidCallback onPickCustom;
+
+  /// Take the full width rather than only what the label needs.
+  final bool fill;
+
+  @override
+  Widget build(BuildContext context) {
     final p = context.palette;
     final custom = period == ReportPeriod.custom;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Wrap(
-          spacing: Insets.sm,
-          runSpacing: Insets.sm,
-          children: [
-            for (final option in ReportPeriod.values)
-              _PeriodChip(
-                label: option.label,
-                selected: option == period,
-                onTap: () => onPeriodChanged(option),
-              ),
-          ],
-        ),
-        const SizedBox(height: Insets.md),
-        Row(
-          children: [
-            if (!custom) ...[
-              _StepButton(
-                icon: Icons.chevron_left,
-                tooltip: 'Previous ${period.unit}',
-                onTap: () => onStep(-1),
-              ),
-              const SizedBox(width: Insets.sm),
-            ],
-            Expanded(
-              child: custom
-                  ? OutlinedButton.icon(
-                      onPressed: onPickCustom,
-                      icon: const Icon(Icons.date_range_outlined, size: 18),
-                      label: Text(range.label),
-                    )
-                  : Container(
-                      alignment: Alignment.center,
-                      padding: const EdgeInsets.symmetric(
-                        vertical: 10,
-                        horizontal: Insets.md,
-                      ),
-                      decoration: BoxDecoration(
-                        color: p.surfaceSunken,
-                        borderRadius: BorderRadius.circular(Radii.control),
-                      ),
-                      child: Text(
-                        range.label,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: p.ink,
-                        ),
-                      ),
-                    ),
+    final Widget label = custom
+        ? OutlinedButton.icon(
+            onPressed: onPickCustom,
+            icon: const Icon(Icons.date_range_outlined, size: 16),
+            label: Text(
+              range.label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
-            if (!custom) ...[
-              const SizedBox(width: Insets.sm),
-              _StepButton(
-                icon: Icons.chevron_right,
-                tooltip: 'Next ${period.unit}',
-                onTap: canStepForward ? () => onStep(1) : null,
+          )
+        : Container(
+            alignment: Alignment.center,
+            padding: const EdgeInsets.symmetric(
+              vertical: 9,
+              horizontal: Insets.md,
+            ),
+            decoration: BoxDecoration(
+              color: p.surfaceSunken,
+              borderRadius: BorderRadius.circular(Radii.control),
+            ),
+            child: Text(
+              range.label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 13.5,
+                fontWeight: FontWeight.w700,
+                color: p.ink,
               ),
-            ],
-          ],
-        ),
+            ),
+          );
+
+    return Row(
+      mainAxisSize: fill ? MainAxisSize.max : MainAxisSize.min,
+      children: [
+        if (!custom) ...[
+          _StepButton(
+            icon: Icons.chevron_left,
+            tooltip: 'Previous ${period.unit}',
+            onTap: () => onStep(-1),
+          ),
+          const SizedBox(width: Insets.xs),
+        ],
+        // Wide enough for a two-date span without wrapping, and no wider.
+        if (fill)
+          Expanded(child: label)
+        else
+          ConstrainedBox(
+            constraints: const BoxConstraints(minWidth: 190, maxWidth: 300),
+            child: label,
+          ),
+        if (!custom) ...[
+          const SizedBox(width: Insets.xs),
+          _StepButton(
+            icon: Icons.chevron_right,
+            tooltip: 'Next ${period.unit}',
+            onTap: canStepForward ? () => onStep(1) : null,
+          ),
+        ],
       ],
     );
   }
@@ -133,13 +209,13 @@ class _PeriodChip extends StatelessWidget {
           borderRadius: BorderRadius.circular(Radii.pill),
           child: Padding(
             padding: const EdgeInsets.symmetric(
-              horizontal: Insets.lg,
-              vertical: 9,
+              horizontal: Insets.md,
+              vertical: 8,
             ),
             child: Text(
               label,
               style: TextStyle(
-                fontSize: 13.5,
+                fontSize: 13,
                 fontWeight: FontWeight.w600,
                 color: selected ? p.accentInk : p.inkSecondary,
               ),
@@ -167,8 +243,9 @@ class _StepButton extends StatelessWidget {
     final p = context.palette;
     return IconButton(
       onPressed: onTap,
-      icon: Icon(icon),
+      icon: Icon(icon, size: 20),
       tooltip: tooltip,
+      visualDensity: VisualDensity.compact,
       style: IconButton.styleFrom(
         foregroundColor: p.ink,
         backgroundColor: p.surfaceSunken,
