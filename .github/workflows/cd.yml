@@ -268,13 +268,43 @@ jobs:
           port="${DEPLOY_PORT:-22}"
           ssh_cmd="ssh -i $HOME/.ssh/id_ed25519 -p $port"
 
-          # rsync needs to exist on both ends. Checked before the transfer so
-          # a missing package reads as a missing package, rather than as
-          # rsync's rather cryptic "remote command not found" exit 127.
-          if ! $ssh_cmd "$DEPLOY_USER@$DEPLOY_HOST" 'command -v rsync' >/dev/null 2>&1; then
-            echo "::error::rsync is not installed on the deployment host. Install it with 'sudo apt-get install -y rsync' (Debian/Ubuntu) or 'sudo yum install -y rsync' (RHEL), then re-run."
+          # rsync has to exist on both ends. Finding it is less simple than it
+          # sounds: `ssh host command` runs a *non-login, non-interactive*
+          # shell, which on RHEL-family hosts often has a stripped PATH that
+          # omits /usr/bin — so `command -v rsync` can report nothing on a
+          # machine where rsync is plainly installed.
+          #
+          # So look in the usual locations directly as well, and if it is
+          # found somewhere off PATH, tell rsync where with --rsync-path
+          # rather than declaring it missing. That flag exists for exactly
+          # this.
+          remote_rsync=$(
+            $ssh_cmd "$DEPLOY_USER@$DEPLOY_HOST" \
+              'command -v rsync 2>/dev/null \
+               || for p in /usr/bin/rsync /bin/rsync /usr/local/bin/rsync /opt/homebrew/bin/rsync; do
+                    [ -x "$p" ] && { echo "$p"; break; }
+                  done' 2>/dev/null | tr -d '\r' | tail -1
+          )
+
+          if [ -z "$remote_rsync" ]; then
+            # Genuinely absent, or absent to this user. Report what the host
+            # actually said, so the difference is visible rather than guessed
+            # at — a package installed as root but invisible to DEPLOY_USER
+            # looks identical to one that was never installed.
+            echo "::group::What the host reports"
+            $ssh_cmd "$DEPLOY_USER@$DEPLOY_HOST" \
+              'echo "user:  $(id -un)"; echo "shell: $SHELL"; echo "PATH:  $PATH";
+               echo "--- candidates ---";
+               ls -l /usr/bin/rsync /bin/rsync /usr/local/bin/rsync 2>&1 | sed "s/^/  /";
+               echo "--- package manager ---";
+               (rpm -q rsync 2>/dev/null || dpkg -s rsync 2>/dev/null | head -2 || echo "not registered with rpm/dpkg")' \
+              2>&1 | sed 's/^/  /' || true
+            echo "::endgroup::"
+            echo "::error::rsync could not be found on the deployment host as the deploy user. If it is installed, it is not on that user's PATH — the group above shows what the host reported. Install with 'sudo dnf install -y rsync' (RHEL/Rocky) or 'sudo apt-get install -y rsync' (Debian/Ubuntu)."
             exit 1
           fi
+
+          echo "Remote rsync: $remote_rsync"
 
           # Assembled into a payload directory so what lands on the host is
           # exactly this and nothing else — rsync mirrors a directory, and
@@ -300,6 +330,7 @@ jobs:
             --exclude '.env' \
             --exclude '.previous-tag' \
             --human-readable --itemize-changes \
+            --rsync-path="$remote_rsync" \
             -e "$ssh_cmd" \
             "$payload/" "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/"
 
