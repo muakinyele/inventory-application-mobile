@@ -9,6 +9,7 @@ import 'package:stockpile/models/receipt.dart';
 import 'package:stockpile/models/sales_order.dart';
 import 'package:stockpile/models/transfer.dart';
 import 'package:stockpile/state/inventory_controller.dart';
+import 'package:stockpile/ui/document_view_page.dart';
 
 import 'support.dart';
 import 'package:stockpile/ui/widgets/app_sidebar.dart';
@@ -66,10 +67,12 @@ void main() {
       expect(find.byType(NavigationBar), findsNothing);
     });
 
-    testWidgets('the sidebar exposes every destination', (tester) async {
+    testWidgets('the sidebar exposes every unrestricted destination', (
+      tester,
+    ) async {
       await _pumpApp(tester, size: _desktop);
 
-      for (final item in navItems) {
+      for (final item in navItems.where((i) => i.permission == null)) {
         expect(
           find.text(item.label),
           findsWidgets,
@@ -77,6 +80,28 @@ void main() {
         );
       }
       expect(find.text(settingsItem.label), findsWidgets);
+    });
+
+    testWidgets('destinations that need a permission are hidden without one', (
+      tester,
+    ) async {
+      // This harness builds the shell with no session in scope, which is the
+      // fail-closed case: the admin destinations must not appear.
+      await _pumpApp(tester, size: _desktop);
+
+      final restricted = navItems.where((i) => i.permission != null);
+      expect(
+        restricted,
+        isNotEmpty,
+        reason: 'the guard is only meaningful if something is gated',
+      );
+      for (final item in restricted) {
+        expect(
+          find.text(item.label),
+          findsNothing,
+          reason: '${item.label} needs ${item.permission}',
+        );
+      }
     });
 
     testWidgets('the phone tab bar badges the reorder count', (tester) async {
@@ -508,6 +533,91 @@ void main() {
       expect(find.text('Gross profit'), findsOneWidget);
     });
 
+    testWidgets('a receipt can be read as the document it prints', (
+      tester,
+    ) async {
+      tester.view.physicalSize = _tallDesktop;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final controller = await newController();
+      final item = controller.createItem(draft(name: 'Bolt', quantity: 20));
+      final receipt = controller.issueReceipt(
+        lines: [
+          ReceiptLine(
+            id: 'rl1',
+            itemId: item.id,
+            itemName: 'Bolt',
+            quantity: 3,
+            unitPrice: 500,
+          ),
+        ],
+      )!;
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: StockpileApp(initialLocation: '/receipts/${receipt.id}'),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('View'));
+      // Not settled: the preview keeps a spinner up while the platform
+      // rasterises the pages, which never finishes off a real device.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.byType(DocumentViewPage), findsOneWidget);
+      expect(find.text('Receipt'), findsWidgets);
+    });
+
+    testWidgets('a receipt that paid an invoice links back to it', (
+      tester,
+    ) async {
+      tester.view.physicalSize = _tallDesktop;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final controller = await newController();
+      final item = controller.createItem(
+        draft(name: 'Bolt', quantity: 50, unitCost: 100),
+      );
+      final invoice = controller.issueInvoice(
+        lines: [
+          InvoiceLine(
+            id: 'a',
+            itemId: item.id,
+            itemName: 'Bolt',
+            quantity: 4,
+            unitPrice: 500,
+          ),
+        ],
+      )!;
+      final receipt = controller.payInvoice(
+        invoice.id,
+        800,
+        method: PaymentMethod.transfer,
+      )!;
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: StockpileApp(initialLocation: '/receipts/${receipt.id}'),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Raised against'), findsOneWidget);
+      expect(find.text('INV-0001'), findsOneWidget);
+
+      await tester.tap(find.text('INV-0001'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Invoice total'), findsOneWidget);
+      expect(find.text('Balance due'), findsOneWidget);
+    });
+
     testWidgets('a voided receipt says so and offers no refund', (
       tester,
     ) async {
@@ -703,6 +813,151 @@ void main() {
       expect(find.text('Part paid'), findsWidgets);
     });
 
+    testWidgets('an invoice can be read as the document it prints', (
+      tester,
+    ) async {
+      tester.view.physicalSize = _tallDesktop;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final controller = await newController();
+      final item = controller.createItem(
+        draft(name: 'Bolt', quantity: 50, unitCost: 100),
+      );
+      final invoice = controller.issueInvoice(
+        lines: [
+          InvoiceLine(
+            id: 'a',
+            itemId: item.id,
+            itemName: 'Bolt',
+            quantity: 4,
+            unitPrice: 500,
+          ),
+        ],
+      )!;
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: StockpileApp(initialLocation: '/invoices/${invoice.id}'),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('View'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.byType(DocumentViewPage), findsOneWidget);
+      expect(find.text('Invoice'), findsWidgets);
+      // The viewer carries the download rather than sending anyone back.
+      expect(
+        find.descendant(
+          of: find.byType(DocumentViewPage),
+          matching: find.text('Download PDF'),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('the document view has its own URL and backs out to the '
+        'invoice', (tester) async {
+      tester.view.physicalSize = _tallDesktop;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final controller = await newController();
+      final item = controller.createItem(
+        draft(name: 'Bolt', quantity: 50, unitCost: 100),
+      );
+      final invoice = controller.issueInvoice(
+        lines: [
+          InvoiceLine(
+            id: 'a',
+            itemId: item.id,
+            itemName: 'Bolt',
+            quantity: 4,
+            unitPrice: 500,
+          ),
+        ],
+      )!;
+
+      // Straight to the document, as a link or a reload would arrive.
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: StockpileApp(initialLocation: '/invoices/${invoice.id}/view'),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.byType(DocumentViewPage), findsOneWidget);
+
+      // Back leaves the invoice underneath, rather than nothing.
+      await tester.tap(find.byTooltip('Back').last);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(DocumentViewPage), findsNothing);
+      expect(find.text('Invoice total'), findsOneWidget);
+    });
+
+    testWidgets('a sale lists the invoices raised against it', (tester) async {
+      tester.view.physicalSize = _tallDesktop;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final controller = await newController();
+      final item = controller.createItem(
+        draft(name: 'Bolt', quantity: 50, unitCost: 100),
+      );
+      final order = controller.createSalesOrder(
+        lines: [
+          SalesOrderLine(
+            id: 'l1',
+            itemId: item.id,
+            itemName: 'Bolt',
+            quantityOrdered: 10,
+            unitPrice: 900,
+          ),
+        ],
+      );
+      controller.confirmSalesOrder(order.id);
+      controller.fulfilSalesOrder(order.id, {'l1': 4});
+      controller.issueInvoice(
+        salesOrderId: order.id,
+        lines: [
+          InvoiceLine(
+            id: 'a',
+            itemId: item.id,
+            itemName: 'Bolt',
+            quantity: 4,
+            unitPrice: 900,
+          ),
+        ],
+        termDays: 30,
+      );
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: StockpileApp(initialLocation: '/sales-orders/${order.id}'),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Invoices'), findsWidgets);
+      expect(find.text('INV-0001'), findsOneWidget);
+
+      await tester.tap(find.text('INV-0001'));
+      await tester.pumpAndSettle();
+
+      // On the invoice, which points back at the sale it bills.
+      expect(find.text('Invoice total'), findsOneWidget);
+      expect(find.text('Raised against'), findsOneWidget);
+      expect(find.text(order.reference), findsWidgets);
+    });
+
     testWidgets('the report shows revenue, cost, profit and margin', (
       tester,
     ) async {
@@ -892,23 +1147,53 @@ void main() {
       expect(find.text('2 items'), findsWidgets);
     });
 
-    testWidgets('reports charts stock by value, share and movement', (
+    testWidgets('reports breaks stock down once, not three times over', (
       tester,
     ) async {
       await _pumpApp(tester, size: _tallDesktop, initialLocation: '/reports');
 
       expect(find.text('Reports'), findsWidgets);
       expect(find.text('Inventory Value'), findsOneWidget);
-      expect(find.text('Stock value by category'), findsOneWidget);
-      expect(find.text('Share of stock value'), findsOneWidget);
-      expect(find.text('Stock movement — last 14 days'), findsOneWidget);
-      expect(find.text('Units held by category'), findsOneWidget);
+      expect(find.text('Stock by category'), findsOneWidget);
+      expect(find.text('Stock movement'), findsOneWidget);
       expect(find.text('Top items by stock value'), findsOneWidget);
 
-      // The charts themselves render, not just their cards.
-      expect(find.byType(CategoryBarChart), findsOneWidget);
-      expect(find.byType(CategoryDonutChart), findsNWidgets(2));
+      // One breakdown of the category cut, carrying both share and figures.
+      expect(find.byType(CategoryDonutChart), findsOneWidget);
       expect(find.byType(FlowChart), findsOneWidget);
+
+      // The cards that used to say the same thing a second time are gone.
+      expect(find.text('Stock value by category'), findsNothing);
+      expect(find.text('Share of stock value'), findsNothing);
+      expect(find.text('Units held by category'), findsNothing);
+      expect(find.text('Top sellers'), findsNothing);
+    });
+
+    testWidgets('the category breakdown switches between value and units', (
+      tester,
+    ) async {
+      final controller = await _pumpApp(
+        tester,
+        size: _tallDesktop,
+        initialLocation: '/reports',
+      );
+
+      // Money to begin with.
+      expect(find.text('Total value'), findsOneWidget);
+      final byValue = tester.widget<CategoryDonutChart>(
+        find.byType(CategoryDonutChart),
+      );
+      expect(byValue.total, controller.totalStockValue);
+
+      await tester.tap(find.text('Units'));
+      await tester.pumpAndSettle();
+
+      // The same cut, counted instead of priced.
+      expect(find.text('Units on hand'), findsOneWidget);
+      final byUnits = tester.widget<CategoryDonutChart>(
+        find.byType(CategoryDonutChart),
+      );
+      expect(byUnits.total, controller.totalUnits.toDouble());
     });
 
     testWidgets('the donut never shows more slices than it can be read at', (
@@ -917,7 +1202,7 @@ void main() {
       await _pumpApp(tester, size: _tallDesktop, initialLocation: '/reports');
 
       final donut = tester.widget<CategoryDonutChart>(
-        find.byType(CategoryDonutChart).first,
+        find.byType(CategoryDonutChart),
       );
       expect(donut.slices.length, lessThanOrEqualTo(6));
       // Every slice is legended by name, so colour is never the only channel.
@@ -938,8 +1223,7 @@ void main() {
         initialLocation: '/reports',
       );
 
-      expect(find.byType(CategoryBarChart), findsOneWidget);
-      expect(find.byType(CategoryDonutChart), findsNWidgets(2));
+      expect(find.byType(CategoryDonutChart), findsOneWidget);
       expect(find.byType(FlowChart), findsOneWidget);
       expect(tester.takeException(), isNull);
     });

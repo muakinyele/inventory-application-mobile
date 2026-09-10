@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/design.dart';
 import '../core/palette.dart';
 import '../models/item.dart';
+import '../state/auth_controller.dart';
 import '../state/inventory_controller.dart';
 import 'widgets/app_sidebar.dart';
 
@@ -13,6 +15,14 @@ import 'widgets/app_sidebar.dart';
 /// Named by route and resolved to branch indices, so inserting a destination
 /// in the sidebar can never silently promote the wrong one to the tab bar.
 const _phoneRoutes = <String>['/', '/items', '/activity', '/alerts'];
+
+/// Resolves a branch index to the destination it shows, including the two
+/// pinned at the end that do not live in [navItems].
+NavItem _itemFor(int branch) {
+  if (branch == navItems.length) return settingsItem;
+  if (branch == navItems.length + 1) return accountItem;
+  return navItems[branch];
+}
 
 /// The destination that carries the reorder count. Named rather than indexed
 /// for the same reason as above: the badge used to be pinned to a hardcoded
@@ -29,10 +39,75 @@ final _phoneTabs = <int>[
 /// One navigation model, two presentations: a fixed dark sidebar once there is
 /// room for it, and a tab bar plus overflow sheet on a phone. The sheet is the
 /// tail of the same list rather than a second navigation system.
-class AppShell extends StatelessWidget {
+class AppShell extends StatefulWidget {
   const AppShell({super.key, required this.navigationShell});
 
   final StatefulNavigationShell navigationShell;
+
+  @override
+  State<AppShell> createState() => _AppShellState();
+}
+
+class _AppShellState extends State<AppShell> {
+  /// Whether the sidebar is showing icons only.
+  ///
+  /// Remembered per device rather than per account: it is a preference about
+  /// this screen's width, not about who is signed in.
+  static const _collapsedKey = 'stockpile.sidebarCollapsed';
+
+  /// Which section headings are folded away, by name.
+  static const _sectionsKey = 'stockpile.collapsedNavSections';
+
+  bool _collapsed = false;
+  Set<String> _collapsedSections = const {};
+
+  @override
+  void initState() {
+    super.initState();
+    _restorePreferences();
+  }
+
+  Future<void> _restorePreferences() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final collapsed = prefs.getBool(_collapsedKey);
+      final sections = prefs.getStringList(_sectionsKey);
+      if (!mounted) return;
+      setState(() {
+        if (collapsed != null) _collapsed = collapsed;
+        if (sections != null) _collapsedSections = sections.toSet();
+      });
+    } catch (_) {
+      // A preference that cannot be read is not worth failing over; the rail
+      // simply starts expanded with every section open.
+    }
+  }
+
+  Future<void> _toggleSection(String section) async {
+    final next = {..._collapsedSections};
+    if (!next.remove(section)) next.add(section);
+    setState(() => _collapsedSections = next);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(_sectionsKey, next.toList());
+    } catch (_) {
+      // Fire and forget, like the rest of the app's persistence.
+    }
+  }
+
+  Future<void> _toggleCollapsed() async {
+    final next = !_collapsed;
+    setState(() => _collapsed = next);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_collapsedKey, next);
+    } catch (_) {
+      // Fire and forget, like the rest of the app's persistence: the UI has
+      // already moved, and a failed write only costs the choice next launch.
+    }
+  }
+
+  StatefulNavigationShell get navigationShell => widget.navigationShell;
 
   void _go(int index) => navigationShell.goBranch(
     index,
@@ -44,6 +119,12 @@ class AppShell extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = context.palette;
     final controller = context.watch<InventoryController>();
+    // Nullable, and absence fails *closed*: with no session in scope the
+    // permission predicate denies everything, so a shell built without
+    // authentication (only ever a widget test) hides the admin destinations
+    // rather than exposing them. The API enforces independently either way.
+    final auth = context.watch<AuthController?>();
+    bool can(String permission) => auth?.can(permission) ?? false;
     final alertCount = controller.items
         .where((i) => i.status != StockStatus.ok)
         .length;
@@ -58,6 +139,12 @@ class AppShell extends StatelessWidget {
               onSelect: _go,
               workspaceName: controller.settings.companyName,
               alertCount: alertCount,
+              can: can,
+              showAccount: auth != null,
+              collapsed: _collapsed,
+              onToggleCollapsed: _toggleCollapsed,
+              collapsedSections: _collapsedSections,
+              onToggleSection: _toggleSection,
             ),
             Expanded(
               child: Align(
@@ -86,6 +173,10 @@ class AppShell extends StatelessWidget {
           },
           workspaceName: controller.settings.companyName,
           alertCount: alertCount,
+          can: can,
+          showAccount: auth != null,
+          collapsedSections: _collapsedSections,
+          onToggleSection: _toggleSection,
         ),
       ),
       body: navigationShell,
@@ -94,6 +185,8 @@ class AppShell extends StatelessWidget {
         alertCount: alertCount,
         onSelect: _go,
         surface: p.surface,
+        can: can,
+        showAccount: auth != null,
       ),
     );
   }
@@ -105,20 +198,30 @@ class _PhoneTabs extends StatelessWidget {
     required this.alertCount,
     required this.onSelect,
     required this.surface,
+    required this.can,
+    required this.showAccount,
   });
 
   final int currentIndex;
   final int alertCount;
   final ValueChanged<int> onSelect;
   final Color surface;
+  final bool Function(String permission) can;
+  final bool showAccount;
 
   @override
   Widget build(BuildContext context) {
     final p = context.palette;
+    // The overflow sheet is still the tail of the one list, minus whatever
+    // this user cannot reach. Settings and My Account are pinned at the end,
+    // matching the sidebar foot.
     final overflow = [
       for (var i = 0; i < navItems.length; i++)
-        if (!_phoneTabs.contains(i)) i,
+        if (!_phoneTabs.contains(i) &&
+            (navItems[i].permission == null || can(navItems[i].permission!)))
+          i,
       navItems.length,
+      if (showAccount) navItems.length + 1,
     ];
     final onOverflowPage = overflow.contains(currentIndex);
 
@@ -204,17 +307,13 @@ class _PhoneTabs extends StatelessWidget {
                         horizontal: Insets.xl,
                       ),
                       leading: Icon(
-                        branch == navItems.length
-                            ? settingsItem.icon
-                            : navItems[branch].icon,
+                        _itemFor(branch).icon,
                         color: currentIndex == branch
                             ? p.accent
                             : p.inkSecondary,
                       ),
                       title: Text(
-                        branch == navItems.length
-                            ? settingsItem.label
-                            : navItems[branch].label,
+                        _itemFor(branch).label,
                         style: TextStyle(
                           fontWeight: currentIndex == branch
                               ? FontWeight.w700
