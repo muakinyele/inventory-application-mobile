@@ -8,6 +8,7 @@ import '../core/formatters.dart';
 import '../core/palette.dart';
 import '../models/transfer.dart';
 import '../state/inventory_controller.dart';
+import 'widgets/app_message.dart';
 import 'widgets/page_header.dart';
 import 'widgets/section_card.dart';
 
@@ -51,17 +52,23 @@ class _TransferEditorPageState extends State<TransferEditorPage> {
     super.dispose();
   }
 
-  void _save() {
+  Future<void> _save() async {
     final controller = context.read<InventoryController>();
     final from = _from;
     final to = _to;
 
     if (from == null || to == null) {
-      _notify('Pick where the stock is moving from and to.');
+      _notify(
+        'Pick where the stock is moving from and to.',
+        tone: MessageTone.warning,
+      );
       return;
     }
     if (from == to) {
-      _notify('A transfer needs two different locations.');
+      _notify(
+        'A transfer needs two different locations.',
+        tone: MessageTone.warning,
+      );
       return;
     }
 
@@ -76,7 +83,10 @@ class _TransferEditorPageState extends State<TransferEditorPage> {
           ),
     ];
     if (lines.isEmpty) {
-      _notify('Add at least one item with a quantity.');
+      _notify(
+        'Add at least one item with a quantity.',
+        tone: MessageTone.warning,
+      );
       return;
     }
 
@@ -87,25 +97,32 @@ class _TransferEditorPageState extends State<TransferEditorPage> {
       notes: _notes.text.trim(),
     );
     if (transfer == null) {
-      _notify('Nothing to move — $from is not holding any of those items.');
+      _notify(
+        'Nothing to move — $from is not holding any of those items.',
+        tone: MessageTone.warning,
+      );
       return;
     }
 
     final moved = transfer.units;
     final asked = lines.fold(0, (sum, l) => sum + l.quantity);
-    _notify(
+    // Awaited: routing away takes the dialog down with the page it sits on.
+    await _notify(
       moved < asked
           ? '${transfer.reference}: moved $moved of $asked — '
                 '$from did not hold the rest'
           : '${transfer.reference}: moved $moved to $to',
+      tone: moved < asked ? MessageTone.warning : MessageTone.success,
     );
+    if (!mounted) return;
     context.go('/transfers');
   }
 
-  void _notify(String message) {
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(message)));
+  Future<void> _notify(
+    String message, {
+    MessageTone tone = MessageTone.success,
+  }) {
+    return showAppMessage(context, message, tone: tone);
   }
 
   @override

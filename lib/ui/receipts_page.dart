@@ -9,6 +9,7 @@ import '../data/export_service.dart';
 import '../data/receipt_document.dart';
 import '../models/receipt.dart';
 import '../state/inventory_controller.dart';
+import 'widgets/app_message.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/filter_chips.dart';
 import 'widgets/page_header.dart';
@@ -37,10 +38,11 @@ class _ReceiptsPageState extends State<ReceiptsPage> {
     super.dispose();
   }
 
-  void _notify(String message) {
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(message)));
+  Future<void> _notify(
+    String message, {
+    MessageTone tone = MessageTone.success,
+  }) {
+    return showAppMessage(context, message, tone: tone);
   }
 
   /// Exports whatever the filters are currently showing, rather than the whole
@@ -53,7 +55,10 @@ class _ReceiptsPageState extends State<ReceiptsPage> {
   ) async {
     final controller = context.read<InventoryController>();
     if (visible.isEmpty) {
-      _notify('Nothing to export with those filters.');
+      _notify(
+        'Nothing to export with those filters.',
+        tone: MessageTone.warning,
+      );
       return;
     }
     final settings = controller.settings;

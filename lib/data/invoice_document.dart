@@ -9,7 +9,7 @@ import '../core/formatters.dart';
 import '../models/app_settings.dart';
 import '../models/invoice.dart';
 import '../models/receipt.dart';
-import 'receipt_document.dart' show loadReportFonts;
+import 'receipt_document.dart' show companyLogoBlock, loadReportFonts;
 
 /// Renders an invoice as the document a customer is sent.
 ///
@@ -117,6 +117,7 @@ class InvoiceDocument {
           child: pw.Column(
             crossAxisAlignment: pw.CrossAxisAlignment.start,
             children: [
+              companyLogoBlock(settings),
               pw.Text(
                 settings.companyName,
                 style: pw.TextStyle(font: bold, fontSize: 18),

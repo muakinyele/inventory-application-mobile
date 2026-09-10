@@ -11,7 +11,9 @@ import '../data/export_service.dart';
 import '../data/receipt_document.dart';
 import '../models/app_settings.dart';
 import '../state/inventory_controller.dart';
+import 'widgets/app_message.dart';
 import 'widgets/section_card.dart';
+import 'widgets/company_logo_field.dart';
 import 'widgets/page_header.dart';
 
 const _currencies = [
@@ -85,10 +87,11 @@ class _SettingsPageState extends State<SettingsPage> {
     return text.contains('.') ? text.replaceFirst(RegExp(r'\.?0+$'), '') : text;
   }
 
-  void _notify(String message) {
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(message)));
+  Future<void> _notify(
+    String message, {
+    MessageTone tone = MessageTone.success,
+  }) {
+    return showAppMessage(context, message, tone: tone);
   }
 
   List<String> _listFor(AppSettings settings, _ListKind kind) => switch (kind) {
@@ -110,7 +113,7 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _exportItems(BuildContext buttonContext) async {
     final controller = context.read<InventoryController>();
     if (controller.items.isEmpty) {
-      _notify('Nothing to export yet.');
+      _notify('Nothing to export yet.', tone: MessageTone.warning);
       return;
     }
     await const ExportService().shareText(
@@ -125,7 +128,7 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _exportReceipts(BuildContext buttonContext) async {
     final controller = context.read<InventoryController>();
     if (controller.receipts.isEmpty) {
-      _notify('No receipts to export yet.');
+      _notify('No receipts to export yet.', tone: MessageTone.warning);
       return;
     }
     await const ExportService().shareText(
@@ -170,14 +173,19 @@ class _SettingsPageState extends State<SettingsPage> {
       // Bytes rather than a path: on web there is no file path to read.
       text = utf8.decode(await file.readAsBytes(), allowMalformed: true);
     } catch (_) {
-      if (mounted) _notify('That file could not be read.');
+      if (mounted) {
+        _notify('That file could not be read.', tone: MessageTone.failure);
+      }
       return;
     }
 
     final result = csvToItems(text);
     if (result.items.isEmpty) {
       if (mounted) {
-        _notify(result.errors.firstOrNull ?? 'No rows could be imported.');
+        _notify(
+          result.errors.firstOrNull ?? 'No rows could be imported.',
+          tone: MessageTone.failure,
+        );
       }
       return;
     }
@@ -188,6 +196,7 @@ class _SettingsPageState extends State<SettingsPage> {
       result.errors.isEmpty
           ? 'Imported ${number(count)} items'
           : 'Imported ${number(count)} items, skipped ${result.errors.length}',
+      tone: result.errors.isEmpty ? MessageTone.success : MessageTone.warning,
     );
   }
 
@@ -294,20 +303,31 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             const SizedBox(height: 14),
             SectionCard(
-              title: 'Receipts',
+              // Named for both, because these fields drive the invoice
+              // letterhead exactly as much as the receipt's.
+              title: 'Invoices & receipts',
               child: Column(
                 children: [
                   Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      'What gets printed at the head and foot of a receipt, '
-                      'and the tax new ones are raised at. Each receipt keeps '
-                      'its own copy of the rate, so changing it here never '
-                      'alters what a customer was already charged.',
+                      'What gets printed at the head and foot of an invoice '
+                      'or receipt, and the tax new ones are raised at. Each '
+                      'receipt keeps its own copy of the rate, so changing it '
+                      'here never alters what a customer was already charged.',
                       style: TextStyle(fontSize: 12.5, color: p.inkMuted),
                     ),
                   ),
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 18),
+                  CompanyLogoField(
+                    settings: settings,
+                    onChanged: (encoded) => controller.updateSettings(
+                      settings.copyWith(companyLogo: encoded),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Divider(height: 1, color: p.line),
+                  const SizedBox(height: 18),
                   TextField(
                     controller: _companyAddress,
                     textCapitalization: TextCapitalization.words,
@@ -529,7 +549,10 @@ class _SettingsPageState extends State<SettingsPage> {
               final value = entry.text.trim();
               if (value.isEmpty) return;
               if (values.contains(value)) {
-                _notify('That entry already exists.');
+                _notify(
+                  'That entry already exists.',
+                  tone: MessageTone.warning,
+                );
                 return;
               }
               controller.updateSettings(

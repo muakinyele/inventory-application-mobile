@@ -9,6 +9,7 @@ import '../data/export_service.dart';
 import '../data/invoice_document.dart';
 import '../models/invoice.dart';
 import '../state/inventory_controller.dart';
+import 'widgets/app_message.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/filter_chips.dart';
 import 'widgets/page_header.dart';
@@ -37,15 +38,19 @@ class _InvoicesPageState extends State<InvoicesPage> {
     super.dispose();
   }
 
-  void _notify(String message) {
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(message)));
+  Future<void> _notify(
+    String message, {
+    MessageTone tone = MessageTone.success,
+  }) {
+    return showAppMessage(context, message, tone: tone);
   }
 
   Future<void> _export(Rect? origin, List<Invoice> visible) async {
     if (visible.isEmpty) {
-      _notify('Nothing to export with those filters.');
+      _notify(
+        'Nothing to export with those filters.',
+        tone: MessageTone.warning,
+      );
       return;
     }
     await const ExportService().shareText(

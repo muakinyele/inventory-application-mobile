@@ -1,0 +1,33 @@
+# Keep the build context small and the image clean. The Flutter build context
+# is the whole repo, so without this it would ship the git history, the 1.5 GB
+# of build output, and — critically — any local .env.
+
+.git
+.github
+.dart_tool
+.idea
+.vscode
+**/.DS_Store
+
+build/
+server/.dart_tool/
+server/build/
+legacy-pwa/
+screenshot/
+
+# Never in an image. `.env` holds the database password, the token pepper and
+# the SMTP credential.
+.env
+.env.*
+!.env.example
+server/.env
+server/.env.*
+!server/.env.example
+
+# Platform shells the container never builds.
+android/
+ios/
+web/.dart_tool/
+
+*.iml
+*.log

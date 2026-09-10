@@ -1,8 +1,8 @@
 # Stockpile — inventory tracker
 
 A Flutter inventory app that runs from one codebase on **Android, iOS and the
-web**. Everything is stored on the device — no account, no server, and it keeps
-working offline.
+web**. Inventory is stored on the device and keeps working offline; sign-in,
+accounts and roles are handled by a small Dart API in [`server/`](server).
 
 ## Running it
 
@@ -11,11 +11,48 @@ flutter pub get
 
 flutter run -d chrome          # web
 flutter run -d <android-id>    # phone or emulator; see `flutter devices`
-flutter test                   # 55 unit + widget tests
+flutter test                   # 327 unit + widget tests
 flutter test --platform chrome test/web_safety_test.dart   # browser-only guards
 flutter analyze
 dart format lib test
 ```
+
+The app needs the identity API to sign in. Start it first (see
+[`server/README.md`](server/README.md)), then point the app at it:
+
+```bash
+flutter run -d chrome --dart-define=STOCKPILE_API_URL=http://localhost:8080
+```
+
+The URL is compile-time, so a release build cannot be redirected at another
+server after the fact. An **absolute** URL is used as given — which is what
+the Android and iOS builds need. A **relative** one (`/api`, which the
+container image is built with) is resolved against the page the app was served
+from, so one web image works in every environment and the API is same-origin.
+
+## With Docker
+
+The whole platform — client, API and PostgreSQL — runs from one command:
+
+```bash
+cp .env.example .env     # POSTGRES_PASSWORD and TOKEN_PEPPER have no defaults
+docker compose up --build
+open http://localhost:8080
+```
+
+Compose waits for the database to be healthy, runs migrations to completion,
+and only then starts the API and the web server. Create the first
+administrator with:
+
+```bash
+docker compose run --rm --entrypoint /app/bin/create_admin api \
+  --email you@example.com --name "Your Name"
+```
+
+Production runs the same stack from published images:
+`docker compose -f docker-compose.prod.yml up -d`.
+[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) covers the pipeline, the secrets,
+health checks, backups and rollback.
 
 Release builds:
 
@@ -66,6 +103,26 @@ and top items by value. Charts are `fl_chart`, with hover tooltips throughout.
 **Settings** — workspace name, currency, appearance, editable list management,
 CSV import/export, JSON backup, sample catalogue, erase-everything.
 
+**Sign in** — email and password, show/hide, remember me, forgot password. An
+expired session says so and returns you to where you were once you are back in.
+
+**My account** — your name, phone and email; your role and status, read-only.
+
+**Security** — change your password, move to a new email address (which the new
+address has to confirm), see every signed-in device with its last activity and
+sign any of them out, and read your recent sign-in history.
+
+**Notifications** — switch off low-stock and report emails. Security emails are
+not listed, because they cannot be switched off.
+
+**Users** *(administrators)* — search, filter and page the user list; invite
+someone by email; change a role; grant or deny an individual permission;
+enable, disable, unlock or deactivate an account; send a password reset without
+ever seeing the password.
+
+**Audit log** *(administrators)* — every security-relevant action, filtered by
+event type, person, free text and date.
+
 **Barcode scanning** is available from Items and from the editor, using
 `mobile_scanner` on Android, iOS and web, with manual entry always alongside it.
 
@@ -89,9 +146,16 @@ lib/
     csv_codec.dart             RFC-4180 parse/serialise + import mapping
     export_service.dart        share sheet on mobile, download on web
     photo_service.dart         camera/library photo -> small encoded image
+    auth_api.dart              the identity API client, incl. token refresh
+    token_storage.dart         Keychain/Keystore session storage
   state/
     inventory_controller.dart  the reducer: every mutation lives here
+    auth_controller.dart       session state: isAuthenticated, user, can()
   ui/
+    auth/                      sign in, forgot/reset password, accept invite,
+                               verify email, password field + strength meter
+    account/                   profile, security, notification preferences
+    admin/                     user list, user detail, invite, audit log
     app_shell.dart             sidebar when wide, tabs + overflow on a phone
     dashboard_page.dart  items_page.dart  item_detail_page.dart
     item_editor_page.dart  activity_page.dart  categories_page.dart
@@ -99,7 +163,41 @@ lib/
     widgets/                   AppSidebar, PageHeader, StatCard, ProductCard,
                                FilterChips, SectionCard, MovementTile, charts
 test/                          csv, formatter, controller and widget tests
+server/                        the identity API — see server/README.md
+Dockerfile                     the web client, built and served by nginx
+server/Dockerfile              the API, compiled to a native binary
+docker-compose.yml             development stack, built from source
+docker-compose.prod.yml        production stack, from published images
+docker/nginx/                  proxy config: static files plus /api upstream
+scripts/deploy.sh              roll out, health-gate, roll back
+.github/workflows/             CI on every push; deploy from main and develop
+docs/DEPLOYMENT.md             how the pipeline and the host fit together
 ```
+
+**Identity is server-side; inventory is not.** Signing in, roles, permissions,
+sessions and the audit trail live in PostgreSQL behind the API in `server/`.
+The catalogue does not — it stays in the device's own drift/SQLite database, so
+the app still opens and works with no network. The consequence worth being
+explicit about: **inventory permission checks in the app are UX, not
+enforcement.** Hiding a button someone cannot use is presentation; the only
+things the server actually enforces are the things it owns. Moving inventory
+behind the API would change that, and is the natural next step — the API is
+shaped so those endpoints can be added without touching authentication.
+
+**Sessions can be revoked, so tokens are opaque.** A session token is 32 random
+bytes and the server stores only a hash of it. That costs one indexed lookup
+per request that a JWT would avoid, but a JWT cannot be withdrawn — and
+logout, "sign out my other devices", an administrator revoking a laptop, and
+the forced sign-out after a password change all need revocation that bites on
+the next request. Refresh tokens rotate on every use, and presenting a rotated
+one is treated as theft: the whole session chain is ended.
+
+**One place decides who you are.** `AuthController` (a `ChangeNotifier` behind
+`provider`, matching `InventoryController`) holds the session and is the only
+thing that mutates it. Widgets ask `auth.can('items.delete')`; none of them
+sees a token. The router's `redirect` is the single guard — no page checks for
+itself — and it also remembers where you were heading so signing in returns you
+there rather than to the dashboard.
 
 **A real database underneath.** Drift/SQLite with five tables — `items`,
 `movements`, `categories`, `lookups`, `preferences`. Native `sqlite3` on Android,
@@ -135,6 +233,32 @@ bar for the four most-used destinations plus a "More" sheet holding the rest;
 at or above it, the same list becomes the fixed sidebar. The overflow sheet is
 the tail of that one list, not a second navigation system. Both presentations
 are asserted in `test/app_widget_test.dart`.
+
+**The sidebar collapses two ways.** The `«` control in its header narrows the
+whole rail from 260px to 76px, handing about 185px back to the tables and
+charts beside it; every destination then keeps a tooltip and a semantics
+label, because the icon is the only thing left to identify it. Separately,
+each section heading — Stock, Buying, Selling, Insights, Administration —
+folds its own destinations away with a chevron, so you can keep the two groups
+you actually use open and put the rest away.
+
+Both matter because the rail outgrew the window: fifteen destinations plus
+five headings do not fit a 13-inch laptop, and a clipped last item reads as
+missing rather than as scrolled past. Either collapse makes the list fit;
+where it still does not, the list scrolls behind a visible thumb.
+
+Two rules keep folding from hiding something you need. **The section holding
+the current destination is never folded away** — arriving at a route by URL or
+by redirect would otherwise leave the rail claiming nothing is selected — and
+it shows a pin to explain why the chevron appears not to have worked.
+**Folding is ignored while the rail is collapsed to icons**, because there are
+no headings to fold under and hiding the icons would simply make them
+unreachable.
+
+Both choices are remembered per device in `SharedPreferences`: they are
+preferences about this screen, not about who is signed in. The drawer on
+narrow windows shares the fold state but never collapses to icons — it is
+already a temporary overlay at full width.
 
 **Type.** Inter, bundled rather than fetched at runtime so the app still renders
 correctly offline. It ships two optical sizes and the app uses both: the *Text*
@@ -180,8 +304,17 @@ configure your host to serve `index.html` for unknown paths.
 
 ## Known limits
 
-- Data is per-device and per-browser. There is no sync; the JSON backup in
-  Settings is how you move it.
+- Inventory data is per-device and per-browser. There is no sync; the JSON
+  backup in Settings is how you move it. Accounts *are* shared — they live on
+  the server — so the same person signing in on two devices gets the same role
+  and two separate catalogues.
+- Because inventory is local, its permission checks are enforced by the app
+  rather than by the server. See the note above.
+- On the web there is no storage a page's own JavaScript cannot read, so an
+  XSS in the app's origin could take a session token. Short-lived access
+  tokens, rotating refresh tokens with replay detection, and a strict CSP
+  narrow the window; `lib/data/token_storage.dart` sets out the trade-off and
+  the alternative.
 - The bundled fonts add about 2.8 MB to the web build. Subsetting them to the
   glyphs actually used would cut that substantially if download size matters.
 - Photos are stored inline in the database. A few hundred items with photos

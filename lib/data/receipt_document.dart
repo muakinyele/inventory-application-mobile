@@ -10,6 +10,45 @@ import '../core/formatters.dart';
 import '../models/app_settings.dart';
 import '../models/receipt.dart';
 
+/// The company logo as a PDF image, or null when none is set.
+///
+/// Returns null rather than throwing on bytes that will not decode: a
+/// corrupted settings row must not be able to stop an invoice printing. The
+/// document simply falls back to the company name, which is what it looked
+/// like before a logo was ever uploaded.
+pw.MemoryImage? companyLogoImage(AppSettings settings) {
+  if (!settings.hasCompanyLogo) return null;
+  try {
+    return pw.MemoryImage(base64Decode(settings.companyLogo));
+  } catch (_) {
+    return null;
+  }
+}
+
+/// How large the logo is allowed to print on a letterhead, in points.
+///
+/// Constrained on both edges and drawn `contain`, so a wide banner and a tall
+/// crest both come out sensibly without the caller knowing the aspect.
+const double logoMaxHeight = 46;
+const double logoMaxWidth = 170;
+
+/// The letterhead logo block, or an empty box when there is no logo.
+pw.Widget companyLogoBlock(AppSettings settings) {
+  final image = companyLogoImage(settings);
+  if (image == null) return pw.SizedBox.shrink();
+
+  return pw.Padding(
+    padding: const pw.EdgeInsets.only(bottom: 8),
+    child: pw.ConstrainedBox(
+      constraints: const pw.BoxConstraints(
+        maxHeight: logoMaxHeight,
+        maxWidth: logoMaxWidth,
+      ),
+      child: pw.Image(image, fit: pw.BoxFit.contain),
+    ),
+  );
+}
+
 Future<(pw.Font, pw.Font, pw.Font)>? _fontsFuture;
 
 /// Regular, semi-bold and bold Inter, for anything this app renders to PDF.
@@ -173,6 +212,7 @@ class ReceiptDocument {
           child: pw.Column(
             crossAxisAlignment: pw.CrossAxisAlignment.start,
             children: [
+              companyLogoBlock(settings),
               pw.Text(
                 settings.companyName,
                 style: pw.TextStyle(font: bold, fontSize: 18),
@@ -467,7 +507,24 @@ class ReceiptDocument {
       child: pw.Divider(color: PdfColors.grey500, height: 1),
     );
 
+    final logo = companyLogoImage(settings);
+
     return [
+      // A roll is 58mm wide, so the logo is capped far tighter here than on
+      // a letterhead — and centred, because everything on a till receipt is.
+      if (logo != null)
+        pw.Padding(
+          padding: const pw.EdgeInsets.only(bottom: 4),
+          child: pw.Center(
+            child: pw.ConstrainedBox(
+              constraints: const pw.BoxConstraints(
+                maxHeight: 28,
+                maxWidth: 110,
+              ),
+              child: pw.Image(logo, fit: pw.BoxFit.contain),
+            ),
+          ),
+        ),
       centred(settings.companyName, font: bold, size: 11),
       for (final line in [
         settings.companyAddress,

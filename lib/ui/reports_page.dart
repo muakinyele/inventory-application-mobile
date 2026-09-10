@@ -10,7 +10,9 @@ import '../data/sales_report.dart';
 import '../models/app_settings.dart';
 import '../models/item.dart';
 import '../state/inventory_controller.dart';
+import 'widgets/app_message.dart';
 import 'widgets/charts.dart';
+import 'widgets/custom_period_dialog.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/page_header.dart';
 import 'widgets/section_card.dart';
@@ -46,6 +48,9 @@ class _ReportsPageState extends State<ReportsPage> {
   /// Set only while [_period] is custom.
   DateTimeRange? _customRange;
 
+  /// Which measure the category breakdown is cut by: stock value, or units.
+  bool _byValue = true;
+
   bool _exporting = false;
 
   ReportRange get _range {
@@ -78,21 +83,15 @@ class _ReportsPageState extends State<ReportsPage> {
   }
 
   Future<void> _pickCustom() async {
-    final now = DateTime.now();
-    final picked = await showDateRangePicker(
-      context: context,
-      firstDate: DateTime(now.year - 5),
-      lastDate: now,
-      initialDateRange: _customRange,
-      helpText: 'Report period',
-    );
+    final picked = await showCustomPeriodDialog(context, initial: _customRange);
     if (picked != null) setState(() => _customRange = picked);
   }
 
-  void _notify(String message) {
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(message)));
+  Future<void> _notify(
+    String message, {
+    MessageTone tone = MessageTone.success,
+  }) {
+    return showAppMessage(context, message, tone: tone);
   }
 
   Future<void> _export(
@@ -121,7 +120,12 @@ class _ReportsPageState extends State<ReportsPage> {
         );
       }
     } catch (error) {
-      if (mounted) _notify('That file could not be produced: $error');
+      if (mounted) {
+        _notify(
+          'That file could not be produced: $error',
+          tone: MessageTone.failure,
+        );
+      }
       return;
     } finally {
       if (mounted) setState(() => _exporting = false);
@@ -239,72 +243,65 @@ class _ReportsPageState extends State<ReportsPage> {
             ),
 
             // --- Trading ----------------------------------------------------
-            SectionCard(
+            // Everything under this heading is bounded by the period bar, and
+            // each figure appears in exactly one place: the four totals, where
+            // the revenue came from, then the per-item detail those add up to.
+            _SectionHeading(
               title: 'Trading',
-              trailing: _Caption(
-                '${number(report.documentCount)} '
-                '${report.documentCount == 1 ? 'sale' : 'sales'}',
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  PeriodPicker(
-                    period: _period,
-                    range: _range,
-                    canStepForward: _canStepForward,
-                    onPeriodChanged: (value) => setState(() {
-                      _period = value;
-                      if (value == ReportPeriod.custom &&
-                          _customRange == null) {
-                        // Opening Custom with nothing chosen would show a
-                        // range the user never picked, so it asks straight
-                        // away.
-                        WidgetsBinding.instance.addPostFrameCallback(
-                          (_) => _pickCustom(),
-                        );
-                      }
-                    }),
-                    onStep: _step,
-                    onPickCustom: _pickCustom,
-                  ),
-                  const SizedBox(height: Insets.lg),
-                  TradingSummary(report: report),
-                ],
+              note:
+                  'What was earned over the period, and what those goods cost.',
+              trailing:
+                  '${number(report.documentCount)} '
+                  '${report.documentCount == 1 ? 'sale' : 'sales'}',
+            ),
+            const SizedBox(height: Insets.md),
+            SectionCard(
+              padding: const EdgeInsets.all(Insets.md),
+              child: PeriodPicker(
+                period: _period,
+                range: _range,
+                canStepForward: _canStepForward,
+                onPeriodChanged: (value) => setState(() {
+                  _period = value;
+                  if (value == ReportPeriod.custom && _customRange == null) {
+                    // Opening Custom with nothing chosen would show a range
+                    // the user never picked, so it asks straight away.
+                    WidgetsBinding.instance.addPostFrameCallback(
+                      (_) => _pickCustom(),
+                    );
+                  }
+                }),
+                onStep: _step,
+                onPickCustom: _pickCustom,
               ),
             ),
-            const SizedBox(height: Insets.lg),
-            _TwoUp(
-              left: SectionCard(
-                title: 'Revenue by source',
-                trailing: const _Caption('before tax'),
-                child: RevenueSources(report: report),
-              ),
-              right: SectionCard(
-                title: 'Top sellers',
-                trailing: const _Caption('by gross profit'),
-                child: _TopSellers(report: report),
-              ),
+            const SizedBox(height: Insets.md),
+            TradingSummary(report: report),
+            const SizedBox(height: Insets.md),
+            SectionCard(
+              title: 'Revenue by source',
+              trailing: const _Caption('before tax'),
+              child: RevenueSources(report: report),
             ),
-            const SizedBox(height: Insets.lg),
+            const SizedBox(height: Insets.md),
+            // The full ranking, best earner first — which is also the answer
+            // to "what sold well", so there is no separate top-sellers card
+            // repeating the head of this list.
             SectionCard(
               title: 'Profit by item',
-              trailing: _Caption(_range.label),
+              trailing: const _Caption('best earners first'),
               child: TradingTable(report: report),
             ),
             const SizedBox(height: Insets.section),
 
             // --- Stock on hand ----------------------------------------------
-            Text(
-              'Stock on hand',
-              style: Theme.of(context).textTheme.titleMedium,
+            _SectionHeading(
+              title: 'Stock on hand',
+              note:
+                  'A snapshot of the shelf as it is now, at cost. The period '
+                  'above does not bound it.',
             ),
-            const SizedBox(height: 2),
-            Text(
-              'A snapshot of the shelf as it is now, at cost — not bounded by '
-              'the period above.',
-              style: TextStyle(fontSize: 13, color: p.inkMuted),
-            ),
-            const SizedBox(height: Insets.lg),
+            const SizedBox(height: Insets.md),
             StatGrid(
               cards: [
                 StatCard(
@@ -332,55 +329,39 @@ class _ReportsPageState extends State<ReportsPage> {
                 ),
               ],
             ),
-            const SizedBox(height: Insets.lg),
+            const SizedBox(height: Insets.md),
 
-            // Magnitude and share answer different questions, so they sit side
-            // by side: the bars for "which is biggest", the donut for "how much
-            // of the whole" — a donut alone cannot be read for close values.
+            // One breakdown by category, not three. Value and units are two
+            // measures of the same cut, so they share a card and a switch;
+            // the ring carries the share and the legend the exact figures,
+            // which is what the separate bar chart beside it used to say.
             _TwoUp(
               left: SectionCard(
-                title: 'Stock value by category',
-                trailing: const _Caption('at cost'),
-                child: CategoryBarChart(
-                  slices: valueSlices,
-                  formatValue: asMoney,
+                title: 'Stock by category',
+                trailing: _MeasureToggle(
+                  byValue: _byValue,
+                  onChanged: (value) => setState(() => _byValue = value),
                 ),
-              ),
-              right: SectionCard(
-                title: 'Share of stock value',
-                trailing: const _Caption('% of total'),
                 child: CategoryDonutChart(
-                  slices: valueSlices,
-                  total: controller.totalStockValue,
-                  formatValue: asMoney,
-                  centerLabel: 'Total value',
-                ),
-              ),
-            ),
-            const SizedBox(height: Insets.lg),
-
-            SectionCard(
-              title: 'Stock movement — last 14 days',
-              trailing: const _Caption('units in and out'),
-              child: FlowChart(days: flow),
-            ),
-            const SizedBox(height: Insets.lg),
-
-            _TwoUp(
-              left: SectionCard(
-                title: 'Units held by category',
-                trailing: const _Caption('count'),
-                child: CategoryDonutChart(
-                  slices: unitSlices,
-                  total: controller.totalUnits.toDouble(),
-                  formatValue: asUnits,
-                  centerLabel: 'Units on hand',
+                  slices: _byValue ? valueSlices : unitSlices,
+                  total: _byValue
+                      ? controller.totalStockValue
+                      : controller.totalUnits.toDouble(),
+                  formatValue: _byValue ? asMoney : asUnits,
+                  centerLabel: _byValue ? 'Total value' : 'Units on hand',
                 ),
               ),
               right: SectionCard(
                 title: 'Top items by stock value',
+                trailing: const _Caption('at cost'),
                 child: _TopItems(controller: controller, currency: currency),
               ),
+            ),
+            const SizedBox(height: Insets.md),
+            SectionCard(
+              title: 'Stock movement',
+              trailing: const _Caption('last 14 days'),
+              child: FlowChart(days: flow),
             ),
           ],
         ),
@@ -601,107 +582,115 @@ class _TopItems extends StatelessWidget {
   }
 }
 
-/// The period's best earners, ranked by what they actually made rather than
-/// what they sold for — volume at no margin is not a top seller.
-class _TopSellers extends StatelessWidget {
-  const _TopSellers({required this.report});
+/// The label that opens a run of related cards.
+///
+/// The two halves of this page answer different questions — one is bounded by
+/// a period, the other is a snapshot — so each gets the same shaped heading
+/// rather than one being a card title and the other a bare line of text.
+class _SectionHeading extends StatelessWidget {
+  const _SectionHeading({
+    required this.title,
+    required this.note,
+    this.trailing,
+  });
 
-  final SalesReport report;
+  final String title;
+  final String note;
+
+  /// A short count or qualifier, right-aligned against the title.
+  final String? trailing;
 
   @override
   Widget build(BuildContext context) {
     final p = context.palette;
-    final top = report.lines.take(6).toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          children: [
+            Expanded(
+              child: Text(
+                title,
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+            if (trailing != null) ...[
+              const SizedBox(width: Insets.sm),
+              _Caption(trailing!),
+            ],
+          ],
+        ),
+        const SizedBox(height: 2),
+        Text(note, style: TextStyle(fontSize: 13, color: p.inkMuted)),
+      ],
+    );
+  }
+}
 
-    if (top.isEmpty) {
-      return Text(
-        'Nothing sold in this period.',
-        style: TextStyle(fontSize: 13.5, color: p.inkMuted),
+/// Switches the category breakdown between money and units. Two segments, in
+/// the card's own header, so the measure is chosen where it is read.
+class _MeasureToggle extends StatelessWidget {
+  const _MeasureToggle({required this.byValue, required this.onChanged});
+
+  final bool byValue;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+
+    Widget segment(String label, bool value) {
+      final selected = value == byValue;
+      return Semantics(
+        selected: selected,
+        button: true,
+        child: Material(
+          color: selected ? p.surface : Colors.transparent,
+          borderRadius: BorderRadius.circular(Radii.pill),
+          child: InkWell(
+            onTap: selected ? null : () => onChanged(value),
+            borderRadius: BorderRadius.circular(Radii.pill),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: Insets.sm,
+                vertical: 5,
+              ),
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: selected ? p.ink : p.inkMuted,
+                ),
+              ),
+            ),
+          ),
+        ),
       );
     }
 
-    final leader = top.first.grossProfit;
-
-    return Column(
-      children: [
-        for (final line in top) ...[
-          if (line != top.first) const SizedBox(height: Insets.md),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      line.itemName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 13.5,
-                        fontWeight: FontWeight.w600,
-                        color: p.ink,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: Insets.sm),
-                  Text(
-                    money(line.grossProfit, report.currency),
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: line.grossProfit < 0 ? p.critical : p.goodText,
-                      fontFeatures: const [FontFeature.tabularFigures()],
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 3),
-              Row(
-                children: [
-                  Expanded(
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        final fraction = leader <= 0
-                            ? 0.0
-                            : (line.grossProfit / leader).clamp(0.0, 1.0);
-                        return Container(
-                          height: 6,
-                          decoration: BoxDecoration(
-                            color: p.surfaceSunken,
-                            borderRadius: BorderRadius.circular(3),
-                          ),
-                          child: Align(
-                            alignment: Alignment.centerLeft,
-                            child: Container(
-                              width: constraints.maxWidth * fraction,
-                              decoration: BoxDecoration(
-                                color: p.good,
-                                borderRadius: BorderRadius.circular(3),
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: Insets.sm),
-                  SizedBox(
-                    width: 62,
-                    child: Text(
-                      line.marginRate == null
-                          ? '—'
-                          : '${(line.marginRate! * 100).toStringAsFixed(1)}%',
-                      textAlign: TextAlign.right,
-                      style: TextStyle(fontSize: 12, color: p.inkMuted),
-                    ),
-                  ),
-                ],
-              ),
-            ],
+    // A card header gives its trailing slot a share of the row, not whatever
+    // it asks for, so the switch scales down on a narrow card rather than
+    // overflowing it.
+    return Align(
+      alignment: Alignment.centerRight,
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.centerRight,
+        child: Container(
+          padding: const EdgeInsets.all(3),
+          decoration: BoxDecoration(
+            color: p.surfaceSunken,
+            borderRadius: BorderRadius.circular(Radii.pill),
           ),
-        ],
-      ],
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [segment('Value', true), segment('Units', false)],
+          ),
+        ),
+      ),
     );
   }
 }

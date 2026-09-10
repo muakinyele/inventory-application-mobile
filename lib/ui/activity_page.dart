@@ -9,6 +9,7 @@ import '../data/csv_codec.dart';
 import '../data/export_service.dart';
 import '../models/movement.dart';
 import '../state/inventory_controller.dart';
+import 'widgets/app_message.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/filter_chips.dart';
 import 'widgets/movement_tile.dart';
@@ -45,11 +46,7 @@ class _ActivityPageState extends State<ActivityPage> {
       originRect: shareOriginOf(buttonContext),
     );
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(
-        const SnackBar(content: Text('Movement history exported')),
-      );
+    await showAppMessage(context, 'Movement history exported');
   }
 
   @override

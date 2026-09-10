@@ -1,0 +1,100 @@
+# Rendered by nginx's entrypoint at container start, so ${API_UPSTREAM} is
+# chosen per environment and the image itself stays environment-agnostic.
+
+server {
+    listen 8080;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Bodies are small — JSON, and a logo upload capped at 5 MB by the app.
+    # The margin covers base64's ~33% inflation on the wire.
+    client_max_body_size 8m;
+
+    # Hardening for the documents nginx serves itself. Deliberately *not* set
+    # at server level: the API already sends its own, and a server-level
+    # add_header would append a second identical copy to every proxied
+    # response. nginx only inherits these into a location that declares none
+    # of its own, so `location /api/` is left alone by having them here.
+
+    # The container's own liveness probe. Deliberately not proxied, so it
+    # reports on *this* service rather than on the API behind it.
+    location = /healthz {
+        access_log off;
+        add_header Content-Type text/plain;
+        return 200 "ok\n";
+    }
+
+    # Same-origin API. The client is built with a relative base, so it calls
+    # here and CORS never applies.
+    location /api/ {
+        # Docker's embedded DNS. Naming a resolver and putting the upstream in
+        # a *variable* is what forces nginx to re-resolve: with a literal
+        # host, it resolves once at startup and then keeps calling the address
+        # the API container had before it was last replaced — so every deploy
+        # would break the proxy until nginx itself was restarted.
+        resolver ${DNS_RESOLVER} valid=10s ipv6=off;
+        set $api_backend ${API_UPSTREAM};
+
+        # A variable upstream disables proxy_pass's automatic prefix
+        # stripping, so /api is removed here instead. The API keeps serving
+        # /auth/login rather than /api/auth/login either way.
+        rewrite ^/api/(.*)$ /$1 break;
+        proxy_pass $api_backend;
+
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        # The API only believes this when TRUST_PROXY_HEADERS is on, and it is
+        # set here because this proxy overwrites rather than appends — so a
+        # client cannot forge its own address past it.
+        proxy_set_header X-Forwarded-For   $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_connect_timeout 5s;
+        proxy_send_timeout    30s;
+        proxy_read_timeout    30s;
+
+        # An API response is either per-user or credential-bearing; nothing
+        # here belongs in a shared cache.
+        proxy_no_cache     1;
+        proxy_cache_bypass 1;
+    }
+
+    # Hashed build assets are safe to cache hard: a new build changes the
+    # filename, so a stale one is never requested.
+    location ~* \.(?:js|css|wasm|woff2?|ttf|png|jpg|jpeg|svg|ico)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        add_header X-Content-Type-Options nosniff always;
+        try_files $uri =404;
+    }
+
+    # index.html must never be cached, or a deploy leaves browsers loading the
+    # previous build's asset manifest and the app fails to boot.
+    location = /index.html {
+        add_header Cache-Control "no-store, must-revalidate";
+        add_header X-Content-Type-Options nosniff always;
+        add_header X-Frame-Options DENY always;
+        add_header Referrer-Policy no-referrer always;
+        try_files $uri =404;
+    }
+
+    location = /flutter_service_worker.js {
+        add_header Cache-Control "no-store, must-revalidate";
+        try_files $uri =404;
+    }
+
+    # Single-page app: unknown paths are routes, not missing files. The app
+    # uses hash URLs by default, so this mainly matters if it is ever switched
+    # to path URLs — at which point a deep link would 404 without it.
+    location / {
+        add_header X-Content-Type-Options nosniff always;
+        add_header X-Frame-Options DENY always;
+        add_header Referrer-Policy no-referrer always;
+        try_files $uri $uri/ /index.html;
+    }
+}
