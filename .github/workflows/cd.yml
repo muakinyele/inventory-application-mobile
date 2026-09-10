@@ -265,13 +265,43 @@ jobs:
           set -euo pipefail
           namespace=$(echo "$NAMESPACE" | tr '[:upper:]' '[:lower:]')
 
+          port="${DEPLOY_PORT:-22}"
+          ssh_cmd="ssh -i $HOME/.ssh/id_ed25519 -p $port"
+
+          # rsync needs to exist on both ends. Checked before the transfer so
+          # a missing package reads as a missing package, rather than as
+          # rsync's rather cryptic "remote command not found" exit 127.
+          if ! $ssh_cmd "$DEPLOY_USER@$DEPLOY_HOST" 'command -v rsync' >/dev/null 2>&1; then
+            echo "::error::rsync is not installed on the deployment host. Install it with 'sudo apt-get install -y rsync' (Debian/Ubuntu) or 'sudo yum install -y rsync' (RHEL), then re-run."
+            exit 1
+          fi
+
+          # Assembled into a payload directory so what lands on the host is
+          # exactly this and nothing else — rsync mirrors a directory, and
+          # pointing it at the repository root would ship the whole tree.
+          payload="$RUNNER_TEMP/payload"
+          rm -rf "$payload" && mkdir -p "$payload"
+          cp docker-compose.prod.yml "$payload/"
+          cp scripts/deploy.sh "$payload/"
+          # Set here rather than over ssh afterwards: rsync -a preserves the
+          # mode, so the file arrives executable.
+          chmod 755 "$payload/deploy.sh"
+
           # The compose file and the deploy script travel with the commit, so
           # the host always runs the version this build was tested against.
-          port="${DEPLOY_PORT:-22}"
-
-          scp -i ~/.ssh/id_ed25519 -P "$port" \
-            docker-compose.prod.yml scripts/deploy.sh \
-            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/"
+          #
+          # --delete keeps the directory a mirror, so a file removed from the
+          # repository stops lingering on the host. The excludes are what make
+          # that safe: .env and .previous-tag are written *on the host* — one
+          # by the next step, one by deploy.sh to record what to roll back to
+          # — and are not in the payload, so without them --delete would erase
+          # both, taking the rollback target with it.
+          rsync --archive --compress --delete \
+            --exclude '.env' \
+            --exclude '.previous-tag' \
+            --human-readable --itemize-changes \
+            -e "$ssh_cmd" \
+            "$payload/" "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/"
 
           # The environment file is written over the SSH pipe, never left in
           # the workspace or echoed — it holds the pepper and the SMTP
@@ -301,7 +331,7 @@ jobs:
           ssh -i ~/.ssh/id_ed25519 -p "$port" "$DEPLOY_USER@$DEPLOY_HOST" \
             "cd $DEPLOY_PATH && \
              echo '$GHCR_TOKEN' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin && \
-             chmod +x deploy.sh && ./deploy.sh"
+             ./deploy.sh"
 
       - name: Verify the deployment is serving
         if: steps.guard.outputs.configured == 'true'
