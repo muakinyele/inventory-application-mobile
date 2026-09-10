@@ -26,18 +26,22 @@ Future<void> main(List<String> arguments) async {
     return;
   }
 
-  stdout.writeln('Sending via ${smtp.host}:${smtp.port} '
-      'as ${smtp.username ?? "(no username)"} -> $to');
+  stdout.writeln(
+    'Sending via ${smtp.host}:${smtp.port} '
+    'as ${smtp.username ?? "(no username)"} -> $to',
+  );
 
   try {
     await SmtpMailer(config: smtp, from: env.mailFrom).send(
       EmailMessage(
         to: to,
         subject: '${env.appName}: mail is configured correctly',
-        html: '<p>If you are reading this, ${env.appName} can send mail.</p>'
+        html:
+            '<p>If you are reading this, ${env.appName} can send mail.</p>'
             '<p>Password resets, invitations and security notices will '
             'reach you.</p>',
-        text: 'If you are reading this, ${env.appName} can send mail.\n'
+        text:
+            'If you are reading this, ${env.appName} can send mail.\n'
             'Password resets, invitations and security notices will reach '
             'you.\n',
       ),

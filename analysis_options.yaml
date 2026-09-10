@@ -1,1 +1,16 @@
 include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  exclude:
+    # `server/` is a separate Dart package with its own pubspec, its own
+    # analysis_options.yaml and its own CI job. Analysing it from here
+    # resolves its imports against *this* package's dependencies, which do not
+    # include shelf or the test package — so every one of its files reports
+    # hundreds of phantom errors unless `dart pub get` has happened to have
+    # been run inside it. That made a green local run and a red CI run out of
+    # the same commit.
+    - server/**
+
+    # The retired React/Vite version. No Dart in it, but excluded so a stray
+    # file there can never fail this package's analysis.
+    - legacy-pwa/**
