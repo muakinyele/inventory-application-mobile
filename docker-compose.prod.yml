@@ -16,7 +16,9 @@
 #   * the database publishes no host port at all;
 #   * restart policies, resource limits and log rotation.
 
-name: stockpile
+# Short project name: containers come out as inv-api-1, inv-db-1, inv-web-1
+# rather than stockpile-*. Purely cosmetic, but it is what `docker ps` shows.
+name: inv
 
 x-logging: &logging
   driver: json-file
@@ -140,4 +142,6 @@ services:
 
 volumes:
   db-data:
+    # Explicit, so renaming the compose project never orphans the database.
+    name: inv-db-data
     driver: local

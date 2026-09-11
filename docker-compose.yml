@@ -7,7 +7,9 @@
 #
 # The `version:` key is deliberately absent — Compose v2 ignores it and warns.
 
-name: stockpile
+# Short project name: containers come out as inv-api-1, inv-db-1, inv-web-1
+# rather than stockpile-*. Purely cosmetic, but it is what `docker ps` shows.
+name: inv
 
 services:
   # ---------------------------------------------------------------------
@@ -135,4 +137,10 @@ volumes:
   db-data:
     # Named, so `docker compose down` keeps the data and only `down -v`
     # destroys it. An anonymous volume would be discarded on any recreate.
+    #
+    # `name:` is set explicitly rather than left to Compose, which would
+    # otherwise prefix it with the project name — so renaming the project
+    # would silently point the database at a brand new empty volume and look
+    # like total data loss.
+    name: inv-db-data
     driver: local
