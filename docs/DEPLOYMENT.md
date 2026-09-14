@@ -19,8 +19,9 @@ flowchart TB
     end
 
     subgraph host["Deployment host"]
+        N["host nginx :80 · :443<br/>TLS · name-based vhosts"]
         subgraph stack["docker compose"]
-            E["web<br/>nginx :8080"]
+            E["web<br/>nginx 127.0.0.1:8080"]
             F["api<br/>Dart :8080"]
             G[("db<br/>PostgreSQL 16")]
             H["migrate<br/>runs once, exits"]
@@ -28,7 +29,10 @@ flowchart TB
         V[("db-data<br/>named volume")]
     end
 
-    U["Browser"] -->|"https"| E
+    U["Browser"] -->|"https://store.chedraolympas.com"| N
+    X["By IP / other Host"] -->|"falls through"| N
+    N -->|"proxy_pass"| E
+    N -->|"no server_name match"| O["neighbouring site<br/>assetmanagement.oasisproducts.ng"]
     E -->|"static files"| U
     E -->|"/api/* proxied"| F
     F --> G
@@ -42,6 +46,9 @@ flowchart TB
 
     style G fill:#2a78d6,color:#fff
     style D fill:#0b7c79,color:#fff
+    style N fill:#5a3d8a,color:#fff
+    style X fill:#8a2f2f,color:#fff
+    style O fill:#4a4a4a,color:#fff
 ```
 
 **Why the client is served by the proxy.** The Flutter web bundle is built
@@ -102,13 +109,16 @@ docker compose down -v                  # stop and destroy the database
 
 - Docker Engine with the Compose plugin.
 - **rsync** — the deploy syncs the compose file and the deploy script with it.
-  `sudo apt-get install -y rsync`. The workflow checks for it and says so
+  `sudo dnf install -y rsync` on this host (RHEL/Rocky), `apt-get` on
+  Debian/Ubuntu. The workflow checks for it and says so
   rather than failing on rsync's exit 127.
 - A directory to deploy into, owned by the deploy user.
 - SSH on port 22, or `DEPLOY_PORT` set to whatever it listens on.
-- TLS terminated in front of the stack — a load balancer, or a host nginx with
-  a certificate, proxying to `127.0.0.1:8080`. The `web` container speaks
-  plain HTTP and is not meant to face the internet directly.
+- **A host nginx with a certificate**, proxying to `127.0.0.1:8080`. This is
+  required, not optional: the `web` container publishes on loopback only, so
+  without something in front the app is not reachable at all. It speaks plain
+  HTTP and is not meant to face the internet directly. See
+  [Putting the host nginx in front](#putting-the-host-nginx-in-front).
 
 ### Secrets and variables
 
@@ -173,6 +183,167 @@ The deploy job declares a GitHub environment, so production can require a
 review before the job starts: Settings → Environments → `production` →
 *Required reviewers*. Nothing is published or deployed until it is approved.
 
+## First-time host setup
+
+Two things are done once, by hand, on the host. Neither belongs in the deploy
+workflow: the certificate is tied to the machine and outlives any release, and
+the first administrator is an account, not an artefact.
+
+### Putting the host nginx in front
+
+The site config lives in `deploy/nginx/store.chedraolympas.com.conf` and is
+installed as a single self-contained file:
+
+```
+/etc/nginx/conf.d/store.chedraolympas.com.conf
+```
+
+One domain, one file, named after it. Nothing else in `conf.d` is read,
+edited or moved — which is what keeps the neighbouring site safe. RHEL's
+stock `nginx.conf` already carries `include /etc/nginx/conf.d/*.conf;` inside
+its `http` block; the setup script checks for that line before writing, since
+a `conf.d` that nginx does not include would leave the file inert with no
+error to show for it.
+
+It is the *host's* nginx, in front of the stack — distinct from the nginx
+inside the `web` container, which serves the Flutter bundle and proxies
+`/api`.
+
+It terminates TLS for the domain. It does **not** claim `default_server`, and
+that is deliberate: this host is shared. `assetmanagement.oasisproducts.ng`
+already runs here and already owns `default_server` on both `:80` and `:443`.
+nginx permits exactly one per address:port, so a second would fail `nginx -t`
+with *a duplicate default server*, and a restart on that config would refuse
+to start — taking the other site down, not just ours.
+
+Nothing is lost by leaving it alone. A request to `http://102.223.37.105` does
+not match `server_name store.chedraolympas.com`, so it falls through to the
+existing default server and is answered by that other application. It never
+reaches this app, which is what "reachable only by the domain name" asks for.
+
+The lock that actually does work for this app is the container binding to
+`127.0.0.1:8080` — that closes the one path, `http://102.223.37.105:8080`,
+which bypassed nginx entirely.
+
+Certificates come first, and there is a circle to break: the real config
+refuses to start without `/etc/letsencrypt/live/…/fullchain.pem`, but certbot
+needs a running nginx to answer the ACME challenge. `bootstrap.conf` exists
+for exactly that minute — it needs no certificate.
+
+Both configs are synced to the host by the deploy, into `$DEPLOY_PATH/nginx/`,
+so the copy you install is the one the commit was tested with. Run these on
+the host:
+
+The host is RHEL/Rocky 9 (nginx 1.20.1), so `dnf`, and there is no
+`sites-enabled`. Run these on the host:
+
+```bash
+cd "$DEPLOY_PATH"
+sudo nginx -t                      # the other site must be healthy first
+sudo dnf install -y epel-release || true
+sudo dnf install -y nginx certbot
+sudo mkdir -p /var/www/certbot && sudo chmod 755 /var/www /var/www/certbot
+
+# 1. Bootstrap: HTTP only, enough for certbot to prove the domain.
+sudo cp nginx/bootstrap.conf /etc/nginx/conf.d/store.chedraolympas.com.conf
+sudo nginx -t && sudo systemctl reload nginx
+
+# 2. Certificate. The host already holds a wildcard for *.chedraolympas.com,
+#    which covers this name — nginx-setup.sh finds it and uses it. certbot
+#    only runs when nothing on the host covers the domain.
+sudo ls /etc/letsencrypt/live/          # what is already here
+# only if nothing covers it:
+# sudo certbot certonly --webroot -w /var/www/certbot \
+#   -d store.chedraolympas.com --agree-tos -m you@example.com --no-eff-email
+
+# 3. Swap in the real config.
+sudo cp nginx/store.chedraolympas.com.conf \
+  /etc/nginx/conf.d/store.chedraolympas.com.conf
+
+# 4. SELinux: without this nginx is denied the connection to 127.0.0.1:8080
+#    and every request is a 502 that looks like the app is down.
+sudo setsebool -P httpd_can_network_connect 1
+
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Every step is gated behind `nginx -t`, so a bad config is never reloaded and
+the neighbouring site is never at risk.
+
+**A missing certificate path fails loudly in the wrong place.** nginx cannot
+load a certificate that is not there, so `nginx -t` fails; `systemctl reload`
+then changes nothing and the *previous* config keeps serving. The domain falls
+through to the neighbouring vhost, which answers with its own certificate, and
+the browser reports `ERR_CERT_COMMON_NAME_INVALID`. It looks like a TLS
+problem. It is a file path. Check `nginx -t` before believing anything the
+browser says.
+
+Removing the distro's default vhost in step 1 matters: it is itself a
+`default_server` on port 80, and nginx refuses to start with two of them.
+
+Renewal is certbot's systemd timer, already installed by the package. It
+renews through the `/.well-known/acme-challenge/` location, which the real
+config keeps open on port 80 for that reason. Reload nginx after a renewal —
+`sudo systemctl edit certbot.service` and add a `--deploy-hook`, or leave the
+weekly reload to the package's own hook if your distribution ships one. Check
+it works before the certificate actually matters:
+
+```bash
+sudo certbot renew --dry-run
+```
+
+Then confirm both halves — the name serves, the IP does not:
+
+```bash
+# Our domain serves the app.
+curl -sS -o /dev/null -w '%{http_code}\n' https://store.chedraolympas.com/healthz  # 200
+# The bypass is closed (after the deploy that binds to loopback).
+curl -sS -m 5 http://102.223.37.105:8080/                                          # refused
+# The IP still belongs to the neighbouring site, as it did before.
+curl -sSI -m 5 http://102.223.37.105/ | grep -i location   # assetmanagement.oasisproducts.ng
+```
+
+**Sequencing.** The loopback binding arrives with the deploy that carries this
+compose file. Install nginx *first* and the change is invisible; deploy first
+and the site is unreachable by IP with nothing yet listening on 443. If that
+happens the recovery is just to finish the nginx steps — no rollback needed.
+
+### Creating the first administrator
+
+There is no seeded account and no default password. The first administrator is
+created on the host, against the running stack:
+
+```bash
+cd "$DEPLOY_PATH"
+docker compose -f docker-compose.prod.yml run --rm \
+  --entrypoint /app/bin/create_admin api \
+  --email you@example.com --name "Your Name"
+```
+
+The account is created *pending, with no password*. The command prints a
+single-use invitation link and — because production has SMTP configured —
+emails the same link to the address. Open it, choose a password there. No
+password is typed on a command line or left in a shell history.
+
+The link is good for 72 hours — the command prints the exact figure. The
+prod compose file does not pass `INVITATION_TTL_HOURS` through, so setting it
+in `.env` alone has no effect; change the compose file if you want a different
+window.
+
+It is a bootstrap, not a general user-creation tool: it refuses to run once
+any administrator exists, pending or active, and tells you to invite further
+users from the app instead. Two cases need `--force`:
+
+```bash
+# The invitation expired before it was claimed, or went to the wrong address.
+docker compose -f docker-compose.prod.yml run --rm \
+  --entrypoint /app/bin/create_admin api \
+  --email you@example.com --name "Your Name" --force
+```
+
+`--force` creates an additional administrator, so prefer inviting from the app
+whenever you can still sign in. It is the way back when you cannot.
+
 ## Rolling back
 
 Images are tagged with the commit SHA, so a rollback is a redeploy of a known
@@ -231,9 +402,20 @@ pushes every other column off the screen:
 
 | | |
 |---|---|
-| images | `ghcr.io/<owner>/inv/api:<sha>`, `…/inv/web:<sha>` |
+| images, in the registry | `ghcr.io/<owner>/inv/api:<sha>`, `…/inv/web:<sha>` |
+| images, on the host | `inv/api:<sha>`, `inv/web:<sha>` |
 | containers | `inv-api-1`, `inv-db-1`, `inv-web-1` |
 | volume | `inv-db-data` |
+
+The host name is short on purpose. `deploy.sh` pulls the registry copy,
+`docker tag`s it to `inv/<service>:<sha>` and drops the registry reference, so
+`docker ps` reads `inv/api:36b08a5a` rather than sixty characters of path.
+Both names are the same image — tagging costs nothing and copies nothing.
+
+That is also why the compose file carries `pull_policy: never` on `api`, `web`
+and `migrate`: `inv/api` exists only on this host, and without it Compose
+would try Docker Hub and fail. Only `db`, a genuine public image, is pulled by
+Compose in the ordinary way.
 
 The volume's name is set **explicitly** rather than left to Compose, which
 would prefix it with the project name. Without that, renaming the project

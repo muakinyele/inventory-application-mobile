@@ -367,6 +367,12 @@ jobs:
           rm -rf "$payload" && mkdir -p "$payload"
           cp docker-compose.prod.yml "$payload/"
           cp scripts/deploy.sh "$payload/"
+          # The host nginx configs ride along so the copy on the host is
+          # always the one this commit was tested with. Nothing installs them
+          # — that is a one-time sudo step — but having them present means the
+          # operator copies a current file rather than pasting a stale one.
+          mkdir -p "$payload/nginx"
+          cp deploy/nginx/*.conf "$payload/nginx/"
           # Set here rather than over ssh afterwards: rsync -a preserves the
           # mode, so the file arrives executable.
           chmod 755 "$payload/deploy.sh"
