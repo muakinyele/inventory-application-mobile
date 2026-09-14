@@ -224,6 +224,34 @@ logging:
 API additionally caps at three consecutive failures so a genuinely broken
 release stops thrashing and stays visible in `docker compose ps`.
 
+## Names
+
+Deliberately short, because `docker ps` shows them and a long repository path
+pushes every other column off the screen:
+
+| | |
+|---|---|
+| images | `ghcr.io/<owner>/inv/api:<sha>`, `…/inv/web:<sha>` |
+| containers | `inv-api-1`, `inv-db-1`, `inv-web-1` |
+| volume | `inv-db-data` |
+
+The volume's name is set **explicitly** rather than left to Compose, which
+would prefix it with the project name. Without that, renaming the project
+would silently point the database at a brand new empty volume — indis­tinguish­able
+from total data loss.
+
+The project was previously called `stockpile`. Compose keys containers, the
+network and `docker compose down` on that name, so a host that ran the old one
+keeps those containers alive and **holding the published port**, and the new
+stack then fails to bind. `deploy.sh` stops the old project automatically and
+is a no-op on a host that never ran it. The old volume is left alone — moving
+or deleting data is not the deploy's business:
+
+```bash
+docker volume ls | grep stockpile          # is there anything there?
+docker volume rm stockpile_db-data         # once you are sure
+```
+
 ## Database
 
 PostgreSQL 16 with a named volume, `db-data`. Named rather than anonymous, so
