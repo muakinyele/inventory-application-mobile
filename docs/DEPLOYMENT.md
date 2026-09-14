@@ -205,13 +205,17 @@ refuses to start without `/etc/letsencrypt/live/…/fullchain.pem`, but certbot
 needs a running nginx to answer the ACME challenge. `bootstrap.conf` exists
 for exactly that minute — it needs no certificate.
 
+Both configs are synced to the host by the deploy, into `$DEPLOY_PATH/nginx/`,
+so the copy you install is the one the commit was tested with. Run these on
+the host:
+
 ```bash
 sudo apt-get install -y nginx certbot
 sudo mkdir -p /var/www/certbot
+cd "$DEPLOY_PATH"
 
 # 1. Bootstrap: HTTP only, enough to prove the domain.
-sudo cp deploy/nginx/bootstrap.conf \
-  /etc/nginx/conf.d/store.chedraolympas.com.conf
+sudo cp nginx/bootstrap.conf /etc/nginx/conf.d/store.chedraolympas.com.conf
 sudo rm -f /etc/nginx/sites-enabled/default   # Debian/Ubuntu ship a default vhost
 sudo nginx -t && sudo systemctl reload nginx
 
@@ -220,7 +224,7 @@ sudo certbot certonly --webroot -w /var/www/certbot \
   -d store.chedraolympas.com --agree-tos -m you@example.com --no-eff-email
 
 # 3. Swap in the real config.
-sudo cp deploy/nginx/store.chedraolympas.com.conf \
+sudo cp nginx/store.chedraolympas.com.conf \
   /etc/nginx/conf.d/store.chedraolympas.com.conf
 sudo nginx -t && sudo systemctl reload nginx
 ```
