@@ -19,7 +19,7 @@ flowchart TB
     end
 
     subgraph host["Deployment host"]
-        N["host nginx :80 · :443<br/>TLS · domain-only"]
+        N["host nginx :80 · :443<br/>TLS · name-based vhosts"]
         subgraph stack["docker compose"]
             E["web<br/>nginx 127.0.0.1:8080"]
             F["api<br/>Dart :8080"]
@@ -30,8 +30,9 @@ flowchart TB
     end
 
     U["Browser"] -->|"https://store.chedraolympas.com"| N
-    X["Anything else<br/>(by IP, wrong host)"] -->|"444, connection closed"| N
+    X["By IP / other Host"] -->|"falls through"| N
     N -->|"proxy_pass"| E
+    N -->|"no server_name match"| O["neighbouring site<br/>assetmanagement.oasisproducts.ng"]
     E -->|"static files"| U
     E -->|"/api/* proxied"| F
     F --> G
@@ -47,6 +48,7 @@ flowchart TB
     style D fill:#0b7c79,color:#fff
     style N fill:#5a3d8a,color:#fff
     style X fill:#8a2f2f,color:#fff
+    style O fill:#4a4a4a,color:#fff
 ```
 
 **Why the client is served by the proxy.** The Flutter web bundle is built
@@ -107,7 +109,8 @@ docker compose down -v                  # stop and destroy the database
 
 - Docker Engine with the Compose plugin.
 - **rsync** — the deploy syncs the compose file and the deploy script with it.
-  `sudo apt-get install -y rsync`. The workflow checks for it and says so
+  `sudo dnf install -y rsync` on this host (RHEL/Rocky), `apt-get` on
+  Debian/Ubuntu. The workflow checks for it and says so
   rather than failing on rsync's exit 127.
 - A directory to deploy into, owned by the deploy user.
 - SSH on port 22, or `DEPLOY_PORT` set to whatever it listens on.
@@ -192,13 +195,21 @@ The site config lives in `deploy/nginx/store.chedraolympas.com.conf`. It is
 the *host's* nginx, in front of the stack — distinct from the nginx inside the
 `web` container, which serves the Flutter bundle and proxies `/api`.
 
-It does two jobs: terminates TLS, and makes the domain name the only way in.
-Any request whose `Host` is not `store.chedraolympas.com` — which is what a
-request to `http://102.223.37.105` is — hits a `default_server` that returns
-[444](https://nginx.org/en/docs/http/ngx_http_rewrite_module.html), closing
-the connection with no response at all. Nothing to follow, nothing to read;
-the IP looks dead. Combined with the container's loopback binding that is two
-locks rather than one.
+It terminates TLS for the domain. It does **not** claim `default_server`, and
+that is deliberate: this host is shared. `assetmanagement.oasisproducts.ng`
+already runs here and already owns `default_server` on both `:80` and `:443`.
+nginx permits exactly one per address:port, so a second would fail `nginx -t`
+with *a duplicate default server*, and a restart on that config would refuse
+to start — taking the other site down, not just ours.
+
+Nothing is lost by leaving it alone. A request to `http://102.223.37.105` does
+not match `server_name store.chedraolympas.com`, so it falls through to the
+existing default server and is answered by that other application. It never
+reaches this app, which is what "reachable only by the domain name" asks for.
+
+The lock that actually does work for this app is the container binding to
+`127.0.0.1:8080` — that closes the one path, `http://102.223.37.105:8080`,
+which bypassed nginx entirely.
 
 Certificates come first, and there is a circle to break: the real config
 refuses to start without `/etc/letsencrypt/live/…/fullchain.pem`, but certbot
@@ -209,25 +220,37 @@ Both configs are synced to the host by the deploy, into `$DEPLOY_PATH/nginx/`,
 so the copy you install is the one the commit was tested with. Run these on
 the host:
 
-```bash
-sudo apt-get install -y nginx certbot
-sudo mkdir -p /var/www/certbot
-cd "$DEPLOY_PATH"
+The host is RHEL/Rocky 9 (nginx 1.20.1), so `dnf`, and there is no
+`sites-enabled`. Run these on the host:
 
-# 1. Bootstrap: HTTP only, enough to prove the domain.
+```bash
+cd "$DEPLOY_PATH"
+sudo nginx -t                      # the other site must be healthy first
+sudo dnf install -y epel-release || true
+sudo dnf install -y nginx certbot
+sudo mkdir -p /var/www/certbot && sudo chmod 755 /var/www /var/www/certbot
+
+# 1. Bootstrap: HTTP only, enough for certbot to prove the domain.
 sudo cp nginx/bootstrap.conf /etc/nginx/conf.d/store.chedraolympas.com.conf
-sudo rm -f /etc/nginx/sites-enabled/default   # Debian/Ubuntu ship a default vhost
 sudo nginx -t && sudo systemctl reload nginx
 
-# 2. Get the certificate.
+# 2. Get the certificate — for this domain only; the other site is untouched.
 sudo certbot certonly --webroot -w /var/www/certbot \
   -d store.chedraolympas.com --agree-tos -m you@example.com --no-eff-email
 
 # 3. Swap in the real config.
 sudo cp nginx/store.chedraolympas.com.conf \
   /etc/nginx/conf.d/store.chedraolympas.com.conf
+
+# 4. SELinux: without this nginx is denied the connection to 127.0.0.1:8080
+#    and every request is a 502 that looks like the app is down.
+sudo setsebool -P httpd_can_network_connect 1
+
 sudo nginx -t && sudo systemctl reload nginx
 ```
+
+Every step is gated behind `nginx -t`, so a bad config is never reloaded and
+the neighbouring site is never at risk.
 
 Removing the distro's default vhost in step 1 matters: it is itself a
 `default_server` on port 80, and nginx refuses to start with two of them.
@@ -246,9 +269,12 @@ sudo certbot renew --dry-run
 Then confirm both halves — the name serves, the IP does not:
 
 ```bash
+# Our domain serves the app.
 curl -sS -o /dev/null -w '%{http_code}\n' https://store.chedraolympas.com/healthz  # 200
+# The bypass is closed (after the deploy that binds to loopback).
 curl -sS -m 5 http://102.223.37.105:8080/                                          # refused
-curl -sS -m 5 http://102.223.37.105/                                               # empty reply
+# The IP still belongs to the neighbouring site, as it did before.
+curl -sSI -m 5 http://102.223.37.105/ | grep -i location   # assetmanagement.oasisproducts.ng
 ```
 
 **Sequencing.** The loopback binding arrives with the deploy that carries this
