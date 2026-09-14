@@ -191,9 +191,23 @@ the first administrator is an account, not an artefact.
 
 ### Putting the host nginx in front
 
-The site config lives in `deploy/nginx/store.chedraolympas.com.conf`. It is
-the *host's* nginx, in front of the stack — distinct from the nginx inside the
-`web` container, which serves the Flutter bundle and proxies `/api`.
+The site config lives in `deploy/nginx/store.chedraolympas.com.conf` and is
+installed as a single self-contained file:
+
+```
+/etc/nginx/conf.d/store.chedraolympas.com.conf
+```
+
+One domain, one file, named after it. Nothing else in `conf.d` is read,
+edited or moved — which is what keeps the neighbouring site safe. RHEL's
+stock `nginx.conf` already carries `include /etc/nginx/conf.d/*.conf;` inside
+its `http` block; the setup script checks for that line before writing, since
+a `conf.d` that nginx does not include would leave the file inert with no
+error to show for it.
+
+It is the *host's* nginx, in front of the stack — distinct from the nginx
+inside the `web` container, which serves the Flutter bundle and proxies
+`/api`.
 
 It terminates TLS for the domain. It does **not** claim `default_server`, and
 that is deliberate: this host is shared. `assetmanagement.oasisproducts.ng`
