@@ -70,6 +70,27 @@ fi
 # Roll out
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Retire the previous project name, if one is still running
+# ---------------------------------------------------------------------------
+# The compose project was renamed from `stockpile` to `inv`, and Compose keys
+# everything on that name: containers, network, and the `docker compose down`
+# that would otherwise stop them. So a host that ran the old name keeps those
+# containers alive and *holding the published port*, and the new stack then
+# fails to bind with an error that says nothing about why.
+#
+# Stopping it here is idempotent — on a host that never ran the old name this
+# finds nothing and says so. The old volume is deliberately left alone: it is
+# not this script's business to delete data.
+LEGACY_PROJECT="stockpile"
+if docker ps -a --format '{{.Names}}' | grep -q "^${LEGACY_PROJECT}-"; then
+  log "Stopping the previous project ($LEGACY_PROJECT)"
+  docker compose -p "$LEGACY_PROJECT" -f "$COMPOSE_FILE" --env-file "$ENV_FILE" down --remove-orphans 2>/dev/null \
+    || docker rm -f $(docker ps -aq --filter "name=^${LEGACY_PROJECT}-") 2>/dev/null \
+    || true
+  echo "  Its volume (${LEGACY_PROJECT}_db-data) is left in place. Remove it by hand once you are satisfied nothing is needed from it."
+fi
+
 log "Pulling images"
 # Pulled before anything stops, so a bad tag or an unreachable registry fails
 # while the current release is still serving.
