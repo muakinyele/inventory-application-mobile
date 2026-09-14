@@ -248,9 +248,13 @@ sudo mkdir -p /var/www/certbot && sudo chmod 755 /var/www /var/www/certbot
 sudo cp nginx/bootstrap.conf /etc/nginx/conf.d/store.chedraolympas.com.conf
 sudo nginx -t && sudo systemctl reload nginx
 
-# 2. Get the certificate — for this domain only; the other site is untouched.
-sudo certbot certonly --webroot -w /var/www/certbot \
-  -d store.chedraolympas.com --agree-tos -m you@example.com --no-eff-email
+# 2. Certificate. The host already holds a wildcard for *.chedraolympas.com,
+#    which covers this name — nginx-setup.sh finds it and uses it. certbot
+#    only runs when nothing on the host covers the domain.
+sudo ls /etc/letsencrypt/live/          # what is already here
+# only if nothing covers it:
+# sudo certbot certonly --webroot -w /var/www/certbot \
+#   -d store.chedraolympas.com --agree-tos -m you@example.com --no-eff-email
 
 # 3. Swap in the real config.
 sudo cp nginx/store.chedraolympas.com.conf \
@@ -265,6 +269,14 @@ sudo nginx -t && sudo systemctl reload nginx
 
 Every step is gated behind `nginx -t`, so a bad config is never reloaded and
 the neighbouring site is never at risk.
+
+**A missing certificate path fails loudly in the wrong place.** nginx cannot
+load a certificate that is not there, so `nginx -t` fails; `systemctl reload`
+then changes nothing and the *previous* config keeps serving. The domain falls
+through to the neighbouring vhost, which answers with its own certificate, and
+the browser reports `ERR_CERT_COMMON_NAME_INVALID`. It looks like a TLS
+problem. It is a file path. Check `nginx -t` before believing anything the
+browser says.
 
 Removing the distro's default vhost in step 1 matters: it is itself a
 `default_server` on port 80, and nginx refuses to start with two of them.
