@@ -78,7 +78,13 @@ services:
     logging: *logging
 
   migrate:
-    image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:?set IMAGE_NAMESPACE}/api:${IMAGE_TAG:-latest}
+    # Short local tag, not the registry path. deploy.sh pulls from the
+    # registry and re-tags, so `docker ps` shows `inv/api:<sha>` rather than
+    # sixty characters of ghcr.io/owner/repo. `pull_policy: never` is what
+    # stops Compose trying to fetch `inv/api` from Docker Hub, where it does
+    # not exist.
+    image: inv/api:${IMAGE_TAG:-latest}
+    pull_policy: never
     entrypoint: ["/app/bin/migrate"]
     restart: "no"
     depends_on:
@@ -88,7 +94,8 @@ services:
     logging: *logging
 
   api:
-    image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:?set IMAGE_NAMESPACE}/api:${IMAGE_TAG:-latest}
+    image: inv/api:${IMAGE_TAG:-latest}
+    pull_policy: never
     restart: always
     depends_on:
       db:
@@ -116,7 +123,8 @@ services:
     logging: *logging
 
   web:
-    image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:?set IMAGE_NAMESPACE}/web:${IMAGE_TAG:-latest}
+    image: inv/web:${IMAGE_TAG:-latest}
+    pull_policy: never
     restart: always
     depends_on:
       api:
@@ -125,9 +133,12 @@ services:
       API_UPSTREAM: http://api:8080
       DNS_RESOLVER: 127.0.0.11
     ports:
-      # TLS is terminated in front of this — a load balancer, or a host nginx
-      # with a certificate. This publishes plain HTTP on the host only.
-      - "${WEB_PORT:-8080}:8080"
+      # Bound to loopback, deliberately. The host's nginx terminates TLS and
+      # proxies to it, so the only way in is through the domain name — a
+      # request to http://<ip>:8080 now finds nothing listening on the public
+      # interface. Publishing on 0.0.0.0 would leave the app reachable by IP,
+      # bypassing TLS and the name-based virtual host entirely.
+      - "127.0.0.1:${WEB_PORT:-8080}:8080"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
       interval: 15s

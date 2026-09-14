@@ -92,9 +92,34 @@ if docker ps -a --format '{{.Names}}' | grep -q "^${LEGACY_PROJECT}-"; then
 fi
 
 log "Pulling images"
+# The compose file names images as `inv/api:<tag>` so that `docker ps` shows
+# something readable rather than sixty characters of registry path. Nothing
+# can pull that name, though — it exists only on this host — so the registry
+# copy is fetched here and re-tagged.
+#
 # Pulled before anything stops, so a bad tag or an unreachable registry fails
 # while the current release is still serving.
-compose pull --quiet db api web || fail "Could not pull $requested_tag. Nothing was changed."
+registry="${IMAGE_REGISTRY:-ghcr.io}"
+namespace=$(grep -E '^IMAGE_NAMESPACE=' "$ENV_FILE" | cut -d= -f2- || true)
+[ -n "$namespace" ] || fail "IMAGE_NAMESPACE is not set in $ENV_FILE."
+
+for service in api web; do
+  remote="${registry}/${namespace}/${service}:${requested_tag}"
+  local_tag="inv/${service}:${requested_tag}"
+
+  docker pull --quiet "$remote" \
+    || fail "Could not pull $remote. Nothing was changed."
+  docker tag "$remote" "$local_tag"
+
+  # The registry reference is dropped once the short tag points at the same
+  # image, so `docker images` does not list both. The layers are shared, so
+  # this frees nothing and loses nothing — it is purely about what is shown.
+  docker rmi "$remote" >/dev/null 2>&1 || true
+done
+
+# postgres is a public image referenced by its real name, so compose fetches
+# it the ordinary way.
+compose pull --quiet db || fail "Could not pull the database image."
 
 log "Starting the database"
 compose up -d --wait db || fail "The database did not become healthy."

@@ -19,8 +19,9 @@ flowchart TB
     end
 
     subgraph host["Deployment host"]
+        N["host nginx :80 · :443<br/>TLS · domain-only"]
         subgraph stack["docker compose"]
-            E["web<br/>nginx :8080"]
+            E["web<br/>nginx 127.0.0.1:8080"]
             F["api<br/>Dart :8080"]
             G[("db<br/>PostgreSQL 16")]
             H["migrate<br/>runs once, exits"]
@@ -28,7 +29,9 @@ flowchart TB
         V[("db-data<br/>named volume")]
     end
 
-    U["Browser"] -->|"https"| E
+    U["Browser"] -->|"https://store.chedraolympas.com"| N
+    X["Anything else<br/>(by IP, wrong host)"] -->|"444, connection closed"| N
+    N -->|"proxy_pass"| E
     E -->|"static files"| U
     E -->|"/api/* proxied"| F
     F --> G
@@ -42,6 +45,8 @@ flowchart TB
 
     style G fill:#2a78d6,color:#fff
     style D fill:#0b7c79,color:#fff
+    style N fill:#5a3d8a,color:#fff
+    style X fill:#8a2f2f,color:#fff
 ```
 
 **Why the client is served by the proxy.** The Flutter web bundle is built
@@ -106,9 +111,11 @@ docker compose down -v                  # stop and destroy the database
   rather than failing on rsync's exit 127.
 - A directory to deploy into, owned by the deploy user.
 - SSH on port 22, or `DEPLOY_PORT` set to whatever it listens on.
-- TLS terminated in front of the stack — a load balancer, or a host nginx with
-  a certificate, proxying to `127.0.0.1:8080`. The `web` container speaks
-  plain HTTP and is not meant to face the internet directly.
+- **A host nginx with a certificate**, proxying to `127.0.0.1:8080`. This is
+  required, not optional: the `web` container publishes on loopback only, so
+  without something in front the app is not reachable at all. It speaks plain
+  HTTP and is not meant to face the internet directly. See
+  [Putting the host nginx in front](#putting-the-host-nginx-in-front).
 
 ### Secrets and variables
 
@@ -173,6 +180,114 @@ The deploy job declares a GitHub environment, so production can require a
 review before the job starts: Settings → Environments → `production` →
 *Required reviewers*. Nothing is published or deployed until it is approved.
 
+## First-time host setup
+
+Two things are done once, by hand, on the host. Neither belongs in the deploy
+workflow: the certificate is tied to the machine and outlives any release, and
+the first administrator is an account, not an artefact.
+
+### Putting the host nginx in front
+
+The site config lives in `deploy/nginx/store.chedraolympas.com.conf`. It is
+the *host's* nginx, in front of the stack — distinct from the nginx inside the
+`web` container, which serves the Flutter bundle and proxies `/api`.
+
+It does two jobs: terminates TLS, and makes the domain name the only way in.
+Any request whose `Host` is not `store.chedraolympas.com` — which is what a
+request to `http://102.223.37.105` is — hits a `default_server` that returns
+[444](https://nginx.org/en/docs/http/ngx_http_rewrite_module.html), closing
+the connection with no response at all. Nothing to follow, nothing to read;
+the IP looks dead. Combined with the container's loopback binding that is two
+locks rather than one.
+
+Certificates come first, and there is a circle to break: the real config
+refuses to start without `/etc/letsencrypt/live/…/fullchain.pem`, but certbot
+needs a running nginx to answer the ACME challenge. `bootstrap.conf` exists
+for exactly that minute — it needs no certificate.
+
+```bash
+sudo apt-get install -y nginx certbot
+sudo mkdir -p /var/www/certbot
+
+# 1. Bootstrap: HTTP only, enough to prove the domain.
+sudo cp deploy/nginx/bootstrap.conf \
+  /etc/nginx/conf.d/store.chedraolympas.com.conf
+sudo rm -f /etc/nginx/sites-enabled/default   # Debian/Ubuntu ship a default vhost
+sudo nginx -t && sudo systemctl reload nginx
+
+# 2. Get the certificate.
+sudo certbot certonly --webroot -w /var/www/certbot \
+  -d store.chedraolympas.com --agree-tos -m you@example.com --no-eff-email
+
+# 3. Swap in the real config.
+sudo cp deploy/nginx/store.chedraolympas.com.conf \
+  /etc/nginx/conf.d/store.chedraolympas.com.conf
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Removing the distro's default vhost in step 1 matters: it is itself a
+`default_server` on port 80, and nginx refuses to start with two of them.
+
+Renewal is certbot's systemd timer, already installed by the package. It
+renews through the `/.well-known/acme-challenge/` location, which the real
+config keeps open on port 80 for that reason. Reload nginx after a renewal —
+`sudo systemctl edit certbot.service` and add a `--deploy-hook`, or leave the
+weekly reload to the package's own hook if your distribution ships one. Check
+it works before the certificate actually matters:
+
+```bash
+sudo certbot renew --dry-run
+```
+
+Then confirm both halves — the name serves, the IP does not:
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' https://store.chedraolympas.com/healthz  # 200
+curl -sS -m 5 http://102.223.37.105:8080/                                          # refused
+curl -sS -m 5 http://102.223.37.105/                                               # empty reply
+```
+
+**Sequencing.** The loopback binding arrives with the deploy that carries this
+compose file. Install nginx *first* and the change is invisible; deploy first
+and the site is unreachable by IP with nothing yet listening on 443. If that
+happens the recovery is just to finish the nginx steps — no rollback needed.
+
+### Creating the first administrator
+
+There is no seeded account and no default password. The first administrator is
+created on the host, against the running stack:
+
+```bash
+cd "$DEPLOY_PATH"
+docker compose -f docker-compose.prod.yml run --rm \
+  --entrypoint /app/bin/create_admin api \
+  --email you@example.com --name "Your Name"
+```
+
+The account is created *pending, with no password*. The command prints a
+single-use invitation link and — because production has SMTP configured —
+emails the same link to the address. Open it, choose a password there. No
+password is typed on a command line or left in a shell history.
+
+The link is good for 72 hours — the command prints the exact figure. The
+prod compose file does not pass `INVITATION_TTL_HOURS` through, so setting it
+in `.env` alone has no effect; change the compose file if you want a different
+window.
+
+It is a bootstrap, not a general user-creation tool: it refuses to run once
+any administrator exists, pending or active, and tells you to invite further
+users from the app instead. Two cases need `--force`:
+
+```bash
+# The invitation expired before it was claimed, or went to the wrong address.
+docker compose -f docker-compose.prod.yml run --rm \
+  --entrypoint /app/bin/create_admin api \
+  --email you@example.com --name "Your Name" --force
+```
+
+`--force` creates an additional administrator, so prefer inviting from the app
+whenever you can still sign in. It is the way back when you cannot.
+
 ## Rolling back
 
 Images are tagged with the commit SHA, so a rollback is a redeploy of a known
@@ -231,9 +346,20 @@ pushes every other column off the screen:
 
 | | |
 |---|---|
-| images | `ghcr.io/<owner>/inv/api:<sha>`, `…/inv/web:<sha>` |
+| images, in the registry | `ghcr.io/<owner>/inv/api:<sha>`, `…/inv/web:<sha>` |
+| images, on the host | `inv/api:<sha>`, `inv/web:<sha>` |
 | containers | `inv-api-1`, `inv-db-1`, `inv-web-1` |
 | volume | `inv-db-data` |
+
+The host name is short on purpose. `deploy.sh` pulls the registry copy,
+`docker tag`s it to `inv/<service>:<sha>` and drops the registry reference, so
+`docker ps` reads `inv/api:36b08a5a` rather than sixty characters of path.
+Both names are the same image — tagging costs nothing and copies nothing.
+
+That is also why the compose file carries `pull_policy: never` on `api`, `web`
+and `migrate`: `inv/api` exists only on this host, and without it Compose
+would try Docker Hub and fail. Only `db`, a genuine public image, is pulled by
+Compose in the ordinary way.
 
 The volume's name is set **explicitly** rather than left to Compose, which
 would prefix it with the project name. Without that, renaming the project
