@@ -389,6 +389,13 @@ class InventoryService {
     return row?.quantity ?? 0;
   }
 
+  /// Every bin, for the initial load.
+  ///
+  /// One request rather than one per item: the client needs the whole picture
+  /// at startup, and asking per item would be a request for every row in the
+  /// catalogue before the first screen could paint.
+  Future<List<StockLevel>> allStock() => db.select(db.stockLevels).get();
+
   Future<List<StockLevel>> stockFor(String itemId) =>
       (db.select(db.stockLevels)..where((t) => t.itemId.equals(itemId))).get();
 

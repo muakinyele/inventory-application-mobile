@@ -135,6 +135,15 @@ Router inventoryRoutes({required InventoryService inventory}) {
     }, statusCode: 201);
   });
 
+  /// Every bin at once, for the initial load.
+  router.get('/stock', (Request request) async {
+    request.require('items.view');
+    final rows = await inventory.allStock();
+    return jsonResponse({
+      'stock': [for (final row in rows) stockJson(row)],
+    });
+  });
+
   // ------------------------------------------------------------------
   // History
   // ------------------------------------------------------------------

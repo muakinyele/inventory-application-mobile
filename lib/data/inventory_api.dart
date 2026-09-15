@@ -161,6 +161,23 @@ class InventoryApi {
     return _list(body['movements']).map(Movement.fromJson).toList();
   }
 
+  /// Every bin at once, keyed item id -> location -> quantity.
+  ///
+  /// One request rather than one per item: the initial load needs the whole
+  /// picture, and asking per item would be a request for every row in the
+  /// catalogue before the first screen could paint.
+  Future<Map<String, Map<String, int>>> allStock() async {
+    final body = await _auth.send('GET', '/inventory/stock');
+    final levels = <String, Map<String, int>>{};
+    for (final row in _list(body['stock'])) {
+      final itemId = row['itemId'] as String;
+      levels.putIfAbsent(itemId, () => <String, int>{})[row['location']
+          as String] = (row['quantity'] as num)
+          .toInt();
+    }
+    return levels;
+  }
+
   // ------------------------------------------------------------------
   // History
   // ------------------------------------------------------------------
@@ -385,6 +402,45 @@ class InventoryApi {
 
   String _status(String? status) =>
       status == null || status.isEmpty ? '' : '?status=$status';
+
+  // ------------------------------------------------------------------
+  // Categories and pickers
+  // ------------------------------------------------------------------
+
+  Future<List<({String name, int swatchIndex})>> categories() async {
+    final body = await _auth.send('GET', '/inventory/categories');
+    return [
+      for (final row in _list(body['categories']))
+        (
+          name: row['name'] as String? ?? '',
+          swatchIndex: (row['swatchIndex'] as num?)?.toInt() ?? 0,
+        ),
+    ];
+  }
+
+  Future<void> saveCategories(
+    List<({String name, int swatchIndex})> categories,
+  ) => _auth.send(
+    'PUT',
+    '/inventory/categories',
+    body: {
+      'categories': [
+        for (final c in categories)
+          {'name': c.name, 'swatchIndex': c.swatchIndex},
+      ],
+    },
+  );
+
+  /// One picker list — locations, units — in the order the workspace set.
+  Future<List<String>> lookupValues(String kind) async {
+    final body = await _auth.send('GET', '/inventory/lookups?kind=$kind');
+    return [
+      for (final row in _list(body['lookups'])) row['value'] as String? ?? '',
+    ]..removeWhere((value) => value.isEmpty);
+  }
+
+  Future<void> saveLookupValues(String kind, List<String> values) =>
+      _auth.send('PUT', '/inventory/lookups/$kind', body: {'values': values});
 
   // ------------------------------------------------------------------
   // Workspace settings
