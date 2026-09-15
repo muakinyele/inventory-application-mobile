@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import '../core/ids.dart';
 
 import '../data/csv_codec.dart';
+import '../data/inventory_api.dart';
 import '../data/inventory_repository.dart';
 import '../data/seed_data.dart';
 import '../models/app_settings.dart';
@@ -27,8 +28,12 @@ import '../models/transfer.dart';
 /// remember to record. Category edits deliberately append nothing — the ledger
 /// records stock, not metadata.
 class InventoryController extends ChangeNotifier {
-  InventoryController(this._repo, Snapshot initial)
-    : _items = List.of(initial.items),
+  // `this._api` is what prefer_initializing_formals asks for, but a named
+  // parameter cannot be private: there would be no name a caller could write.
+  InventoryController(this._repo, Snapshot initial, {InventoryApi? api})
+    // ignore: prefer_initializing_formals
+    : _api = api,
+      _items = List.of(initial.items),
       _movements = List.of(initial.movements),
       _suppliers = List.of(initial.suppliers),
       _customers = List.of(initial.customers),
@@ -44,6 +49,24 @@ class InventoryController extends ChangeNotifier {
   static const maxMovements = 500;
 
   final InventoryRepository _repo;
+
+  /// The shared inventory, when there is one.
+  ///
+  /// Null is the on-device path this app has always had, and is still what the
+  /// widget tests build. While both exist the difference is not cosmetic: with
+  /// an API the *server* owns the arithmetic, because it is the only party
+  /// that can see what other devices have already done.
+  final InventoryApi? _api;
+
+  bool get isShared => _api != null;
+
+  /// Set when the server refused a stock write because the count had moved
+  /// underneath us. Cleared by the next write that succeeds.
+  ///
+  /// Held rather than thrown because these writes are fire-and-forget from the
+  /// UI's point of view; the screen reads this and says so.
+  String? stockConflict;
+
   final IdGenerator _ids = IdGenerator();
 
   List<Item> _items;
@@ -256,14 +279,14 @@ class InventoryController extends ChangeNotifier {
 
   /// Applies a signed change. Stock can never go below zero — a bigger "out"
   /// than you hold empties the bin instead of going below it.
-  void adjustStock(String id, int delta, {String note = ''}) {
+  Future<void> adjustStock(String id, int delta, {String note = ''}) async {
     final existing = byId(id);
     if (existing == null || delta == 0) return;
 
     final after = max(0, existing.quantity + delta);
     if (after == existing.quantity) return;
 
-    _applyQuantity(
+    await _changeQuantity(
       existing,
       after,
       delta > 0 ? MovementKind.stockIn : MovementKind.stockOut,
@@ -272,14 +295,103 @@ class InventoryController extends ChangeNotifier {
   }
 
   /// Sets an absolute count, e.g. after a physical stocktake.
-  void setStock(String id, int quantity, {String note = 'Stocktake'}) {
+  Future<void> setStock(
+    String id,
+    int quantity, {
+    String note = 'Stocktake',
+  }) async {
     final existing = byId(id);
     if (existing == null) return;
 
     final after = max(0, quantity);
     if (after == existing.quantity) return;
 
-    _applyQuantity(existing, after, MovementKind.adjust, note);
+    await _changeQuantity(existing, after, MovementKind.adjust, note);
+  }
+
+  /// Routes a quantity change to whichever party owns the arithmetic.
+  ///
+  /// On device that is this class. Against a shared inventory it is the
+  /// server: it is the only one that can see what other devices have already
+  /// done, and it refuses a write made against a count that has since moved.
+  Future<void> _changeQuantity(
+    Item existing,
+    int after,
+    MovementKind kind,
+    String note,
+  ) async {
+    final api = _api;
+    if (api == null) {
+      _applyQuantity(existing, after, kind, note);
+      return;
+    }
+    await _changeQuantityOnServer(api, existing, after, kind, note);
+  }
+
+  /// Asks the server to move the count, and takes its answer as the truth.
+  ///
+  /// Deliberately not optimistic. The local path updates the screen first and
+  /// persists afterwards, which is right when this device is the only writer.
+  /// Here a second device may already have sold the last of it, so showing a
+  /// number before the server has agreed to it would be showing a number that
+  /// may be about to be withdrawn.
+  Future<void> _changeQuantityOnServer(
+    InventoryApi api,
+    Item existing,
+    int after,
+    MovementKind kind,
+    String note,
+  ) async {
+    try {
+      final result = await api.adjustStock(
+        itemId: existing.id,
+        delta: after - existing.quantity,
+        // What this device believed was current. The server compares it and
+        // refuses if it has moved, rather than overwriting silently.
+        expectedQuantity: existing.quantity,
+        kind: kind.name,
+        location: existing.location.isEmpty ? 'Unassigned' : existing.location,
+        note: note,
+      );
+
+      _items = _items
+          .map((i) => i.id == result.item.id ? result.item : i)
+          .toList();
+      _putLevels(
+        result.item.id,
+        _settled(
+          result.item.id,
+          result.item.quantity - existing.quantity,
+          result.item.location,
+        ),
+      );
+      _record(result.movement);
+      stockConflict = null;
+      lastWriteError = null;
+    } on StockConflictException catch (conflict) {
+      // The count moved under us. Pull the item back so the screen shows what
+      // is actually there rather than the figure the user was working from —
+      // re-applying their change blindly is the overwrite this prevents.
+      stockConflict = conflict.message;
+      await _refreshItem(api, existing.id);
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: stock write failed: $error');
+    }
+    notifyListeners();
+  }
+
+  /// Re-reads one item after a refusal, so the screen stops showing a count
+  /// the server has already disagreed with.
+  Future<void> _refreshItem(InventoryApi api, String id) async {
+    try {
+      final fresh = await api.item(id);
+      _items = _items.map((i) => i.id == id ? fresh.item : i).toList();
+      _putLevels(id, fresh.stock);
+    } catch (error) {
+      // The conflict message still stands and is the more useful of the two.
+      debugPrint('Stockpile: could not re-read $id: $error');
+    }
   }
 
   void _applyQuantity(
