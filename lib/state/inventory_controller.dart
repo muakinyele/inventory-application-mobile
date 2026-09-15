@@ -468,6 +468,88 @@ class InventoryController extends ChangeNotifier {
     }
   }
 
+  /// Issues the receipt on the server and adopts the result.
+  ///
+  /// Same division as the invoice path: this device says what was sold, the
+  /// server decides what that takes off the shelf and records the movements.
+  /// A counter sale is the one that moves stock; a receipt against a sales
+  /// order moves nothing, because that order's despatch already did.
+  Future<Receipt?> _issueReceiptOnServer(
+    InventoryApi api, {
+    String? salesOrderId,
+    String? customerId,
+    PaymentMethod method = PaymentMethod.cash,
+    required List<ReceiptLine> lines,
+    double discount = 0,
+    double? taxRate,
+    double amountPaid = 0,
+    String notes = '',
+    String cashier = '',
+    DateTime? issuedAt,
+  }) async {
+    final now = DateTime.now();
+    final order = salesOrderId == null ? null : salesOrderById(salesOrderId);
+    final customer = customerById(customerId ?? order?.customerId);
+    final movesStock = order == null;
+
+    final sold = <ReceiptLine>[];
+    for (final line in lines) {
+      if (line.quantity <= 0) continue;
+      final item = byId(line.itemId);
+      sold.add(
+        ReceiptLine(
+          id: line.id,
+          itemId: line.itemId,
+          itemName: line.itemName.isEmpty
+              ? (item?.name ?? line.itemName)
+              : line.itemName,
+          sku: line.sku.isEmpty ? (item?.sku ?? '') : line.sku,
+          unit: line.unit,
+          quantity: line.quantity,
+          unitPrice: line.unitPrice,
+          discount: line.discount,
+          quantityRefunded: line.quantityRefunded,
+          costOfGoods: line.quantity * (item?.unitCost ?? 0),
+        ),
+      );
+    }
+    if (sold.isEmpty) return null;
+
+    final draft = Receipt(
+      id: '',
+      reference: '',
+      salesOrderId: order?.id,
+      customerId: customer?.id ?? customerId,
+      customerName: customer?.name ?? order?.customerName ?? '',
+      method: method,
+      lines: sold,
+      discount: discount < 0 ? 0 : discount,
+      taxRate: (taxRate ?? _settings.taxRate).clamp(0, 1).toDouble(),
+      taxLabel: _settings.taxLabel,
+      amountPaid: amountPaid,
+      notes: notes,
+      cashier: cashier,
+      movesStock: movesStock,
+      issuedAt: issuedAt ?? now,
+      createdAt: now,
+      updatedAt: now,
+    );
+
+    try {
+      final saved = await api.saveReceipt(draft);
+      _receipts = [saved, ..._receipts.where((r) => r.id != saved.id)];
+      if (saved.movesStock) await _refreshStockView(api);
+      lastWriteError = null;
+      notifyListeners();
+      return saved;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not issue the receipt: $error');
+      notifyListeners();
+      return null;
+    }
+  }
+
   /// Re-reads what a document just changed.
   ///
   /// Items and movements only. Per-bin levels are read by the screens that
@@ -1239,7 +1321,7 @@ class InventoryController extends ChangeNotifier {
   /// Quantities on a counter sale are clamped to what is actually on the
   /// shelf — stock is never allowed to go negative — and a line left with
   /// nothing to sell is dropped. Returns null when no line survives that.
-  Receipt? issueReceipt({
+  Future<Receipt?> issueReceipt({
     String? salesOrderId,
     String? customerId,
     PaymentMethod method = PaymentMethod.cash,
@@ -1250,8 +1332,25 @@ class InventoryController extends ChangeNotifier {
     String notes = '',
     String cashier = '',
     DateTime? issuedAt,
-  }) {
+  }) async {
     if (lines.isEmpty) return null;
+
+    final api = _api;
+    if (api != null) {
+      return _issueReceiptOnServer(
+        api,
+        salesOrderId: salesOrderId,
+        customerId: customerId,
+        method: method,
+        lines: lines,
+        discount: discount,
+        taxRate: taxRate,
+        amountPaid: amountPaid,
+        notes: notes,
+        cashier: cashier,
+        issuedAt: issuedAt,
+      );
+    }
 
     final now = DateTime.now();
     final order = salesOrderId == null ? null : salesOrderById(salesOrderId);
@@ -1453,12 +1552,33 @@ class InventoryController extends ChangeNotifier {
   /// have been returned the document has a history worth keeping, and the rest
   /// should be refunded rather than erased. A void puts back exactly the stock
   /// the receipt took, and nothing when the receipt never moved any.
-  bool voidReceipt(String id, {String reason = ''}) {
+  Future<bool> voidReceipt(String id, {String reason = ''}) async {
     final receipt = receiptById(id);
     if (receipt == null ||
         receipt.status != ReceiptStatus.issued ||
         receipt.unitsRefunded > 0) {
       return false;
+    }
+
+    final api = _api;
+    if (api != null) {
+      try {
+        final voided = await api.voidReceipt(id, reason: reason);
+        _receipts = _receipts
+            .map((r) => r.id == voided.id ? voided : r)
+            .toList();
+        // The server put the stock back and wrote the movement for it, so
+        // the counts here are stale until re-read.
+        if (voided.movesStock) await _refreshStockView(api);
+        lastWriteError = null;
+        notifyListeners();
+        return true;
+      } catch (error) {
+        lastWriteError = error;
+        debugPrint('Stockpile: could not void the receipt: $error');
+        notifyListeners();
+        return false;
+      }
     }
 
     final now = DateTime.now();

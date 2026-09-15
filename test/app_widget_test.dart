@@ -466,7 +466,7 @@ void main() {
       final item = controller.createItem(
         draft(name: 'Bolt', quantity: 20, unitCost: 100),
       );
-      controller.issueReceipt(
+      await controller.issueReceipt(
         method: PaymentMethod.card,
         lines: [
           ReceiptLine(
@@ -504,7 +504,7 @@ void main() {
       final item = controller.createItem(
         draft(name: 'Bolt', quantity: 20, unitCost: 100),
       );
-      final receipt = controller.issueReceipt(
+      final receipt = (await controller.issueReceipt(
         lines: [
           ReceiptLine(
             id: 'rl1',
@@ -515,7 +515,7 @@ void main() {
           ),
         ],
         amountPaid: 2000,
-      )!;
+      ))!;
 
       await tester.pumpWidget(
         ChangeNotifierProvider.value(
@@ -542,7 +542,7 @@ void main() {
 
       final controller = await newController();
       final item = controller.createItem(draft(name: 'Bolt', quantity: 20));
-      final receipt = controller.issueReceipt(
+      final receipt = (await controller.issueReceipt(
         lines: [
           ReceiptLine(
             id: 'rl1',
@@ -552,7 +552,7 @@ void main() {
             unitPrice: 500,
           ),
         ],
-      )!;
+      ))!;
 
       await tester.pumpWidget(
         ChangeNotifierProvider.value(
@@ -627,7 +627,7 @@ void main() {
 
       final controller = await newController();
       final item = controller.createItem(draft(name: 'Bolt', quantity: 20));
-      final receipt = controller.issueReceipt(
+      final receipt = (await controller.issueReceipt(
         lines: [
           ReceiptLine(
             id: 'rl1',
@@ -637,8 +637,8 @@ void main() {
             unitPrice: 500,
           ),
         ],
-      )!;
-      controller.voidReceipt(receipt.id, reason: 'Rang up twice');
+      ))!;
+      await controller.voidReceipt(receipt.id, reason: 'Rang up twice');
 
       await tester.pumpWidget(
         ChangeNotifierProvider.value(
@@ -969,7 +969,7 @@ void main() {
       final item = controller.createItem(
         draft(name: 'Bolt', quantity: 50, unitCost: 100),
       );
-      controller.issueReceipt(
+      await controller.issueReceipt(
         lines: [
           ReceiptLine(
             id: 'a',

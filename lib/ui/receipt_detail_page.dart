@@ -552,7 +552,7 @@ class _ReceiptDetailPageState extends State<ReceiptDetailPage> {
     reason.dispose();
     if (confirmed != true) return;
 
-    final done = controller.voidReceipt(receipt.id, reason: text);
+    final done = await controller.voidReceipt(receipt.id, reason: text);
     if (mounted) {
       _notify(
         done ? '${receipt.reference} voided' : 'That receipt cannot be voided',

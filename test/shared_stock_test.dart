@@ -11,6 +11,7 @@ import 'package:stockpile/data/inventory_repository.dart';
 import 'package:stockpile/data/token_storage.dart';
 import 'package:stockpile/models/invoice.dart';
 import 'package:stockpile/models/item.dart';
+import 'package:stockpile/models/receipt.dart';
 import 'package:stockpile/state/inventory_controller.dart';
 
 /// Stands in for the server. These assert what the controller does with the
@@ -88,6 +89,44 @@ class _Server {
           'id': 'inv-server-1',
           'reference': 'INV-0042',
           'lines': lines,
+        },
+      });
+    }
+
+    if (route == 'POST /api/documents/receipts') {
+      final body = jsonDecode(request.body) as Map<String, dynamic>;
+      final lines = (body['lines'] as List).cast<Map<String, dynamic>>();
+      if (body['movesStock'] == true) {
+        for (final line in lines) {
+          quantity -= (line['quantity'] as num).toInt();
+        }
+      }
+      return _ok({
+        'receipt': {
+          ...body,
+          'id': 'rcp-server-1',
+          'reference': 'RCP-0007',
+          'status': 'issued',
+          'lines': lines,
+        },
+      });
+    }
+
+    if (route.startsWith('POST /api/documents/receipts/') &&
+        route.endsWith('/void')) {
+      // Voiding puts back what the receipt took.
+      quantity += 4;
+      return _ok({
+        'receipt': {
+          'id': 'rcp-server-1',
+          'reference': 'RCP-0007',
+          'status': 'voided',
+          'movesStock': true,
+          'voidReason': 'Wrong item',
+          'lines': <Object?>[],
+          'issuedAt': '2026-09-15T10:00:00.000Z',
+          'createdAt': '2026-09-15T10:00:00.000Z',
+          'updatedAt': '2026-09-15T10:05:00.000Z',
         },
       });
     }
@@ -354,6 +393,85 @@ void main() {
       expect(controller.lastWriteError, isNotNull);
       expect(controller.invoices, isEmpty);
       expect(controller.byId('i1')!.quantity, 10, reason: 'stock untouched');
+    });
+
+    test('a counter sale is issued by the server', () async {
+      final server = _Server();
+      final controller = await _controller(server);
+
+      final receipt = await controller.issueReceipt(
+        lines: const [
+          ReceiptLine(
+            id: 'l1',
+            itemId: 'i1',
+            itemName: 'Widget',
+            quantity: 4,
+            unitPrice: 3,
+          ),
+        ],
+      );
+
+      expect(receipt, isNotNull);
+      expect(receipt!.reference, 'RCP-0007');
+      expect(
+        server.bodies.last['reference'],
+        '',
+        reason: 'the server numbers it',
+      );
+      expect(
+        controller.byId('i1')!.quantity,
+        6,
+        reason: 're-read from the server',
+      );
+    });
+
+    test('voiding returns the stock the receipt took', () async {
+      final server = _Server();
+      final controller = await _controller(server);
+
+      final receipt = (await controller.issueReceipt(
+        lines: const [
+          ReceiptLine(
+            id: 'l1',
+            itemId: 'i1',
+            itemName: 'Widget',
+            quantity: 4,
+            unitPrice: 3,
+          ),
+        ],
+      ))!;
+      expect(controller.byId('i1')!.quantity, 6);
+
+      final voided = await controller.voidReceipt(
+        receipt.id,
+        reason: 'Wrong item',
+      );
+
+      expect(voided, isTrue);
+      expect(controller.receiptById(receipt.id)!.status, ReceiptStatus.voided);
+      expect(controller.byId('i1')!.quantity, 10, reason: 'put back');
+    });
+
+    test('a failed sale banks nothing', () async {
+      final server = _Server()..failNext = true;
+      final controller = await _controller(server);
+
+      final receipt = await controller.issueReceipt(
+        lines: const [
+          ReceiptLine(
+            id: 'l1',
+            itemId: 'i1',
+            itemName: 'Widget',
+            quantity: 2,
+            unitPrice: 3,
+          ),
+        ],
+      );
+
+      expect(receipt, isNull);
+      expect(controller.lastWriteError, isNotNull);
+      expect(controller.receipts, isEmpty);
+      expect(controller.byId('i1')!.quantity, 10);
     });
 
     test('nothing is shown before the server has agreed to it', () async {

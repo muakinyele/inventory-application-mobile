@@ -89,7 +89,7 @@ void main() {
       final item = c.createItem(
         draft(name: 'Bolt', quantity: 50, unitCost: 100, sku: 'B-1'),
       );
-      c.issueReceipt(
+      await c.issueReceipt(
         lines: [
           ReceiptLine(
             id: 'a',
@@ -123,7 +123,7 @@ void main() {
       final c = await newController();
       c.updateSettings(c.settings.copyWith(taxRate: 0.1));
       final item = c.createItem(draft(quantity: 50, unitCost: 100));
-      c.issueReceipt(
+      await c.issueReceipt(
         lines: [
           ReceiptLine(
             id: 'a',
@@ -213,7 +213,7 @@ void main() {
       );
       c.confirmSalesOrder(order.id);
       c.fulfilSalesOrder(order.id, {'l1': 10});
-      c.issueReceipt(
+      await c.issueReceipt(
         salesOrderId: order.id,
         lines: c.receiptLinesForSalesOrder(c.salesOrderById(order.id)!),
         amountPaid: 5000,
@@ -233,7 +233,7 @@ void main() {
       final item = c.createItem(draft(quantity: 200, unitCost: 100));
 
       // Counter.
-      c.issueReceipt(
+      await c.issueReceipt(
         lines: [
           ReceiptLine(
             id: 'a',
@@ -288,7 +288,7 @@ void main() {
     test('a refund nets down both units and revenue', () async {
       final c = await newController();
       final item = c.createItem(draft(quantity: 50, unitCost: 100));
-      final receipt = c.issueReceipt(
+      final receipt = (await c.issueReceipt(
         lines: [
           ReceiptLine(
             id: 'a',
@@ -298,7 +298,7 @@ void main() {
             unitPrice: 500,
           ),
         ],
-      )!;
+      ))!;
 
       c.refundReceipt(receipt.id, {'a': 4});
       final report = thisMonth(c);
@@ -312,7 +312,7 @@ void main() {
     test('voided and cancelled documents are excluded entirely', () async {
       final c = await newController();
       final item = c.createItem(draft(quantity: 50, unitCost: 100));
-      final receipt = c.issueReceipt(
+      final receipt = (await c.issueReceipt(
         lines: [
           ReceiptLine(
             id: 'a',
@@ -322,7 +322,7 @@ void main() {
             unitPrice: 500,
           ),
         ],
-      )!;
+      ))!;
       final invoice = (await c.issueInvoice(
         lines: [
           InvoiceLine(
@@ -334,7 +334,7 @@ void main() {
           ),
         ],
       ))!;
-      c.voidReceipt(receipt.id);
+      await c.voidReceipt(receipt.id);
       c.cancelInvoice(invoice.id);
 
       final report = thisMonth(c);
@@ -349,7 +349,7 @@ void main() {
         final c = await newController();
         final a = c.createItem(draft(name: 'A', quantity: 50, unitCost: 10));
         final b = c.createItem(draft(name: 'B', quantity: 50, unitCost: 10));
-        c.issueReceipt(
+        await c.issueReceipt(
           lines: [
             ReceiptLine(
               id: 'a',
@@ -384,7 +384,7 @@ void main() {
         draft(name: 'Thin', quantity: 100, unitCost: 90),
       );
       final fat = c.createItem(draft(name: 'Fat', quantity: 100, unitCost: 10));
-      c.issueReceipt(
+      await c.issueReceipt(
         lines: [
           ReceiptLine(
             id: 'a',
@@ -409,7 +409,7 @@ void main() {
     test('a sale outside the period is not in it', () async {
       final c = await newController();
       final item = c.createItem(draft(quantity: 50, unitCost: 100));
-      c.issueReceipt(
+      await c.issueReceipt(
         lines: [
           ReceiptLine(
             id: 'a',
@@ -432,7 +432,7 @@ void main() {
     test('a loss reports negative profit and a negative margin', () async {
       final c = await newController();
       final item = c.createItem(draft(quantity: 50, unitCost: 800));
-      c.issueReceipt(
+      await c.issueReceipt(
         lines: [
           ReceiptLine(
             id: 'a',
@@ -455,7 +455,7 @@ void main() {
       TestWidgetsFlutterBinding.ensureInitialized();
       final c = await newController();
       final item = c.createItem(draft(quantity: 50, unitCost: 100));
-      c.issueReceipt(
+      await c.issueReceipt(
         lines: [
           ReceiptLine(
             id: 'a',
@@ -475,7 +475,7 @@ void main() {
     test('the workbook holds real numbers, not formatted text', () async {
       final c = await newController();
       final item = c.createItem(draft(quantity: 50, unitCost: 100));
-      c.issueReceipt(
+      await c.issueReceipt(
         lines: [
           ReceiptLine(
             id: 'a',

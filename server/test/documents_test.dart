@@ -261,7 +261,7 @@ void main() {
         accessToken: s.accessToken,
         body: {'reason': 'Wrong item'},
       );
-      expect(voided.json['receipt']['status'], 'void');
+      expect(voided.json['receipt']['status'], 'voided');
       expect(await quantityOf(s, id), 10);
     });
   });

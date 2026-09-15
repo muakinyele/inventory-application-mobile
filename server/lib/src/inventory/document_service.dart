@@ -317,7 +317,11 @@ class DocumentService {
         db.receipts,
       )..where((t) => t.id.equals(id))).getSingleOrNull();
       if (current == null) throw ApiError.notFound;
-      if (current.status == 'void') return current;
+      // 'voided', not 'void': this string is read straight back into the
+      // client's ReceiptStatus enum, whose member is `voided`. A value it
+      // cannot match degrades to `issued` — a voided receipt showing as live,
+      // which is the worst way for this to be wrong.
+      if (current.status == 'voided') return current;
 
       if (current.movesStock) {
         await _reverseDocumentStock(
@@ -331,7 +335,7 @@ class DocumentService {
       final now = DateTime.now().toUtc();
       await (db.update(db.receipts)..where((t) => t.id.equals(id))).write(
         ReceiptsCompanion(
-          status: const Value('void'),
+          status: const Value('voided'),
           voidReason: Value(reason),
           voidedAt: Value(now),
           updatedAt: Value(now),

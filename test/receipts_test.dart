@@ -32,7 +32,7 @@ void main() {
         draft(name: 'Bolt', quantity: 20, unitCost: 100),
       );
 
-      final receipt = c.issueReceipt(
+      final receipt = await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', quantity: 3, price: 500)],
         amountPaid: 1500,
       );
@@ -49,14 +49,16 @@ void main() {
       final c = await newController();
       final item = c.createItem(draft(quantity: 50));
 
-      final first = c.issueReceipt(lines: [receiptLine(item.id, 'Bolt')])!;
-      final second = c.issueReceipt(
+      final first = (await c.issueReceipt(
+        lines: [receiptLine(item.id, 'Bolt')],
+      ))!;
+      final second = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', id: 'rl2')],
-      )!;
+      ))!;
       c.deleteReceipt(second.id);
-      final third = c.issueReceipt(
+      final third = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', id: 'rl3')],
-      )!;
+      ))!;
 
       expect(first.reference, 'RC-0001');
       expect(second.reference, 'RC-0002');
@@ -67,9 +69,9 @@ void main() {
       final c = await newController();
       final item = c.createItem(draft(quantity: 20));
 
-      final receipt = c.issueReceipt(
+      final receipt = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', quantity: 4)],
-      )!;
+      ))!;
 
       final movement = c.movements.first;
       expect(movement.kind, MovementKind.stockOut);
@@ -83,9 +85,9 @@ void main() {
       final c = await newController();
       final item = c.createItem(draft(quantity: 5));
 
-      final receipt = c.issueReceipt(
+      final receipt = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', quantity: 9, price: 100)],
-      )!;
+      ))!;
 
       expect(receipt.lines.single.quantity, 5);
       expect(receipt.total, 500);
@@ -96,12 +98,12 @@ void main() {
       final c = await newController();
       final item = c.createItem(draft(quantity: 5));
 
-      final receipt = c.issueReceipt(
+      final receipt = (await c.issueReceipt(
         lines: [
           receiptLine(item.id, 'Bolt', quantity: 3, id: 'a'),
           receiptLine(item.id, 'Bolt', quantity: 4, id: 'b'),
         ],
-      )!;
+      ))!;
 
       // The second line only gets what the first left behind.
       expect(receipt.lines.map((l) => l.quantity), [3, 2]);
@@ -112,7 +114,10 @@ void main() {
       final c = await newController();
       final item = c.createItem(draft(quantity: 0));
 
-      expect(c.issueReceipt(lines: [receiptLine(item.id, 'Bolt')]), isNull);
+      expect(
+        await c.issueReceipt(lines: [receiptLine(item.id, 'Bolt')]),
+        isNull,
+      );
       expect(c.receipts, isEmpty);
     });
 
@@ -120,9 +125,9 @@ void main() {
       final c = await newController();
       final item = c.createItem(draft(quantity: 10, unitCost: 120));
 
-      final receipt = c.issueReceipt(
+      final receipt = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', quantity: 3, price: 500)],
-      )!;
+      ))!;
       // A later cost change must not rewrite what the sale actually cost.
       c.updateItem(item.id, c.byId(item.id)!.copyWith(unitCost: 900));
 
@@ -149,11 +154,11 @@ void main() {
       expect(c.byId(item.id)!.quantity, 14);
 
       final lines = c.receiptLinesForSalesOrder(c.salesOrderById(order.id)!);
-      final receipt = c.issueReceipt(
+      final receipt = (await c.issueReceipt(
         salesOrderId: order.id,
         lines: lines,
         amountPaid: 3000,
-      )!;
+      ))!;
 
       // The despatch already took the stock; the receipt must not take it twice.
       expect(c.byId(item.id)!.quantity, 14);
@@ -187,12 +192,12 @@ void main() {
       c.updateSettings(c.settings.copyWith(taxRate: 0.1, taxLabel: 'VAT'));
       final item = c.createItem(draft(quantity: 20));
 
-      final receipt = c.issueReceipt(
+      final receipt = (await c.issueReceipt(
         lines: [
           receiptLine(item.id, 'Bolt', quantity: 4, price: 500, discount: 200),
         ],
         discount: 300,
-      )!;
+      ))!;
 
       expect(receipt.gross, 2000);
       expect(receipt.discountTotal, 500);
@@ -206,10 +211,10 @@ void main() {
       final c = await newController();
       final item = c.createItem(draft(quantity: 20));
 
-      final receipt = c.issueReceipt(
+      final receipt = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', quantity: 1, price: 100)],
         discount: 5000,
-      )!;
+      ))!;
 
       expect(receipt.subtotal, 0);
       expect(receipt.total, 0);
@@ -219,10 +224,10 @@ void main() {
       final c = await newController();
       final item = c.createItem(draft(quantity: 20));
 
-      final receipt = c.issueReceipt(
+      final receipt = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', quantity: 2, price: 500)],
         amountPaid: 1200,
-      )!;
+      ))!;
 
       expect(receipt.total, 1000);
       expect(receipt.change, 200);
@@ -234,10 +239,10 @@ void main() {
       final c = await newController();
       final item = c.createItem(draft(quantity: 20));
 
-      final receipt = c.issueReceipt(
+      final receipt = (await c.issueReceipt(
         method: PaymentMethod.credit,
         lines: [receiptLine(item.id, 'Bolt', quantity: 2, price: 500)],
-      )!;
+      ))!;
       expect(receipt.balanceDue, 1000);
       expect(c.unpaidReceipts.single.id, receipt.id);
 
@@ -258,9 +263,9 @@ void main() {
       c.updateSettings(c.settings.copyWith(taxRate: 0.075));
       final item = c.createItem(draft(quantity: 20));
 
-      final receipt = c.issueReceipt(
+      final receipt = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', quantity: 1, price: 1000)],
-      )!;
+      ))!;
       c.updateSettings(c.settings.copyWith(taxRate: 0.2));
 
       expect(c.receiptById(receipt.id)!.taxRate, 0.075);
@@ -274,10 +279,10 @@ void main() {
       () async {
         final c = await newController();
         final item = c.createItem(draft(quantity: 20, unitCost: 100));
-        final receipt = c.issueReceipt(
+        final receipt = (await c.issueReceipt(
           lines: [receiptLine(item.id, 'Bolt', quantity: 4, price: 500)],
           amountPaid: 2000,
-        )!;
+        ))!;
         expect(c.byId(item.id)!.quantity, 16);
 
         final moved = c.refundReceipt(receipt.id, {'rl1': 1});
@@ -297,9 +302,9 @@ void main() {
     test('refunding everything closes the receipt', () async {
       final c = await newController();
       final item = c.createItem(draft(quantity: 20));
-      final receipt = c.issueReceipt(
+      final receipt = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', quantity: 4, price: 500)],
-      )!;
+      ))!;
 
       c.refundReceipt(receipt.id, {'rl1': 4});
       final after = c.receiptById(receipt.id)!;
@@ -314,10 +319,10 @@ void main() {
       final c = await newController();
       c.updateSettings(c.settings.copyWith(taxRate: 0.1));
       final item = c.createItem(draft(quantity: 20));
-      final receipt = c.issueReceipt(
+      final receipt = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', quantity: 4, price: 500)],
         discount: 400,
-      )!;
+      ))!;
       // 2000 - 400 = 1600 + 10% = 1760.
       expect(receipt.total, closeTo(1760, 0.001));
 
@@ -332,9 +337,9 @@ void main() {
     test('a refund without restocking returns money but no stock', () async {
       final c = await newController();
       final item = c.createItem(draft(quantity: 20));
-      final receipt = c.issueReceipt(
+      final receipt = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', quantity: 4, price: 500)],
-      )!;
+      ))!;
       expect(c.byId(item.id)!.quantity, 16);
 
       c.refundReceipt(receipt.id, {'rl1': 2}, restock: false);
@@ -346,9 +351,9 @@ void main() {
     test('a refund never exceeds what is left un-refunded', () async {
       final c = await newController();
       final item = c.createItem(draft(quantity: 20));
-      final receipt = c.issueReceipt(
+      final receipt = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', quantity: 3, price: 500)],
-      )!;
+      ))!;
 
       c.refundReceipt(receipt.id, {'rl1': 99});
       expect(c.receiptById(receipt.id)!.unitsRefunded, 3);
@@ -363,15 +368,15 @@ void main() {
     test('a void puts back exactly what the receipt took', () async {
       final c = await newController();
       final item = c.createItem(draft(quantity: 20));
-      final receipt = c.issueReceipt(
+      final receipt = (await c.issueReceipt(
         lines: [
           receiptLine(item.id, 'Bolt', quantity: 3, id: 'a'),
           receiptLine(item.id, 'Bolt', quantity: 2, id: 'b'),
         ],
-      )!;
+      ))!;
       expect(c.byId(item.id)!.quantity, 15);
 
-      expect(c.voidReceipt(receipt.id, reason: 'Rang up twice'), isTrue);
+      expect(await c.voidReceipt(receipt.id, reason: 'Rang up twice'), isTrue);
 
       expect(c.byId(item.id)!.quantity, 20);
       final after = c.receiptById(receipt.id)!;
@@ -398,11 +403,11 @@ void main() {
       c.confirmSalesOrder(order.id);
       c.fulfilSalesOrder(order.id, {'l1': 5});
 
-      final receipt = c.issueReceipt(
+      final receipt = (await c.issueReceipt(
         salesOrderId: order.id,
         lines: c.receiptLinesForSalesOrder(c.salesOrderById(order.id)!),
-      )!;
-      c.voidReceipt(receipt.id);
+      ))!;
+      await c.voidReceipt(receipt.id);
 
       // The goods are still with the customer — the sale sent them.
       expect(c.byId(item.id)!.quantity, 15);
@@ -411,24 +416,26 @@ void main() {
     test('a receipt with refunds against it cannot be voided', () async {
       final c = await newController();
       final item = c.createItem(draft(quantity: 20));
-      final receipt = c.issueReceipt(
+      final receipt = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', quantity: 4)],
-      )!;
+      ))!;
       c.refundReceipt(receipt.id, {'rl1': 1});
 
-      expect(c.voidReceipt(receipt.id), isFalse);
+      expect(await c.voidReceipt(receipt.id), isFalse);
       expect(c.receiptById(receipt.id)!.status, ReceiptStatus.partRefunded);
     });
 
     test('only a voided receipt can be deleted', () async {
       final c = await newController();
       final item = c.createItem(draft(quantity: 20));
-      final receipt = c.issueReceipt(lines: [receiptLine(item.id, 'Bolt')])!;
+      final receipt = (await c.issueReceipt(
+        lines: [receiptLine(item.id, 'Bolt')],
+      ))!;
 
       c.deleteReceipt(receipt.id);
       expect(c.receipts, hasLength(1));
 
-      c.voidReceipt(receipt.id);
+      await c.voidReceipt(receipt.id);
       c.deleteReceipt(receipt.id);
       expect(c.receipts, isEmpty);
     });
@@ -439,19 +446,19 @@ void main() {
       final c = await newController();
       final item = c.createItem(draft(quantity: 50));
 
-      c.issueReceipt(
+      await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', quantity: 2, price: 500)],
       );
-      final refunded = c.issueReceipt(
+      final refunded = (await c.issueReceipt(
         method: PaymentMethod.card,
         lines: [receiptLine(item.id, 'Bolt', quantity: 4, price: 500, id: 'b')],
-      )!;
-      final voided = c.issueReceipt(
+      ))!;
+      final voided = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', quantity: 6, price: 500, id: 'c')],
-      )!;
+      ))!;
 
       c.refundReceipt(refunded.id, {'b': 2});
-      c.voidReceipt(voided.id);
+      await c.voidReceipt(voided.id);
 
       // 1000 cash + (2000 - 1000) card, and nothing from the void.
       expect(c.takings, 2000);
@@ -467,7 +474,7 @@ void main() {
       final repo = newRepository();
       final c = await controllerOver(repo);
       final item = c.createItem(draft(quantity: 20, unitCost: 100));
-      final receipt = c.issueReceipt(
+      final receipt = (await c.issueReceipt(
         method: PaymentMethod.transfer,
         lines: [
           receiptLine(item.id, 'Bolt', quantity: 4, price: 500, discount: 100),
@@ -476,7 +483,7 @@ void main() {
         amountPaid: 1700,
         notes: 'Collected in person',
         cashier: 'Ada',
-      )!;
+      ))!;
       c.refundReceipt(receipt.id, {'rl1': 1});
       await pumpWrites();
 
@@ -503,7 +510,7 @@ void main() {
       final repo = newRepository();
       final c = await controllerOver(repo);
       final item = c.createItem(draft(quantity: 20));
-      c.issueReceipt(lines: [receiptLine(item.id, 'Bolt')]);
+      await c.issueReceipt(lines: [receiptLine(item.id, 'Bolt')]);
       await pumpWrites();
 
       c.eraseAll();
@@ -527,11 +534,11 @@ void main() {
       final item = c.createItem(
         draft(name: 'Roofing bolt', quantity: 20, unitCost: 100, sku: 'RB-1'),
       );
-      final receipt = c.issueReceipt(
+      final receipt = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Roofing bolt', quantity: 3, price: 500)],
         amountPaid: 2000,
         notes: 'Cash sale',
-      )!;
+      ))!;
       return (receipt, c.settings, c);
     }
 
@@ -567,12 +574,12 @@ void main() {
       final item = c.createItem(
         draft(name: 'Galvanised roofing sheet, 3 metre, heavy gauge'),
       );
-      final receipt = c.issueReceipt(
+      final receipt = (await c.issueReceipt(
         lines: [receiptLine(item.id, item.name)],
         notes:
             'Delivered to the Ikeja site on the customer own transport, '
             'received by the site foreman.',
-      )!;
+      ))!;
 
       final text = ReceiptDocument(receipt, c.settings).toPlainText();
       for (final line in text.trimRight().split('\n')) {
@@ -592,9 +599,9 @@ void main() {
       () async {
         final c = await newController();
         final item = c.createItem(draft(name: 'A' * 95));
-        final receipt = c.issueReceipt(
+        final receipt = (await c.issueReceipt(
           lines: [receiptLine(item.id, 'A' * 95)],
-        )!;
+        ))!;
 
         final text = ReceiptDocument(receipt, c.settings).toPlainText();
         for (final line in text.trimRight().split('\n')) {
@@ -606,7 +613,7 @@ void main() {
 
     test('a voided receipt says so in plain text', () async {
       final (receipt, settings, c) = await sample();
-      c.voidReceipt(receipt.id, reason: 'Duplicate');
+      await c.voidReceipt(receipt.id, reason: 'Duplicate');
       final text = ReceiptDocument(
         c.receiptById(receipt.id)!,
         settings,
@@ -631,10 +638,10 @@ void main() {
     test('CSV escapes a value that would break the row', () async {
       final c = await newController();
       final item = c.createItem(draft(name: 'Bolt, 10mm', quantity: 20));
-      final receipt = c.issueReceipt(
+      final receipt = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt, 10mm')],
         notes: 'Said "keep the change"',
-      )!;
+      ))!;
 
       final csv = receiptsToCsv([receipt], c.settings);
       expect(csv, contains('"Bolt, 10mm"'));
@@ -701,14 +708,14 @@ void main() {
         c.receiptById(receipt.id)!,
         settings,
       ).toPdf();
-      c.voidReceipt(receipt.id);
+      await c.voidReceipt(receipt.id);
 
       // Voiding a part-refunded receipt is refused, so this exercises the
       // refunded branch twice rather than silently testing nothing.
       expect(String.fromCharCodes(refunded.take(5)), '%PDF-');
 
       final (second, _, other) = await sample();
-      other.voidReceipt(second.id, reason: 'Duplicate');
+      await other.voidReceipt(second.id, reason: 'Duplicate');
       final voided = await ReceiptDocument(
         other.receiptById(second.id)!,
         settings,
