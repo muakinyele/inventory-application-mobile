@@ -12,6 +12,7 @@ import '../auth/password_field.dart';
 import '../widgets/app_message.dart';
 import '../widgets/page_header.dart';
 import '../widgets/section_card.dart';
+import '../widgets/confirm_dialog.dart';
 
 /// Everything about how the account is secured (§17, §18).
 class SecurityPage extends StatefulWidget {
@@ -469,7 +470,7 @@ class _SessionsCardState extends State<_SessionsCard> {
   bool _signingOutOthers = false;
 
   Future<void> _revoke(AuthSession session) async {
-    final confirmed = await _confirm(
+    final confirmed = await confirmAction(
       context,
       title: 'Sign out this device?',
       body:
@@ -493,7 +494,7 @@ class _SessionsCardState extends State<_SessionsCard> {
   }
 
   Future<void> _signOutOthers() async {
-    final confirmed = await _confirm(
+    final confirmed = await confirmAction(
       context,
       title: 'Sign out every other device?',
       body:
@@ -741,33 +742,3 @@ class _ActivityCard extends StatelessWidget {
 }
 
 /// A confirmation step before anything destructive (§8, §24).
-Future<bool> _confirm(
-  BuildContext context, {
-  required String title,
-  required String body,
-  required String confirmLabel,
-  bool destructive = false,
-}) async {
-  final p = context.palette;
-  final result = await showDialog<bool>(
-    context: context,
-    builder: (dialogContext) => AlertDialog(
-      title: Text(title),
-      content: Text(body, style: const TextStyle(height: 1.5)),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(dialogContext).pop(false),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.of(dialogContext).pop(true),
-          style: destructive
-              ? FilledButton.styleFrom(backgroundColor: p.critical)
-              : null,
-          child: Text(confirmLabel),
-        ),
-      ],
-    ),
-  );
-  return result ?? false;
-}

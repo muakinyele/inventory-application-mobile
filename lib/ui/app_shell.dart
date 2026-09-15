@@ -9,6 +9,7 @@ import '../models/item.dart';
 import '../state/auth_controller.dart';
 import '../state/inventory_controller.dart';
 import 'widgets/app_sidebar.dart';
+import 'widgets/confirm_dialog.dart';
 
 /// Destinations promoted to the phone tab bar; the rest live behind "More".
 ///
@@ -115,6 +116,43 @@ class _AppShellState extends State<AppShell> {
     initialLocation: index == navigationShell.currentIndex,
   );
 
+  /// Ends the session and lets the router take it from there.
+  ///
+  /// No navigation here on purpose: `AuthController` is the router's
+  /// refreshListenable, so the redirect guard moves to /login as soon as the
+  /// status changes. Pushing a route as well would race that.
+  Future<void> _signOut() async {
+    final auth = context.read<AuthController?>();
+    if (auth == null) return;
+
+    final confirmed = await confirmAction(
+      context,
+      title: 'Sign out?',
+      body:
+          'You will need to sign in again on this device. Other devices stay '
+          'signed in.',
+      confirmLabel: 'Sign out',
+    );
+    if (!confirmed || !mounted) return;
+
+    try {
+      await auth.signOut();
+    } catch (error) {
+      // The local session is cleared regardless — AuthApi.logout() forgets the
+      // tokens even when the server cannot be reached — so this is only worth
+      // saying, not worth blocking on. Staying on screen while signed out
+      // would be the confusing outcome.
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Signed out on this device; the server was not reached.',
+          ),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = context.palette;
@@ -141,6 +179,7 @@ class _AppShellState extends State<AppShell> {
               alertCount: alertCount,
               can: can,
               showAccount: auth != null,
+              onSignOut: auth == null ? null : _signOut,
               collapsed: _collapsed,
               onToggleCollapsed: _toggleCollapsed,
               collapsedSections: _collapsedSections,
@@ -175,6 +214,7 @@ class _AppShellState extends State<AppShell> {
           alertCount: alertCount,
           can: can,
           showAccount: auth != null,
+          onSignOut: auth == null ? null : _signOut,
           collapsedSections: _collapsedSections,
           onToggleSection: _toggleSection,
         ),
@@ -187,6 +227,7 @@ class _AppShellState extends State<AppShell> {
         surface: p.surface,
         can: can,
         showAccount: auth != null,
+        onSignOut: auth == null ? null : _signOut,
       ),
     );
   }
@@ -200,6 +241,7 @@ class _PhoneTabs extends StatelessWidget {
     required this.surface,
     required this.can,
     required this.showAccount,
+    this.onSignOut,
   });
 
   final int currentIndex;
@@ -208,6 +250,10 @@ class _PhoneTabs extends StatelessWidget {
   final Color surface;
   final bool Function(String permission) can;
   final bool showAccount;
+
+  /// The sidebar is behind a drawer with no opener on a phone, so this sheet
+  /// is the only place the control can live on small screens.
+  final VoidCallback? onSignOut;
 
   @override
   Widget build(BuildContext context) {
@@ -327,6 +373,29 @@ class _PhoneTabs extends StatelessWidget {
                         onSelect(branch);
                       },
                     ),
+                  if (onSignOut != null) ...[
+                    const Divider(height: 1),
+                    ListTile(
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: Insets.xl,
+                      ),
+                      leading: Icon(signOutItem.icon, color: p.inkSecondary),
+                      title: Text(
+                        signOutItem.label,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w500,
+                          color: p.ink,
+                        ),
+                      ),
+                      onTap: () {
+                        // Closed first: the confirmation is a dialog, and
+                        // stacking it over a sheet that is about to be torn
+                        // down by the sign-out redirect leaves it orphaned.
+                        Navigator.of(sheetContext).pop();
+                        onSignOut!();
+                      },
+                    ),
+                  ],
                 ],
               ),
             ),

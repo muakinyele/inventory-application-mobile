@@ -12,6 +12,7 @@ import '../widgets/app_message.dart';
 import '../widgets/page_header.dart';
 import '../widgets/section_card.dart';
 import 'user_status_chip.dart';
+import '../widgets/confirm_dialog.dart';
 
 /// One user, and everything an administrator can do to their account (§8).
 ///
@@ -406,7 +407,7 @@ class _ActionsCard extends StatelessWidget {
                   'out their devices. You never see the password.',
               enabled: !busy,
               onTap: () async {
-                final ok = await _confirm(
+                final ok = await confirmAction(
                   context,
                   title: 'Send a password reset?',
                   body:
@@ -441,7 +442,7 @@ class _ActionsCard extends StatelessWidget {
               enabled: !busy,
               onTap: () async {
                 final disabling = user.status != 'disabled';
-                final ok = await _confirm(
+                final ok = await confirmAction(
                   context,
                   title: disabling
                       ? 'Disable this account?'
@@ -476,7 +477,7 @@ class _ActionsCard extends StatelessWidget {
               destructive: true,
               enabled: !busy,
               onTap: () async {
-                final ok = await _confirm(
+                final ok = await confirmAction(
                   context,
                   title: pending
                       ? 'Cancel this invitation?'
@@ -598,33 +599,3 @@ class _ActionRow extends StatelessWidget {
 }
 
 /// Confirmation before anything that signs someone out or removes them (§8).
-Future<bool> _confirm(
-  BuildContext context, {
-  required String title,
-  required String body,
-  required String confirmLabel,
-  bool destructive = false,
-}) async {
-  final p = context.palette;
-  final result = await showDialog<bool>(
-    context: context,
-    builder: (dialogContext) => AlertDialog(
-      title: Text(title),
-      content: Text(body, style: const TextStyle(height: 1.5)),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(dialogContext).pop(false),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.of(dialogContext).pop(true),
-          style: destructive
-              ? FilledButton.styleFrom(backgroundColor: p.critical)
-              : null,
-          child: Text(confirmLabel),
-        ),
-      ],
-    ),
-  );
-  return result ?? false;
-}
