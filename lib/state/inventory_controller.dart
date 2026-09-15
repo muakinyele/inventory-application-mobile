@@ -6,6 +6,7 @@ import '../core/ids.dart';
 
 import '../data/csv_codec.dart';
 import '../data/inventory_api.dart';
+import '../data/inventory_loader.dart';
 import '../data/inventory_repository.dart';
 import '../data/seed_data.dart';
 import '../models/app_settings.dart';
@@ -17,6 +18,18 @@ import '../models/purchase_order.dart';
 import '../models/receipt.dart';
 import '../models/sales_order.dart';
 import '../models/transfer.dart';
+
+/// Where a shared catalogue's load has got to.
+enum InventoryLoad {
+  /// Nothing asked for yet — no session, or signed out.
+  idle,
+  loading,
+  ready,
+
+  /// The server could not be reached or refused. [InventoryController.loadError]
+  /// says why.
+  failed,
+}
 
 /// Owns the in-memory view of the catalogue and is the only thing that mutates
 /// it. Reads stay synchronous so widgets can build without a future; every
@@ -66,6 +79,16 @@ class InventoryController extends ChangeNotifier {
   /// Held rather than thrown because these writes are fire-and-forget from the
   /// UI's point of view; the screen reads this and says so.
   String? stockConflict;
+
+  /// Where the shared catalogue has got to.
+  ///
+  /// Only meaningful when [isShared]. On device the data is there before the
+  /// first frame, so there is no state between "not started" and "ready" for a
+  /// screen to show.
+  InventoryLoad load = InventoryLoad.idle;
+
+  /// Why the load failed, for the screen that has to say so.
+  Object? loadError;
 
   final IdGenerator _ids = IdGenerator();
 
@@ -943,6 +966,67 @@ class InventoryController extends ChangeNotifier {
       notifyListeners();
       return payload;
     }
+  }
+
+  /// Fetches the shared catalogue, replacing whatever is held.
+  ///
+  /// Called once a session exists — the inventory is behind authentication, so
+  /// there is nothing to ask for before someone has signed in — and again
+  /// after signing in on a device that was signed out.
+  ///
+  /// A failure leaves the previous contents alone rather than blanking them.
+  /// Half a catalogue is still worth showing while the screen says the refresh
+  /// did not work; an empty one looks like a workspace with nothing in it,
+  /// which is the one thing this must never be mistaken for.
+  Future<void> reload() async {
+    final api = _api;
+    if (api == null) return;
+
+    load = InventoryLoad.loading;
+    loadError = null;
+    notifyListeners();
+
+    try {
+      final snapshot = await loadSharedSnapshot(api);
+      _items = List.of(snapshot.items);
+      _movements = List.of(snapshot.movements);
+      _suppliers = List.of(snapshot.suppliers);
+      _customers = List.of(snapshot.customers);
+      _purchaseOrders = List.of(snapshot.purchaseOrders);
+      _salesOrders = List.of(snapshot.salesOrders);
+      _receipts = List.of(snapshot.receipts);
+      _invoices = List.of(snapshot.invoices);
+      _transfers = List.of(snapshot.transfers);
+      _levels = Map.of(snapshot.levels);
+      _settings = snapshot.settings;
+      load = InventoryLoad.ready;
+    } catch (error) {
+      loadError = error;
+      load = InventoryLoad.failed;
+      debugPrint('Stockpile: could not load the inventory: $error');
+    }
+    notifyListeners();
+  }
+
+  /// Empties the held catalogue when the session ends.
+  ///
+  /// Signing out on a shared device has to leave nothing of the workspace on
+  /// screen for whoever signs in next.
+  void forgetSharedData() {
+    if (_api == null) return;
+    _items = [];
+    _movements = [];
+    _suppliers = [];
+    _customers = [];
+    _purchaseOrders = [];
+    _salesOrders = [];
+    _receipts = [];
+    _invoices = [];
+    _transfers = [];
+    _levels = {};
+    load = InventoryLoad.idle;
+    loadError = null;
+    notifyListeners();
   }
 
   /// Re-reads what a document just changed.

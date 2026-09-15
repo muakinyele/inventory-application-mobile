@@ -1,7 +1,11 @@
 import 'dart:convert';
 
 import 'package:drift/native.dart';
+import 'package:flutter/material.dart' hide Durations;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:provider/provider.dart';
+import 'package:stockpile/core/theme.dart';
+import 'package:stockpile/ui/widgets/inventory_status_banner.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:stockpile/data/auth_api.dart';
@@ -378,6 +382,22 @@ Future<InventoryController> _controller(_Server server) async {
     settings: (await repo.load()).settings,
   );
   return InventoryController(repo, snapshot, api: InventoryApi(auth));
+}
+
+Future<void> _pumpBanner(
+  WidgetTester tester,
+  InventoryController controller,
+) async {
+  await tester.pumpWidget(
+    ChangeNotifierProvider<InventoryController>.value(
+      value: controller,
+      child: MaterialApp(
+        theme: buildTheme(Brightness.light),
+        home: const Scaffold(body: InventoryStatusBanner()),
+      ),
+    ),
+  );
+  await tester.pump();
 }
 
 void main() {
@@ -883,6 +903,73 @@ void main() {
         'sup-1',
       );
       expect(controller.suppliers.single.name, 'Acme');
+    });
+
+    testWidgets('a refused write is said out loud', (tester) async {
+      // Until now every refusal path worked and none of them was visible: a
+      // rejected change looked exactly like nothing happening, which is worse
+      // than an error, because the user has a number in their head.
+      final server = _Server()
+        ..conflictNext = true
+        ..quantity = 2;
+      final controller = await _controller(server);
+
+      await controller.adjustStock('i1', -5);
+      await _pumpBanner(tester, controller);
+
+      expect(find.textContaining('now reads 2'), findsOneWidget);
+    });
+
+    testWidgets('a failed load says so and offers a retry', (tester) async {
+      final server = _Server()..failNext = true;
+      final controller = await _controller(server);
+
+      await controller.reload();
+      expect(controller.load, InventoryLoad.failed);
+
+      await _pumpBanner(tester, controller);
+
+      expect(find.textContaining('could not be loaded'), findsOneWidget);
+      expect(find.text('Try again'), findsOneWidget);
+    });
+
+    testWidgets('a healthy load shows no banner', (tester) async {
+      final controller = await _controller(_Server());
+
+      await controller.reload();
+      await _pumpBanner(tester, controller);
+
+      expect(controller.load, InventoryLoad.ready);
+      expect(find.textContaining('could not'), findsNothing);
+      expect(find.text('Try again'), findsNothing);
+    });
+
+    test('a failed reload keeps what was already on screen', () async {
+      // Half a catalogue is still worth showing while the strip says the
+      // refresh did not work. Blanking it would look like a workspace with
+      // nothing in it.
+      final server = _Server();
+      final controller = await _controller(server);
+      expect(controller.items, isNotEmpty);
+
+      server.failNext = true;
+      await controller.reload();
+
+      expect(controller.load, InventoryLoad.failed);
+      expect(controller.items, isNotEmpty, reason: 'not blanked');
+    });
+
+    test('signing out leaves nothing of the workspace behind', () async {
+      // A shared terminal: whoever signs in next must not find the last
+      // person's catalogue on screen.
+      final controller = await _controller(_Server());
+      await controller.reload();
+      expect(controller.items, isNotEmpty);
+
+      controller.forgetSharedData();
+
+      expect(controller.items, isEmpty);
+      expect(controller.load, InventoryLoad.idle);
     });
 
     test('nothing is shown before the server has agreed to it', () async {
