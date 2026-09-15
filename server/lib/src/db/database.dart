@@ -2,6 +2,7 @@ import 'package:drift/drift.dart';
 import 'package:drift_postgres/drift_postgres.dart';
 import 'package:postgres/postgres.dart' as pg;
 
+import 'inventory_tables.dart';
 import 'tables.dart';
 
 part 'database.g.dart';
@@ -19,21 +20,136 @@ part 'database.g.dart';
     LoginAttempts,
     AuditLogs,
     NotificationPreferences,
+
+    // The inventory, moved here from each device's own SQLite so there is one
+    // of it rather than one per browser and phone.
+    Items,
+    Movements,
+    StockLevels,
+    Suppliers,
+    Customers,
+    PurchaseOrders,
+    PurchaseOrderLines,
+    SalesOrders,
+    SalesOrderLines,
+    Transfers,
+    TransferLines,
+    Invoices,
+    InvoiceLines,
+    Receipts,
+    ReceiptLines,
+    Categories,
+    Lookups,
+    Preferences,
   ],
 )
 class AuthDatabase extends _$AuthDatabase {
   AuthDatabase(super.e);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
     onCreate: (m) async {
       await m.createAll();
       await _createIndexes();
+      await _createInventoryIndexes();
+    },
+    // Production already runs at 1 with live accounts in it, so the inventory
+    // tables have to be added to a database that exists rather than appearing
+    // in a fresh createAll. Nothing from version 1 is touched.
+    onUpgrade: (m, from, to) async {
+      if (from < 2) {
+        for (final table in _inventoryTables) {
+          await m.createTable(table);
+        }
+        await _createInventoryIndexes();
+      }
     },
   );
+
+  List<TableInfo<Table, dynamic>> get _inventoryTables => [
+    items,
+    movements,
+    stockLevels,
+    suppliers,
+    customers,
+    purchaseOrders,
+    purchaseOrderLines,
+    salesOrders,
+    salesOrderLines,
+    transfers,
+    transferLines,
+    invoices,
+    invoiceLines,
+    receipts,
+    receiptLines,
+    categories,
+    lookups,
+    preferences,
+  ];
+
+  /// Indexes for the inventory side.
+  ///
+  /// Each one backs a query behind a screen the user waits on, rather than
+  /// being added on principle: item lookup, a document's lines, and an item's
+  /// history are the three shapes that matter.
+  Future<void> _createInventoryIndexes() async {
+    const statements = [
+      // The two codes a scanner produces. Not unique: the client has always
+      // tolerated blank and duplicated codes, and enforcing it here would
+      // reject imports that used to work.
+      'CREATE INDEX items_sku ON items (sku)',
+      'CREATE INDEX items_barcode ON items (barcode)',
+      'CREATE INDEX items_name ON items (name)',
+      'CREATE INDEX items_category ON items (category)',
+      'CREATE INDEX items_supplier ON items (supplier_id)',
+
+      // An item's history, newest first. Tie-broken on id because several
+      // movements are written in one transaction and share a timestamp.
+      'CREATE INDEX movements_item_time ON movements (item_id, at DESC, id)',
+      'CREATE INDEX movements_time ON movements (at DESC, id)',
+      'CREATE INDEX movements_document ON movements (document_id)',
+
+      'CREATE INDEX stock_levels_location ON stock_levels (location)',
+
+      // Document lines are always read by their parent, in position order.
+      'CREATE INDEX po_lines_order ON purchase_order_lines (order_id, position)',
+      'CREATE INDEX so_lines_order ON sales_order_lines (order_id, position)',
+      'CREATE INDEX transfer_lines_transfer ON transfer_lines '
+          '(transfer_id, position)',
+      'CREATE INDEX invoice_lines_invoice ON invoice_lines '
+          '(invoice_id, position)',
+      'CREATE INDEX receipt_lines_receipt ON receipt_lines '
+          '(receipt_id, position)',
+
+      // Document lists: filtered by status, newest first.
+      'CREATE INDEX purchase_orders_status ON purchase_orders '
+          '(status, created_at DESC)',
+      'CREATE INDEX sales_orders_status ON sales_orders '
+          '(status, created_at DESC)',
+      'CREATE INDEX invoices_status ON invoices (status, issued_at DESC)',
+      'CREATE INDEX receipts_status ON receipts (status, issued_at DESC)',
+
+      // A reference is what someone quotes down the phone, so it has to be
+      // unique per document type and fast to find.
+      'CREATE UNIQUE INDEX purchase_orders_reference ON purchase_orders '
+          '(reference)',
+      'CREATE UNIQUE INDEX sales_orders_reference ON sales_orders (reference)',
+      'CREATE UNIQUE INDEX invoices_reference ON invoices (reference)',
+      'CREATE UNIQUE INDEX receipts_reference ON receipts (reference)',
+      'CREATE UNIQUE INDEX transfers_reference ON transfers (reference)',
+
+      'CREATE INDEX invoices_customer ON invoices (customer_id)',
+      'CREATE INDEX receipts_invoice ON receipts (invoice_id)',
+      'CREATE INDEX categories_position ON categories (position)',
+      'CREATE INDEX lookups_kind ON lookups (kind, position)',
+    ];
+    for (final statement in statements) {
+      await customStatement(statement);
+    }
+  }
 
   /// Indexes are created here rather than declared on the tables because two
   /// of them are partial, which drift's table-level annotation cannot express.
