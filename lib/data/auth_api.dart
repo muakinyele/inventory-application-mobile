@@ -111,6 +111,19 @@ class AuthApi {
   // Transport
   // -------------------------------------------------------------------
 
+  /// An authenticated request against this session, for callers outside this
+  /// file.
+  ///
+  /// Exposed so the inventory client shares one token pipeline — proactive
+  /// refresh, the 401 retry, and revocation — rather than growing a second
+  /// copy that drifts out of step with this one. The path is relative to
+  /// [baseUrl], the same as every method here.
+  Future<Map<String, dynamic>> send(
+    String method,
+    String path, {
+    Object? body,
+  }) => _send(method, path, body: body);
+
   Future<Map<String, dynamic>> _send(
     String method,
     String path, {
