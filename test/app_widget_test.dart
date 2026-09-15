@@ -327,7 +327,7 @@ void main() {
 
       final controller = await newController(seeded: true);
       final item = controller.items.first;
-      final order = controller.createPurchaseOrder(
+      final order = await controller.createPurchaseOrder(
         lines: [
           PurchaseOrderLine(
             id: 'l1',
@@ -339,7 +339,7 @@ void main() {
         ],
       );
       controller.placePurchaseOrder(order.id);
-      controller.receivePurchaseOrder(order.id, {'l1': 4});
+      await controller.receivePurchaseOrder(order.id, {'l1': 4});
 
       await tester.pumpWidget(
         ChangeNotifierProvider.value(

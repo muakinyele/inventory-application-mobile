@@ -550,6 +550,104 @@ class InventoryController extends ChangeNotifier {
     }
   }
 
+  /// Books a delivery in on the server and adopts the result.
+  ///
+  /// Returns the units the server actually accepted, which is not always what
+  /// was asked for: it clamps each line to what is still outstanding, and this
+  /// device may be working from an order another user has already received
+  /// against. Counting the request rather than the answer would overstate a
+  /// delivery in exactly that case.
+  Future<int> _receiveOnServer(
+    InventoryApi api,
+    PurchaseOrder order,
+    Map<String, int> received,
+  ) async {
+    final before = {
+      for (final line in order.lines) line.id: line.quantityReceived,
+    };
+
+    try {
+      // One location for the whole delivery, which is how goods actually
+      // arrive — and what the endpoint takes. The on-device path books each
+      // line into its own item's location instead; that difference is real,
+      // and the first configured location is the closest thing to a receiving
+      // bay this app knows about.
+      final saved = await api.receiveGoods(
+        order.id,
+        received,
+        location: _settings.locations.isEmpty
+            ? 'Unassigned'
+            : _settings.locations.first,
+      );
+
+      _purchaseOrders = _purchaseOrders
+          .map((o) => o.id == saved.id ? saved : o)
+          .toList();
+      await _refreshStockView(api);
+      lastWriteError = null;
+      notifyListeners();
+
+      var accepted = 0;
+      for (final line in saved.lines) {
+        accepted += line.quantityReceived - (before[line.id] ?? 0);
+      }
+      return accepted;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not book the delivery: $error');
+      notifyListeners();
+      return 0;
+    }
+  }
+
+  /// Raises a purchase order on the server.
+  ///
+  /// Ordering moves no stock, so there is nothing to re-read afterwards —
+  /// only the delivery does, through [receivePurchaseOrder].
+  Future<PurchaseOrder> _createPurchaseOrderOnServer(
+    InventoryApi api, {
+    String? supplierId,
+    DateTime? expectedAt,
+    String notes = '',
+    List<PurchaseOrderLine> lines = const [],
+  }) async {
+    final now = DateTime.now();
+    final supplier = supplierById(supplierId);
+
+    // Blank id and reference, as with invoices: the server mints both, so two
+    // devices cannot raise the same order number.
+    final draft = PurchaseOrder(
+      id: '',
+      reference: '',
+      supplierId: supplierId,
+      supplierName: supplier?.name ?? '',
+      expectedAt: expectedAt ?? _expectedFrom(supplier, now),
+      notes: notes,
+      lines: lines,
+      createdAt: now,
+      updatedAt: now,
+    );
+
+    try {
+      final saved = await api.savePurchaseOrder(draft);
+      _purchaseOrders = [
+        saved,
+        ..._purchaseOrders.where((o) => o.id != saved.id),
+      ];
+      lastWriteError = null;
+      notifyListeners();
+      return saved;
+    } catch (error) {
+      // Returned rather than thrown, because the local path cannot fail and
+      // the caller has never had to handle one. The order is not in
+      // purchaseOrders, so nothing downstream treats it as real.
+      lastWriteError = error;
+      debugPrint('Stockpile: could not raise the purchase order: $error');
+      notifyListeners();
+      return draft;
+    }
+  }
+
   /// Re-reads what a document just changed.
   ///
   /// Items and movements only. Per-bin levels are read by the screens that
@@ -789,12 +887,23 @@ class InventoryController extends ChangeNotifier {
     return '$prefix-${next.toString().padLeft(4, '0')}';
   }
 
-  PurchaseOrder createPurchaseOrder({
+  Future<PurchaseOrder> createPurchaseOrder({
     String? supplierId,
     DateTime? expectedAt,
     String notes = '',
     List<PurchaseOrderLine> lines = const [],
-  }) {
+  }) async {
+    final api = _api;
+    if (api != null) {
+      return _createPurchaseOrderOnServer(
+        api,
+        supplierId: supplierId,
+        expectedAt: expectedAt,
+        notes: notes,
+        lines: lines,
+      );
+    }
+
     final now = DateTime.now();
     final supplier = supplierById(supplierId);
     final order = PurchaseOrder(
@@ -899,13 +1008,18 @@ class InventoryController extends ChangeNotifier {
   /// so cost follows what was actually paid rather than the last price typed.
   ///
   /// Returns the number of lines that moved.
-  int receivePurchaseOrder(
+  Future<int> receivePurchaseOrder(
     String id,
     Map<String, int> received, {
     String note = '',
-  }) {
+  }) async {
     final order = purchaseOrderById(id);
     if (order == null || !order.status.isOpen) return 0;
+
+    final api = _api;
+    if (api != null) {
+      return _receiveOnServer(api, order, received);
+    }
 
     final now = DateTime.now();
     final updatedLines = <PurchaseOrderLine>[];

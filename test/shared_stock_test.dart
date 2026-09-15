@@ -11,6 +11,7 @@ import 'package:stockpile/data/inventory_repository.dart';
 import 'package:stockpile/data/token_storage.dart';
 import 'package:stockpile/models/invoice.dart';
 import 'package:stockpile/models/item.dart';
+import 'package:stockpile/models/purchase_order.dart';
 import 'package:stockpile/models/receipt.dart';
 import 'package:stockpile/state/inventory_controller.dart';
 
@@ -125,6 +126,55 @@ class _Server {
           'voidReason': 'Wrong item',
           'lines': <Object?>[],
           'issuedAt': '2026-09-15T10:00:00.000Z',
+          'createdAt': '2026-09-15T10:00:00.000Z',
+          'updatedAt': '2026-09-15T10:05:00.000Z',
+        },
+      });
+    }
+
+    if (route == 'POST /api/documents/purchase-orders') {
+      final body = jsonDecode(request.body) as Map<String, dynamic>;
+      return _ok({
+        'purchaseOrder': {
+          ...body,
+          'id': 'po-server-1',
+          'reference': 'PO-0011',
+          // Placed, not a draft: only an ordered or partly-received order can
+          // be received against, which is what makes the next test reachable.
+          'status': 'ordered',
+          'lines': [
+            for (final line in (body['lines'] as List))
+              {...(line as Map<String, dynamic>), 'id': 'line-1'},
+          ],
+        },
+      });
+    }
+
+    if (route.startsWith('POST /api/documents/purchase-orders/') &&
+        route.endsWith('/receive')) {
+      final body = jsonDecode(request.body) as Map<String, dynamic>;
+      final received = (body['received'] as Map).cast<String, dynamic>();
+      // The server clamps to what is outstanding — here, 6 of a 10-line order
+      // even when more is asked for.
+      final asked = (received['line-1'] as num).toInt();
+      final accepted = asked > 6 ? 6 : asked;
+      quantity += accepted;
+      return _ok({
+        'purchaseOrder': {
+          'id': 'po-server-1',
+          'reference': 'PO-0011',
+          'status': accepted >= 10 ? 'received' : 'partial',
+          'lines': [
+            {
+              'id': 'line-1',
+              'itemId': 'i1',
+              'itemName': 'Widget',
+              'quantityOrdered': 10,
+              'quantityReceived': accepted,
+              'unitCost': 1.0,
+              'position': 0,
+            },
+          ],
           'createdAt': '2026-09-15T10:00:00.000Z',
           'updatedAt': '2026-09-15T10:05:00.000Z',
         },
@@ -472,6 +522,66 @@ void main() {
       expect(controller.lastWriteError, isNotNull);
       expect(controller.receipts, isEmpty);
       expect(controller.byId('i1')!.quantity, 10);
+    });
+
+    test('an order is numbered by the server and moves no stock', () async {
+      final server = _Server();
+      final controller = await _controller(server);
+
+      final order = await controller.createPurchaseOrder(
+        lines: const [
+          PurchaseOrderLine(
+            id: '',
+            itemId: 'i1',
+            itemName: 'Widget',
+            quantityOrdered: 10,
+            unitCost: 1,
+          ),
+        ],
+      );
+
+      expect(order.reference, 'PO-0011');
+      expect(server.bodies.last['reference'], '');
+      expect(
+        controller.byId('i1')!.quantity,
+        10,
+        reason: 'ordering is not receiving',
+      );
+    });
+
+    test('a delivery books in what the server accepted', () async {
+      // Not what was asked for: the server clamps each line to what is still
+      // outstanding, and this device may be working from an order somebody
+      // else has already received against.
+      final server = _Server();
+      final controller = await _controller(server);
+
+      final order = await controller.createPurchaseOrder(
+        lines: const [
+          PurchaseOrderLine(
+            id: '',
+            itemId: 'i1',
+            itemName: 'Widget',
+            quantityOrdered: 10,
+            unitCost: 1,
+          ),
+        ],
+      );
+
+      final accepted = await controller.receivePurchaseOrder(order.id, {
+        'line-1': 9,
+      });
+
+      expect(
+        accepted,
+        6,
+        reason: 'the server accepted six, not the nine asked',
+      );
+      expect(controller.byId('i1')!.quantity, 16);
+      expect(
+        controller.purchaseOrderById(order.id)!.status,
+        PurchaseStatus.partial,
+      );
     });
 
     test('nothing is shown before the server has agreed to it', () async {

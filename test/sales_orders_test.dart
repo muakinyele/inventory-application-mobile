@@ -91,10 +91,10 @@ void main() {
     test('sales and purchases count on separate sequences', () async {
       final c = await newController();
 
-      expect(c.createPurchaseOrder().reference, 'PO-0001');
+      expect((await c.createPurchaseOrder()).reference, 'PO-0001');
       expect(c.createSalesOrder().reference, 'SO-0001');
       expect(c.createSalesOrder().reference, 'SO-0002');
-      expect(c.createPurchaseOrder().reference, 'PO-0002');
+      expect((await c.createPurchaseOrder()).reference, 'PO-0002');
     });
 
     test('confirming a sale moves no stock', () async {
@@ -301,11 +301,11 @@ void main() {
 
       // A later restock at a higher price moves the average cost, which must
       // not rewrite what the first five units actually cost.
-      final po = c.createPurchaseOrder(
+      final po = await c.createPurchaseOrder(
         lines: [purchaseLine(itemId, 'Bolt', quantity: 15, cost: 300)],
       );
       c.placePurchaseOrder(po.id);
-      c.receivePurchaseOrder(po.id, {'pl1': 15});
+      await c.receivePurchaseOrder(po.id, {'pl1': 15});
       c.fulfilSalesOrder(order.id, {'l1': 5});
 
       final after = c.salesOrderById(order.id)!;

@@ -64,7 +64,7 @@ void main() {
       final item = c.createItem(
         draft(name: 'Bolt', quantity: 4).copyWith(location: 'Warehouse'),
       );
-      final po = c.createPurchaseOrder(
+      final po = await c.createPurchaseOrder(
         lines: [
           PurchaseOrderLine(
             id: 'l1',
@@ -76,7 +76,7 @@ void main() {
         ],
       );
       c.placePurchaseOrder(po.id);
-      c.receivePurchaseOrder(po.id, {'l1': 6});
+      await c.receivePurchaseOrder(po.id, {'l1': 6});
 
       expect(c.stockByLocation(item.id), {'Warehouse': 10});
       expectBalanced(c);

@@ -88,14 +88,12 @@ class _PurchaseOrderEditorPageState extends State<PurchaseOrderEditorPage> {
 
     final existing = _existing;
     final id = existing == null
-        ? controller
-              .createPurchaseOrder(
-                supplierId: _supplierId,
-                expectedAt: _expectedAt,
-                notes: _notes.text.trim(),
-                lines: lines,
-              )
-              .id
+        ? (await controller.createPurchaseOrder(
+            supplierId: _supplierId,
+            expectedAt: _expectedAt,
+            notes: _notes.text.trim(),
+            lines: lines,
+          )).id
         : existing.id;
 
     if (existing != null) {
