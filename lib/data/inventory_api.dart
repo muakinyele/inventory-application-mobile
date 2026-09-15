@@ -1,6 +1,12 @@
 import '../models/item.dart';
 import '../models/movement.dart';
+import '../models/invoice.dart';
 import '../models/party.dart';
+import '../models/purchase_order.dart';
+import '../models/receipt.dart';
+import '../models/sales_order.dart';
+import '../models/transfer.dart';
+import 'document_parsing.dart';
 import 'auth_api.dart';
 
 /// The shared inventory, over HTTP.
@@ -213,6 +219,133 @@ class InventoryApi {
     );
     return customerFromJson(body['customer'] as Map<String, dynamic>);
   }
+
+  // ------------------------------------------------------------------
+  // Documents
+  //
+  // Invoices and receipts move stock server-side, so these do not send
+  // quantities of their own — the lines are the instruction, and the server
+  // works out and records the effect.
+  // ------------------------------------------------------------------
+
+  Future<List<Invoice>> invoices({String? status}) async {
+    final body = await _auth.send(
+      'GET',
+      '/documents/invoices${_status(status)}',
+    );
+    return _list(body['invoices']).map(invoiceFromJson).toList();
+  }
+
+  Future<Invoice> saveInvoice(Invoice invoice) async {
+    final existing = invoice.id.isNotEmpty;
+    final body = await _auth.send(
+      existing ? 'PATCH' : 'POST',
+      existing ? '/documents/invoices/${invoice.id}' : '/documents/invoices',
+      body: invoice.toJson(),
+    );
+    return invoiceFromJson(body['invoice'] as Map<String, dynamic>);
+  }
+
+  /// Cancelled, never deleted: an invoice that was issued is a thing that
+  /// happened, and the stock it moved comes back through a movement rather
+  /// than by the original quietly disappearing.
+  Future<Invoice> cancelInvoice(String id, {String reason = ''}) async {
+    final body = await _auth.send(
+      'POST',
+      '/documents/invoices/$id/cancel',
+      body: {'reason': reason},
+    );
+    return invoiceFromJson(body['invoice'] as Map<String, dynamic>);
+  }
+
+  Future<List<Receipt>> receipts({String? status}) async {
+    final body = await _auth.send(
+      'GET',
+      '/documents/receipts${_status(status)}',
+    );
+    return _list(body['receipts']).map(receiptFromJson).toList();
+  }
+
+  Future<Receipt> saveReceipt(Receipt receipt) async {
+    final body = await _auth.send(
+      'POST',
+      '/documents/receipts',
+      body: receipt.toJson(),
+    );
+    return receiptFromJson(body['receipt'] as Map<String, dynamic>);
+  }
+
+  Future<Receipt> voidReceipt(String id, {String reason = ''}) async {
+    final body = await _auth.send(
+      'POST',
+      '/documents/receipts/$id/void',
+      body: {'reason': reason},
+    );
+    return receiptFromJson(body['receipt'] as Map<String, dynamic>);
+  }
+
+  Future<List<PurchaseOrder>> purchaseOrders({String? status}) async {
+    final body = await _auth.send(
+      'GET',
+      '/documents/purchase-orders${_status(status)}',
+    );
+    return _list(body['purchaseOrders']).map(purchaseOrderFromJson).toList();
+  }
+
+  Future<PurchaseOrder> savePurchaseOrder(PurchaseOrder order) async {
+    final existing = order.id.isNotEmpty;
+    final body = await _auth.send(
+      existing ? 'PATCH' : 'POST',
+      existing
+          ? '/documents/purchase-orders/${order.id}'
+          : '/documents/purchase-orders',
+      body: order.toJson(),
+    );
+    return purchaseOrderFromJson(body['purchaseOrder'] as Map<String, dynamic>);
+  }
+
+  /// Receiving is what moves stock, not ordering. Partial deliveries are the
+  /// normal case, so this says what actually turned up per line.
+  Future<PurchaseOrder> receiveGoods(
+    String orderId,
+    Map<String, int> receivedByLineId, {
+    String location = 'Unassigned',
+  }) async {
+    final body = await _auth.send(
+      'POST',
+      '/documents/purchase-orders/$orderId/receive',
+      body: {'received': receivedByLineId, 'location': location},
+    );
+    return purchaseOrderFromJson(body['purchaseOrder'] as Map<String, dynamic>);
+  }
+
+  Future<List<SalesOrder>> salesOrders({String? status}) async {
+    final body = await _auth.send(
+      'GET',
+      '/documents/sales-orders${_status(status)}',
+    );
+    return _list(body['salesOrders']).map(salesOrderFromJson).toList();
+  }
+
+  Future<SalesOrder> saveSalesOrder(SalesOrder order) async {
+    final existing = order.id.isNotEmpty;
+    final body = await _auth.send(
+      existing ? 'PATCH' : 'POST',
+      existing
+          ? '/documents/sales-orders/${order.id}'
+          : '/documents/sales-orders',
+      body: order.toJson(),
+    );
+    return salesOrderFromJson(body['salesOrder'] as Map<String, dynamic>);
+  }
+
+  Future<List<Transfer>> transfers() async {
+    final body = await _auth.send('GET', '/documents/transfers');
+    return _list(body['transfers']).map(transferFromJson).toList();
+  }
+
+  String _status(String? status) =>
+      status == null || status.isEmpty ? '' : '?status=$status';
 
   // ------------------------------------------------------------------
   // Workspace settings
