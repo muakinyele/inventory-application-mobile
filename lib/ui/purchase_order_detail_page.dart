@@ -192,7 +192,7 @@ class PurchaseOrderDetailPage extends StatelessWidget {
     );
     if (result == null || result.isEmpty) return;
 
-    final moved = controller.receivePurchaseOrder(order.id, result);
+    final moved = await controller.receivePurchaseOrder(order.id, result);
     if (!context.mounted) return;
     await showAppMessage(
       context,

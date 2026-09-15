@@ -89,14 +89,12 @@ class _SalesOrderEditorPageState extends State<SalesOrderEditorPage> {
 
     final existing = _existing;
     final id = existing == null
-        ? controller
-              .createSalesOrder(
-                customerId: _customerId,
-                dueAt: _dueAt,
-                notes: _notes.text.trim(),
-                lines: lines,
-              )
-              .id
+        ? (await controller.createSalesOrder(
+            customerId: _customerId,
+            dueAt: _dueAt,
+            notes: _notes.text.trim(),
+            lines: lines,
+          )).id
         : existing.id;
 
     if (existing != null) {

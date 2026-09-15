@@ -301,7 +301,7 @@ void main() {
     // upgrade created them.
     expect(controller.receipts, isEmpty);
 
-    final receipt = controller.issueReceipt(
+    final receipt = await controller.issueReceipt(
       lines: [
         ReceiptLine(
           id: 'rl1',

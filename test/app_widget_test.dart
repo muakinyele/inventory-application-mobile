@@ -146,7 +146,9 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      controller.createItem(draft(name: 'Bolt', quantity: 50, reorderLevel: 5));
+      await controller.createItem(
+        draft(name: 'Bolt', quantity: 50, reorderLevel: 5),
+      );
 
       await tester.pumpWidget(
         ChangeNotifierProvider.value(
@@ -327,7 +329,7 @@ void main() {
 
       final controller = await newController(seeded: true);
       final item = controller.items.first;
-      final order = controller.createPurchaseOrder(
+      final order = await controller.createPurchaseOrder(
         lines: [
           PurchaseOrderLine(
             id: 'l1',
@@ -339,7 +341,7 @@ void main() {
         ],
       );
       controller.placePurchaseOrder(order.id);
-      controller.receivePurchaseOrder(order.id, {'l1': 4});
+      await controller.receivePurchaseOrder(order.id, {'l1': 4});
 
       await tester.pumpWidget(
         ChangeNotifierProvider.value(
@@ -380,7 +382,7 @@ void main() {
 
       final controller = await newController(seeded: true);
       final item = controller.items.firstWhere((i) => i.quantity >= 10);
-      final order = controller.createSalesOrder(
+      final order = await controller.createSalesOrder(
         lines: [
           SalesOrderLine(
             id: 'l1',
@@ -392,7 +394,7 @@ void main() {
         ],
       );
       controller.confirmSalesOrder(order.id);
-      controller.fulfilSalesOrder(order.id, {'l1': 4});
+      await controller.fulfilSalesOrder(order.id, {'l1': 4});
 
       await tester.pumpWidget(
         ChangeNotifierProvider.value(
@@ -414,10 +416,10 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(
+      final item = await controller.createItem(
         draft(name: 'Bolt', quantity: 20, unitCost: 100),
       );
-      final order = controller.createSalesOrder(
+      final order = await controller.createSalesOrder(
         lines: [
           SalesOrderLine(
             id: 'l1',
@@ -429,7 +431,7 @@ void main() {
         ],
       );
       controller.confirmSalesOrder(order.id);
-      controller.fulfilSalesOrder(order.id, {'l1': 10});
+      await controller.fulfilSalesOrder(order.id, {'l1': 10});
 
       await tester.pumpWidget(
         ChangeNotifierProvider.value(
@@ -463,10 +465,10 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(
+      final item = await controller.createItem(
         draft(name: 'Bolt', quantity: 20, unitCost: 100),
       );
-      controller.issueReceipt(
+      await controller.issueReceipt(
         method: PaymentMethod.card,
         lines: [
           ReceiptLine(
@@ -501,10 +503,10 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(
+      final item = await controller.createItem(
         draft(name: 'Bolt', quantity: 20, unitCost: 100),
       );
-      final receipt = controller.issueReceipt(
+      final receipt = (await controller.issueReceipt(
         lines: [
           ReceiptLine(
             id: 'rl1',
@@ -515,7 +517,7 @@ void main() {
           ),
         ],
         amountPaid: 2000,
-      )!;
+      ))!;
 
       await tester.pumpWidget(
         ChangeNotifierProvider.value(
@@ -541,8 +543,10 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(draft(name: 'Bolt', quantity: 20));
-      final receipt = controller.issueReceipt(
+      final item = await controller.createItem(
+        draft(name: 'Bolt', quantity: 20),
+      );
+      final receipt = (await controller.issueReceipt(
         lines: [
           ReceiptLine(
             id: 'rl1',
@@ -552,7 +556,7 @@ void main() {
             unitPrice: 500,
           ),
         ],
-      )!;
+      ))!;
 
       await tester.pumpWidget(
         ChangeNotifierProvider.value(
@@ -580,10 +584,10 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(
+      final item = await controller.createItem(
         draft(name: 'Bolt', quantity: 50, unitCost: 100),
       );
-      final invoice = controller.issueInvoice(
+      final invoice = (await controller.issueInvoice(
         lines: [
           InvoiceLine(
             id: 'a',
@@ -593,7 +597,7 @@ void main() {
             unitPrice: 500,
           ),
         ],
-      )!;
+      ))!;
       final receipt = controller.payInvoice(
         invoice.id,
         800,
@@ -626,8 +630,10 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(draft(name: 'Bolt', quantity: 20));
-      final receipt = controller.issueReceipt(
+      final item = await controller.createItem(
+        draft(name: 'Bolt', quantity: 20),
+      );
+      final receipt = (await controller.issueReceipt(
         lines: [
           ReceiptLine(
             id: 'rl1',
@@ -637,8 +643,8 @@ void main() {
             unitPrice: 500,
           ),
         ],
-      )!;
-      controller.voidReceipt(receipt.id, reason: 'Rang up twice');
+      ))!;
+      await controller.voidReceipt(receipt.id, reason: 'Rang up twice');
 
       await tester.pumpWidget(
         ChangeNotifierProvider.value(
@@ -661,8 +667,10 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(draft(name: 'Bolt', quantity: 20));
-      final order = controller.createSalesOrder(
+      final item = await controller.createItem(
+        draft(name: 'Bolt', quantity: 20),
+      );
+      final order = await controller.createSalesOrder(
         lines: [
           SalesOrderLine(
             id: 'l1',
@@ -686,7 +694,7 @@ void main() {
       // Nothing has gone out, so there is nothing to receipt yet.
       expect(find.text('Issue receipt'), findsNothing);
 
-      controller.fulfilSalesOrder(order.id, {'l1': 4});
+      await controller.fulfilSalesOrder(order.id, {'l1': 4});
       await tester.pumpAndSettle();
 
       expect(find.text('Issue receipt'), findsOneWidget);
@@ -700,7 +708,7 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      controller.createItem(
+      await controller.createItem(
         draft(name: 'Bolt', quantity: 20, retailerPrice: 750),
       );
 
@@ -740,10 +748,10 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(
+      final item = await controller.createItem(
         draft(name: 'Bolt', quantity: 50, unitCost: 100),
       );
-      final invoice = controller.issueInvoice(
+      final invoice = (await controller.issueInvoice(
         lines: [
           InvoiceLine(
             id: 'a',
@@ -754,7 +762,7 @@ void main() {
           ),
         ],
         termDays: 30,
-      )!;
+      ))!;
 
       await tester.pumpWidget(
         ChangeNotifierProvider.value(
@@ -782,10 +790,10 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(
+      final item = await controller.createItem(
         draft(name: 'Bolt', quantity: 50, unitCost: 100),
       );
-      final invoice = controller.issueInvoice(
+      final invoice = (await controller.issueInvoice(
         lines: [
           InvoiceLine(
             id: 'a',
@@ -795,7 +803,7 @@ void main() {
             unitPrice: 500,
           ),
         ],
-      )!;
+      ))!;
 
       await tester.pumpWidget(
         ChangeNotifierProvider.value(
@@ -821,10 +829,10 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(
+      final item = await controller.createItem(
         draft(name: 'Bolt', quantity: 50, unitCost: 100),
       );
-      final invoice = controller.issueInvoice(
+      final invoice = (await controller.issueInvoice(
         lines: [
           InvoiceLine(
             id: 'a',
@@ -834,7 +842,7 @@ void main() {
             unitPrice: 500,
           ),
         ],
-      )!;
+      ))!;
 
       await tester.pumpWidget(
         ChangeNotifierProvider.value(
@@ -867,10 +875,10 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(
+      final item = await controller.createItem(
         draft(name: 'Bolt', quantity: 50, unitCost: 100),
       );
-      final invoice = controller.issueInvoice(
+      final invoice = (await controller.issueInvoice(
         lines: [
           InvoiceLine(
             id: 'a',
@@ -880,7 +888,7 @@ void main() {
             unitPrice: 500,
           ),
         ],
-      )!;
+      ))!;
 
       // Straight to the document, as a link or a reload would arrive.
       await tester.pumpWidget(
@@ -908,10 +916,10 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(
+      final item = await controller.createItem(
         draft(name: 'Bolt', quantity: 50, unitCost: 100),
       );
-      final order = controller.createSalesOrder(
+      final order = await controller.createSalesOrder(
         lines: [
           SalesOrderLine(
             id: 'l1',
@@ -923,8 +931,8 @@ void main() {
         ],
       );
       controller.confirmSalesOrder(order.id);
-      controller.fulfilSalesOrder(order.id, {'l1': 4});
-      controller.issueInvoice(
+      await controller.fulfilSalesOrder(order.id, {'l1': 4});
+      await controller.issueInvoice(
         salesOrderId: order.id,
         lines: [
           InvoiceLine(
@@ -966,10 +974,10 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(
+      final item = await controller.createItem(
         draft(name: 'Bolt', quantity: 50, unitCost: 100),
       );
-      controller.issueReceipt(
+      await controller.issueReceipt(
         lines: [
           ReceiptLine(
             id: 'a',
@@ -1037,7 +1045,7 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(
+      final item = await controller.createItem(
         draft(name: 'Bolt', quantity: 10).copyWith(location: 'Warehouse'),
       );
       controller.recordTransfer(
@@ -1080,7 +1088,7 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(
+      final item = await controller.createItem(
         draft(name: 'Bolt', quantity: 10).copyWith(location: 'Warehouse'),
       );
       controller.recordTransfer(
@@ -1118,7 +1126,7 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(
+      final item = await controller.createItem(
         draft(name: 'Bolt', quantity: 10).copyWith(location: 'Warehouse'),
       );
 
@@ -1250,7 +1258,7 @@ void main() {
       final controller = await _seededController();
       controller.eraseAll();
       final now = DateTime.now();
-      controller.createItem(
+      await controller.createItem(
         Item(
           id: '',
           name: 'Well stocked',

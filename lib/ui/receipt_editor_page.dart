@@ -164,7 +164,7 @@ class _ReceiptEditorPageState extends State<ReceiptEditorPage> {
       }
     }
 
-    final receipt = _controller.issueReceipt(
+    final receipt = await _controller.issueReceipt(
       salesOrderId: _order?.id,
       customerId: _customerId,
       method: _method,

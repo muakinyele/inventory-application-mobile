@@ -85,6 +85,27 @@ class TestServer {
   static Future<void> _reset(AuthDatabase db) async {
     await db.customStatement('select 1');
     const tables = [
+      // Inventory first: these reference nothing, but truncating them here
+      // keeps the list in one place as the schema grows.
+      'receipt_lines',
+      'receipts',
+      'invoice_lines',
+      'invoices',
+      'transfer_lines',
+      'transfers',
+      'sales_order_lines',
+      'sales_orders',
+      'purchase_order_lines',
+      'purchase_orders',
+      'movements',
+      'stock_levels',
+      'items',
+      'customers',
+      'suppliers',
+      'categories',
+      'lookups',
+      'preferences',
+
       'audit_logs',
       'login_attempts',
       'auth_tokens',

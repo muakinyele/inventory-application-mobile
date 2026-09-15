@@ -309,7 +309,7 @@ class SalesOrderDetailPage extends StatelessWidget {
     );
     if (result == null || result.isEmpty) return;
 
-    final moved = controller.fulfilSalesOrder(order.id, result);
+    final moved = await controller.fulfilSalesOrder(order.id, result);
     if (!context.mounted) return;
     await showAppMessage(
       context,

@@ -100,9 +100,9 @@ class SuppliersPage extends StatelessWidget {
     if (result == null) return;
 
     if (existing == null) {
-      controller.createSupplier(result);
+      await controller.createSupplier(result);
     } else {
-      controller.updateSupplier(existing.id, result);
+      await controller.updateSupplier(existing.id, result);
     }
   }
 

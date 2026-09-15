@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import 'app.dart';
 import 'core/theme.dart';
+import 'data/inventory_api.dart';
 import 'data/inventory_repository.dart';
 import 'state/auth_controller.dart';
 import 'state/inventory_controller.dart';
@@ -13,22 +14,37 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   try {
-    // Open the database and read the catalogue once, before the first frame,
-    // so the UI never renders an empty state it will immediately replace.
-    final repository = await InventoryRepository.open();
-    final snapshot = await repository.load();
-
-    // Identity lives on the server; the inventory stays on the device. The
-    // two controllers are independent on purpose — signing out does not touch
-    // the local catalogue, and the app still opens its database offline.
+    // The inventory is shared now, and it lives behind the same session as
+    // everything else — so unlike before, there is nothing to read before
+    // somebody has signed in. The catalogue is fetched once a session exists,
+    // and again after signing in on a device that was signed out.
     final auth = buildAuthController();
+
+    // Still opened, and still the thing the controller writes through on a
+    // build with no server configured. It holds no inventory in the shared
+    // case; it is the seam the on-device path used and has not been removed.
+    final repository = await InventoryRepository.open();
+    final inventory = InventoryController(
+      repository,
+      Snapshot.empty,
+      api: InventoryApi(auth.api),
+    );
+
+    // The catalogue follows the session: fetched when one appears, dropped
+    // when it goes. Dropping matters on a shared terminal — whoever signs in
+    // next must not find the last person's workspace on screen.
+    auth.addListener(() {
+      if (auth.isAuthenticated && inventory.load == InventoryLoad.idle) {
+        unawaited(inventory.reload());
+      } else if (!auth.isAuthenticated && !auth.isRestoring) {
+        inventory.forgetSharedData();
+      }
+    });
 
     runApp(
       MultiProvider(
         providers: [
-          ChangeNotifierProvider(
-            create: (_) => InventoryController(repository, snapshot),
-          ),
+          ChangeNotifierProvider<InventoryController>.value(value: inventory),
           ChangeNotifierProvider<AuthController>.value(value: auth),
         ],
         child: const StockpileApp(),
@@ -37,7 +53,7 @@ Future<void> main() async {
 
     // Started after the first frame so the splash is already on screen rather
     // than the window sitting blank while the server is asked about a stored
-    // session.
+    // session. The listener above picks the catalogue up from there.
     unawaited(auth.restore());
   } catch (error, stack) {
     // Without this the app renders nothing at all when the database cannot be

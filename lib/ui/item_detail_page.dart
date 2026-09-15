@@ -336,7 +336,7 @@ class ItemDetailPage extends StatelessWidget {
     );
 
     if (confirmed != true) return;
-    controller.deleteItem(item.id);
+    await controller.deleteItem(item.id);
     // Said before routing away: this page is about to be replaced, and a
     // dialog goes down with the page it was opened over.
     if (context.mounted) await showAppMessage(context, '${item.name} deleted');

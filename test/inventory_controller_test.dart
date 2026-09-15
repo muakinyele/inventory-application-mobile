@@ -24,7 +24,7 @@ void main() {
   group('adjustStock', () {
     test('clamps at zero rather than going negative', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 3));
+      final item = await c.createItem(draft(quantity: 3));
 
       c.adjustStock(item.id, -10, note: 'Big pick');
 
@@ -36,7 +36,7 @@ void main() {
 
     test('records the movement with the note and the new balance', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 10));
+      final item = await c.createItem(draft(quantity: 10));
 
       c.adjustStock(item.id, 40, note: 'PO-2310');
 
@@ -49,7 +49,7 @@ void main() {
 
     test('is a no-op when already empty, leaving no movement behind', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 0));
+      final item = await c.createItem(draft(quantity: 0));
       final before = c.movements.length;
 
       c.adjustStock(item.id, -5);
@@ -60,7 +60,7 @@ void main() {
 
   test('setStock records a stocktake against the previous balance', () async {
     final c = await newController();
-    final item = c.createItem(draft(quantity: 10));
+    final item = await c.createItem(draft(quantity: 10));
 
     c.setStock(item.id, 7);
 
@@ -71,9 +71,9 @@ void main() {
 
   test('deleting an item keeps its history', () async {
     final c = await newController();
-    final item = c.createItem(draft(name: 'Nut'));
+    final item = await c.createItem(draft(name: 'Nut'));
 
-    c.deleteItem(item.id);
+    await c.deleteItem(item.id);
 
     expect(c.byId(item.id), isNull);
     expect(c.movements.any((m) => m.itemName == 'Nut'), isTrue);
@@ -83,9 +83,9 @@ void main() {
     'editing without touching quantity logs an edit, not an adjustment',
     () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 10));
+      final item = await c.createItem(draft(quantity: 10));
 
-      c.updateItem(item.id, item.copyWith(name: 'Bolt M8'));
+      await c.updateItem(item.id, item.copyWith(name: 'Bolt M8'));
 
       expect(c.movements.first.kind, MovementKind.edit);
       expect(c.movements.first.delta, 0);
@@ -95,14 +95,14 @@ void main() {
   test('new categories are folded into the pickers', () async {
     final c = await newController();
 
-    c.createItem(draft(category: 'Fasteners'));
+    await c.createItem(draft(category: 'Fasteners'));
 
     expect(c.settings.categories, contains('Fasteners'));
   });
 
   test('lookup by code matches barcode or SKU', () async {
     final c = await newController();
-    final item = c.createItem(draft(barcode: '999', sku: 'B-9'));
+    final item = await c.createItem(draft(barcode: '999', sku: 'B-9'));
 
     expect(c.byCode('999')?.id, item.id);
     expect(c.byCode('B-9')?.id, item.id);
@@ -111,9 +111,9 @@ void main() {
 
   test('needsAttention puts empty bins before merely low ones', () async {
     final c = await newController();
-    c.createItem(draft(name: 'Low', quantity: 4, reorderLevel: 5));
-    c.createItem(draft(name: 'Empty', quantity: 0, reorderLevel: 5));
-    c.createItem(draft(name: 'Fine', quantity: 50, reorderLevel: 5));
+    await c.createItem(draft(name: 'Low', quantity: 4, reorderLevel: 5));
+    await c.createItem(draft(name: 'Empty', quantity: 0, reorderLevel: 5));
+    await c.createItem(draft(name: 'Fine', quantity: 50, reorderLevel: 5));
 
     expect(c.needsAttention.map((i) => i.name), ['Empty', 'Low']);
   });
@@ -122,7 +122,7 @@ void main() {
     'the movement log is capped so storage cannot grow without bound',
     () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 0));
+      final item = await c.createItem(draft(quantity: 0));
 
       for (var i = 0; i < InventoryController.maxMovements + 20; i++) {
         c.adjustStock(item.id, 1);
@@ -205,8 +205,8 @@ void main() {
 
     test('renaming rewrites the items that used it', () async {
       final c = await newController();
-      c.createItem(draft(name: 'Bolt', category: 'Parts'));
-      c.createItem(draft(name: 'Cable', category: 'Wiring'));
+      await c.createItem(draft(name: 'Bolt', category: 'Parts'));
+      await c.createItem(draft(name: 'Cable', category: 'Wiring'));
 
       c.renameCategory('Parts', 'Hardware', 2);
 
@@ -220,7 +220,7 @@ void main() {
       'deleting clears the category but keeps the items and their stock',
       () async {
         final c = await newController();
-        final item = c.createItem(
+        final item = await c.createItem(
           draft(name: 'Bolt', category: 'Parts', quantity: 9),
         );
 
@@ -234,7 +234,7 @@ void main() {
 
     test('category edits never append a movement', () async {
       final c = await newController();
-      c.createItem(draft(category: 'Parts'));
+      await c.createItem(draft(category: 'Parts'));
       final before = c.movements.length;
 
       c.renameCategory('Parts', 'Hardware', 1);
@@ -259,7 +259,7 @@ void main() {
       final repo = newRepository();
       final first = InventoryController(repo, await repo.load());
 
-      first.createItem(draft(name: 'Persisted', quantity: 42));
+      await first.createItem(draft(name: 'Persisted', quantity: 42));
       await pumpWrites();
 
       final reloaded = await repo.load();
@@ -272,10 +272,10 @@ void main() {
       () async {
         final repo = newRepository();
         final controller = InventoryController(repo, await repo.load());
-        final item = controller.createItem(draft(name: 'Doomed'));
+        final item = await controller.createItem(draft(name: 'Doomed'));
         await pumpWrites();
 
-        controller.deleteItem(item.id);
+        await controller.deleteItem(item.id);
         await pumpWrites();
 
         final reloaded = await repo.load();
@@ -287,7 +287,7 @@ void main() {
     test('stock adjustments persist', () async {
       final repo = newRepository();
       final controller = InventoryController(repo, await repo.load());
-      final item = controller.createItem(draft(quantity: 5));
+      final item = await controller.createItem(draft(quantity: 5));
       await pumpWrites();
 
       controller.adjustStock(item.id, 20, note: 'PO-1');
@@ -332,7 +332,7 @@ void main() {
     test('the ledger is trimmed in the database, not just in memory', () async {
       final repo = newRepository();
       final controller = InventoryController(repo, await repo.load());
-      final item = controller.createItem(draft(quantity: 0));
+      final item = await controller.createItem(draft(quantity: 0));
       await pumpWrites();
 
       for (var i = 0; i < 40; i++) {

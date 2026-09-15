@@ -166,12 +166,12 @@ class _ItemEditorPageState extends State<ItemEditorPage> {
     final existing = _existing;
     // Awaited: routing away takes the dialog down with the page it sits on.
     if (existing == null) {
-      final created = controller.createItem(draft);
+      final created = await controller.createItem(draft);
       await _notify('${created.name} added');
       if (!mounted) return;
       context.go('/items/${created.id}');
     } else {
-      controller.updateItem(existing.id, draft);
+      await controller.updateItem(existing.id, draft);
       await _notify('${draft.name} updated');
       if (!mounted) return;
       context.go('/items/${existing.id}');

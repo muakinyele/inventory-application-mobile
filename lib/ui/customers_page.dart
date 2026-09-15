@@ -87,9 +87,9 @@ class CustomersPage extends StatelessWidget {
     if (result == null) return;
 
     if (existing == null) {
-      controller.createCustomer(result);
+      await controller.createCustomer(result);
     } else {
-      controller.updateCustomer(existing.id, result);
+      await controller.updateCustomer(existing.id, result);
     }
   }
 

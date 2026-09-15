@@ -9,6 +9,7 @@ import '../models/item.dart';
 import '../state/auth_controller.dart';
 import '../state/inventory_controller.dart';
 import 'widgets/app_sidebar.dart';
+import 'widgets/inventory_status_banner.dart';
 import 'widgets/confirm_dialog.dart';
 
 /// Destinations promoted to the phone tab bar; the rest live behind "More".
@@ -186,14 +187,23 @@ class _AppShellState extends State<AppShell> {
               onToggleSection: _toggleSection,
             ),
             Expanded(
-              child: Align(
-                alignment: Alignment.topLeft,
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(
-                    maxWidth: Breakpoints.contentMax,
+              child: Column(
+                children: [
+                  // Above the content, not over it: neither message needs
+                  // dismissing before work can carry on.
+                  const InventoryStatusBanner(),
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.topLeft,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(
+                          maxWidth: Breakpoints.contentMax,
+                        ),
+                        child: navigationShell,
+                      ),
+                    ),
                   ),
-                  child: navigationShell,
-                ),
+                ],
               ),
             ),
           ],
@@ -219,7 +229,12 @@ class _AppShellState extends State<AppShell> {
           onToggleSection: _toggleSection,
         ),
       ),
-      body: navigationShell,
+      body: Column(
+        children: [
+          const InventoryStatusBanner(),
+          Expanded(child: navigationShell),
+        ],
+      ),
       bottomNavigationBar: _PhoneTabs(
         currentIndex: navigationShell.currentIndex,
         alertCount: alertCount,

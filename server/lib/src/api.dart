@@ -20,6 +20,10 @@ import 'http/rate_limiter.dart';
 import 'http/routes/account_routes.dart';
 import 'http/routes/audit_routes.dart';
 import 'http/routes/auth_routes.dart';
+import 'http/routes/document_routes.dart';
+import 'http/routes/inventory_routes.dart';
+import 'inventory/document_service.dart';
+import 'inventory/inventory_service.dart';
 import 'http/routes/user_routes.dart';
 import 'rbac/access_service.dart';
 import 'users/account_service.dart';
@@ -75,6 +79,8 @@ class Api {
     final notifications = NotificationService(db: db, mailer: safeMailer);
 
     final auditService = AuditService(db, onError: onError);
+    final inventoryService = InventoryService(db);
+    final documentService = DocumentService(db, inventoryService);
     final access = AccessService(db);
     final tokenStore = TokenStore(db: db, tokens: tokens);
     final sessions = SessionService(
@@ -200,6 +206,26 @@ class Api {
       Pipeline()
           .addMiddleware(requireAuth())
           .addHandler(auditRoutes(audit: auditService).call),
+    );
+
+    // The shared inventory. Behind requireAuth like everything else: stock
+    // levels, costs and customer names are not public, and the client always
+    // has a session by the time it asks for them.
+    router.mount(
+      '/inventory',
+      Pipeline()
+          .addMiddleware(requireAuth())
+          .addHandler(inventoryRoutes(inventory: inventoryService).call),
+    );
+
+    // Invoices, receipts and orders. Separate from /inventory because a
+    // different set of permissions guards them, and their writes move stock
+    // where the item routes deliberately do not.
+    router.mount(
+      '/documents',
+      Pipeline()
+          .addMiddleware(requireAuth())
+          .addHandler(documentRoutes(documents: documentService).call),
     );
 
     router.all(

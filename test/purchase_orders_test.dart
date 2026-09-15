@@ -27,10 +27,10 @@ Future<(InventoryController, PurchaseOrder, String)> placedOrder({
   double cost = 100,
 }) async {
   final c = await newController();
-  final item = c.createItem(
+  final item = await c.createItem(
     draft(name: 'Bolt', quantity: onHand, unitCost: existingCost),
   );
-  final order = c.createPurchaseOrder(
+  final order = await c.createPurchaseOrder(
     lines: [line(item.id, 'Bolt', quantity: ordered, cost: cost)],
   );
   c.placePurchaseOrder(order.id);
@@ -44,10 +44,10 @@ void main() {
     test('references are sequential and never reused', () async {
       final c = await newController();
 
-      final first = c.createPurchaseOrder();
-      final second = c.createPurchaseOrder();
+      final first = await c.createPurchaseOrder();
+      final second = await c.createPurchaseOrder();
       c.deletePurchaseOrder(second.id);
-      final third = c.createPurchaseOrder();
+      final third = await c.createPurchaseOrder();
 
       expect(first.reference, 'PO-0001');
       expect(second.reference, 'PO-0002');
@@ -68,7 +68,7 @@ void main() {
 
     test('an empty draft cannot be placed', () async {
       final c = await newController();
-      final order = c.createPurchaseOrder();
+      final order = await c.createPurchaseOrder();
 
       c.placePurchaseOrder(order.id);
 
@@ -85,7 +85,7 @@ void main() {
 
     test('the expected date defaults from the supplier lead time', () async {
       final c = await newController();
-      final supplier = c.createSupplier(
+      final supplier = await c.createSupplier(
         Supplier(
           id: '',
           name: 'Nexa',
@@ -95,7 +95,7 @@ void main() {
         ),
       );
 
-      final order = c.createPurchaseOrder(supplierId: supplier.id);
+      final order = await c.createPurchaseOrder(supplierId: supplier.id);
 
       expect(order.expectedAt, isNotNull);
       expect(
@@ -107,7 +107,7 @@ void main() {
 
     test('an order that has received stock cannot be deleted', () async {
       final (c, order, _) = await placedOrder();
-      c.receivePurchaseOrder(order.id, {'l1': 10});
+      await c.receivePurchaseOrder(order.id, {'l1': 10});
 
       c.deletePurchaseOrder(order.id);
 
@@ -119,7 +119,7 @@ void main() {
     test('a full receipt raises stock and closes the order', () async {
       final (c, order, itemId) = await placedOrder(onHand: 5, ordered: 10);
 
-      final moved = c.receivePurchaseOrder(order.id, {'l1': 10});
+      final moved = await c.receivePurchaseOrder(order.id, {'l1': 10});
 
       expect(moved, 1);
       expect(c.byId(itemId)!.quantity, 15);
@@ -130,14 +130,14 @@ void main() {
     test('a partial receipt leaves the balance outstanding', () async {
       final (c, order, itemId) = await placedOrder(ordered: 10);
 
-      c.receivePurchaseOrder(order.id, {'l1': 4});
+      await c.receivePurchaseOrder(order.id, {'l1': 4});
 
       final after = c.purchaseOrderById(order.id)!;
       expect(c.byId(itemId)!.quantity, 4);
       expect(after.status, PurchaseStatus.partial);
       expect(after.unitsOutstanding, 6);
 
-      c.receivePurchaseOrder(order.id, {'l1': 6});
+      await c.receivePurchaseOrder(order.id, {'l1': 6});
       expect(c.purchaseOrderById(order.id)!.status, PurchaseStatus.received);
       expect(c.byId(itemId)!.quantity, 10);
     });
@@ -145,7 +145,7 @@ void main() {
     test('over-receiving is clamped to what is outstanding', () async {
       final (c, order, itemId) = await placedOrder(ordered: 10);
 
-      c.receivePurchaseOrder(order.id, {'l1': 999});
+      await c.receivePurchaseOrder(order.id, {'l1': 999});
 
       expect(c.byId(itemId)!.quantity, 10);
       expect(c.purchaseOrderById(order.id)!.unitsReceived, 10);
@@ -154,7 +154,7 @@ void main() {
     test('receiving writes a movement tagged with the order', () async {
       final (c, order, _) = await placedOrder(ordered: 10);
 
-      c.receivePurchaseOrder(order.id, {'l1': 10});
+      await c.receivePurchaseOrder(order.id, {'l1': 10});
 
       final movement = c.movements.first;
       expect(movement.kind, MovementKind.stockIn);
@@ -172,7 +172,7 @@ void main() {
         cost: 200,
       );
 
-      c.receivePurchaseOrder(order.id, {'l1': 10});
+      await c.receivePurchaseOrder(order.id, {'l1': 10});
 
       expect(c.byId(itemId)!.unitCost, 150);
     });
@@ -184,7 +184,7 @@ void main() {
         cost: 250,
       );
 
-      c.receivePurchaseOrder(order.id, {'l1': 10});
+      await c.receivePurchaseOrder(order.id, {'l1': 10});
 
       expect(c.byId(itemId)!.unitCost, 250);
     });
@@ -196,7 +196,7 @@ void main() {
         cost: 0,
       );
 
-      c.receivePurchaseOrder(order.id, {'l1': 10});
+      await c.receivePurchaseOrder(order.id, {'l1': 10});
 
       expect(c.byId(itemId)!.unitCost, 100);
       expect(c.byId(itemId)!.quantity, 20);
@@ -206,7 +206,7 @@ void main() {
       final (c, order, itemId) = await placedOrder();
       c.cancelPurchaseOrder(order.id);
 
-      final moved = c.receivePurchaseOrder(order.id, {'l1': 10});
+      final moved = await c.receivePurchaseOrder(order.id, {'l1': 10});
 
       expect(moved, 0);
       expect(c.byId(itemId)!.quantity, 0);
@@ -216,13 +216,13 @@ void main() {
   test('orders, lines and counters survive a reload', () async {
     final repo = newRepository();
     final c = await controllerOver(repo);
-    final item = c.createItem(draft(name: 'Bolt', quantity: 0));
-    final order = c.createPurchaseOrder(
+    final item = await c.createItem(draft(name: 'Bolt', quantity: 0));
+    final order = await c.createPurchaseOrder(
       lines: [line(item.id, 'Bolt', quantity: 8, cost: 50)],
       notes: 'Urgent',
     );
     c.placePurchaseOrder(order.id);
-    c.receivePurchaseOrder(order.id, {'l1': 3});
+    await c.receivePurchaseOrder(order.id, {'l1': 3});
     await pumpWrites();
 
     final reloaded = await repo.load();

@@ -26,11 +26,11 @@ void main() {
   group('issuing', () {
     test('a credit sale takes stock and books the money as owed', () async {
       final c = await newController();
-      final item = c.createItem(
+      final item = await c.createItem(
         draft(name: 'Bolt', quantity: 20, unitCost: 100),
       );
 
-      final invoice = c.issueInvoice(
+      final invoice = await c.issueInvoice(
         lines: [invoiceLine(item.id, 'Bolt', quantity: 4, price: 500)],
         termDays: 30,
       );
@@ -48,12 +48,14 @@ void main() {
 
     test('references run in their own sequence', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 50));
+      final item = await c.createItem(draft(quantity: 50));
 
-      final first = c.issueInvoice(lines: [invoiceLine(item.id, 'Bolt')])!;
-      final second = c.issueInvoice(
+      final first = (await c.issueInvoice(
+        lines: [invoiceLine(item.id, 'Bolt')],
+      ))!;
+      final second = (await c.issueInvoice(
         lines: [invoiceLine(item.id, 'Bolt', id: 'il2')],
-      )!;
+      ))!;
 
       expect(first.reference, 'INV-0001');
       expect(second.reference, 'INV-0002');
@@ -61,11 +63,11 @@ void main() {
 
     test('the ledger records the sale against the invoice', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
 
-      final invoice = c.issueInvoice(
+      final invoice = (await c.issueInvoice(
         lines: [invoiceLine(item.id, 'Bolt', quantity: 5)],
-      )!;
+      ))!;
 
       final movement = c.movements.first;
       expect(movement.kind, MovementKind.stockOut);
@@ -77,11 +79,11 @@ void main() {
 
     test('a line is trimmed to what is on the shelf', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 3));
+      final item = await c.createItem(draft(quantity: 3));
 
-      final invoice = c.issueInvoice(
+      final invoice = (await c.issueInvoice(
         lines: [invoiceLine(item.id, 'Bolt', quantity: 9, price: 100)],
-      )!;
+      ))!;
 
       expect(invoice.lines.single.quantity, 3);
       expect(c.byId(item.id)!.quantity, 0);
@@ -89,8 +91,8 @@ void main() {
 
     test('an invoice against a sale moves no stock', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
-      final order = c.createSalesOrder(
+      final item = await c.createItem(draft(quantity: 20));
+      final order = await c.createSalesOrder(
         lines: [
           SalesOrderLine(
             id: 'l1',
@@ -102,13 +104,13 @@ void main() {
         ],
       );
       c.confirmSalesOrder(order.id);
-      c.fulfilSalesOrder(order.id, {'l1': 6});
+      await c.fulfilSalesOrder(order.id, {'l1': 6});
       expect(c.byId(item.id)!.quantity, 14);
 
-      final invoice = c.issueInvoice(
+      final invoice = (await c.issueInvoice(
         salesOrderId: order.id,
         lines: c.invoiceLinesForSalesOrder(c.salesOrderById(order.id)!),
-      )!;
+      ))!;
 
       expect(c.byId(item.id)!.quantity, 14);
       expect(invoice.movesStock, isFalse);
@@ -119,10 +121,10 @@ void main() {
   group('payment', () {
     test('paying issues a receipt and brings the balance down', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20, unitCost: 100));
-      final invoice = c.issueInvoice(
+      final item = await c.createItem(draft(quantity: 20, unitCost: 100));
+      final invoice = (await c.issueInvoice(
         lines: [invoiceLine(item.id, 'Bolt', quantity: 4, price: 500)],
-      )!;
+      ))!;
 
       final receipt = c.payInvoice(
         invoice.id,
@@ -150,10 +152,10 @@ void main() {
 
     test('paying it off in full closes the invoice', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
-      final invoice = c.issueInvoice(
+      final item = await c.createItem(draft(quantity: 20));
+      final invoice = (await c.issueInvoice(
         lines: [invoiceLine(item.id, 'Bolt', quantity: 4, price: 500)],
-      )!;
+      ))!;
 
       c.payInvoice(invoice.id, 1200);
       c.payInvoice(invoice.id, 800);
@@ -169,10 +171,10 @@ void main() {
 
     test('a payment never exceeds the balance', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
-      final invoice = c.issueInvoice(
+      final item = await c.createItem(draft(quantity: 20));
+      final invoice = (await c.issueInvoice(
         lines: [invoiceLine(item.id, 'Bolt', quantity: 4, price: 500)],
-      )!;
+      ))!;
 
       final receipt = c.payInvoice(invoice.id, 999999)!;
 
@@ -184,10 +186,10 @@ void main() {
 
     test('a settled invoice takes no further payment', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
-      final invoice = c.issueInvoice(
+      final item = await c.createItem(draft(quantity: 20));
+      final invoice = (await c.issueInvoice(
         lines: [invoiceLine(item.id, 'Bolt', quantity: 4, price: 500)],
-      )!;
+      ))!;
       c.payInvoice(invoice.id, 2000);
 
       expect(c.payInvoice(invoice.id, 500), isNull);
@@ -196,10 +198,10 @@ void main() {
 
     test('takings count the money paid, not the invoice value', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
-      final invoice = c.issueInvoice(
+      final item = await c.createItem(draft(quantity: 20));
+      final invoice = (await c.issueInvoice(
         lines: [invoiceLine(item.id, 'Bolt', quantity: 4, price: 500)],
-      )!;
+      ))!;
 
       c.payInvoice(invoice.id, 750, method: PaymentMethod.cash);
 
@@ -215,11 +217,11 @@ void main() {
   group('overdue', () {
     test('an invoice past its due date with money owing is overdue', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
-      final invoice = c.issueInvoice(
+      final item = await c.createItem(draft(quantity: 20));
+      final invoice = (await c.issueInvoice(
         lines: [invoiceLine(item.id, 'Bolt')],
         dueAt: DateTime.now().subtract(const Duration(days: 3)),
-      )!;
+      ))!;
 
       expect(c.invoiceById(invoice.id)!.isOverdue, isTrue);
       expect(c.invoiceById(invoice.id)!.daysOverdue, greaterThanOrEqualTo(2));
@@ -228,11 +230,11 @@ void main() {
 
     test('paying it clears the overdue flag', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
-      final invoice = c.issueInvoice(
+      final item = await c.createItem(draft(quantity: 20));
+      final invoice = (await c.issueInvoice(
         lines: [invoiceLine(item.id, 'Bolt', quantity: 4, price: 500)],
         dueAt: DateTime.now().subtract(const Duration(days: 3)),
-      )!;
+      ))!;
 
       c.payInvoice(invoice.id, 2000);
 
@@ -244,13 +246,13 @@ void main() {
   group('cancellation', () {
     test('cancelling puts back exactly what the invoice took', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
-      final invoice = c.issueInvoice(
+      final item = await c.createItem(draft(quantity: 20));
+      final invoice = (await c.issueInvoice(
         lines: [
           invoiceLine(item.id, 'Bolt', quantity: 3, id: 'a'),
           invoiceLine(item.id, 'Bolt', quantity: 2, id: 'b'),
         ],
-      )!;
+      ))!;
       expect(c.byId(item.id)!.quantity, 15);
 
       expect(c.cancelInvoice(invoice.id, reason: 'Duplicate'), isTrue);
@@ -266,10 +268,10 @@ void main() {
 
     test('an invoice with a payment against it cannot be cancelled', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
-      final invoice = c.issueInvoice(
+      final item = await c.createItem(draft(quantity: 20));
+      final invoice = (await c.issueInvoice(
         lines: [invoiceLine(item.id, 'Bolt', quantity: 4, price: 500)],
-      )!;
+      ))!;
       c.payInvoice(invoice.id, 100);
 
       expect(c.cancelInvoice(invoice.id), isFalse);
@@ -278,8 +280,10 @@ void main() {
 
     test('only a cancelled invoice can be deleted', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
-      final invoice = c.issueInvoice(lines: [invoiceLine(item.id, 'Bolt')])!;
+      final item = await c.createItem(draft(quantity: 20));
+      final invoice = (await c.issueInvoice(
+        lines: [invoiceLine(item.id, 'Bolt')],
+      ))!;
 
       c.deleteInvoice(invoice.id);
       expect(c.invoices, hasLength(1));
@@ -294,8 +298,8 @@ void main() {
     test('invoices and their payments survive a reload', () async {
       final repo = newRepository();
       final c = await controllerOver(repo);
-      final item = c.createItem(draft(quantity: 20, unitCost: 100));
-      final invoice = c.issueInvoice(
+      final item = await c.createItem(draft(quantity: 20, unitCost: 100));
+      final invoice = (await c.issueInvoice(
         lines: [
           invoiceLine(item.id, 'Bolt', quantity: 4, price: 500, discount: 100),
         ],
@@ -303,7 +307,7 @@ void main() {
         termDays: 14,
         terms: '14 days net',
         notes: 'Delivered to site',
-      )!;
+      ))!;
       c.payInvoice(invoice.id, 500, method: PaymentMethod.transfer);
       await pumpWrites();
 
@@ -328,8 +332,8 @@ void main() {
     test('erasing everything clears the invoice book', () async {
       final repo = newRepository();
       final c = await controllerOver(repo);
-      final item = c.createItem(draft(quantity: 20));
-      c.issueInvoice(lines: [invoiceLine(item.id, 'Bolt')]);
+      final item = await c.createItem(draft(quantity: 20));
+      await c.issueInvoice(lines: [invoiceLine(item.id, 'Bolt')]);
       await pumpWrites();
 
       c.eraseAll();

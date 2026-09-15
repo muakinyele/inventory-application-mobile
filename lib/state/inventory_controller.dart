@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import '../core/ids.dart';
 
 import '../data/csv_codec.dart';
+import '../data/inventory_api.dart';
+import '../data/inventory_loader.dart';
 import '../data/inventory_repository.dart';
 import '../data/seed_data.dart';
 import '../models/app_settings.dart';
@@ -17,6 +19,18 @@ import '../models/receipt.dart';
 import '../models/sales_order.dart';
 import '../models/transfer.dart';
 
+/// Where a shared catalogue's load has got to.
+enum InventoryLoad {
+  /// Nothing asked for yet — no session, or signed out.
+  idle,
+  loading,
+  ready,
+
+  /// The server could not be reached or refused. [InventoryController.loadError]
+  /// says why.
+  failed,
+}
+
 /// Owns the in-memory view of the catalogue and is the only thing that mutates
 /// it. Reads stay synchronous so widgets can build without a future; every
 /// write is applied in memory, published, and persisted to SQLite through
@@ -27,8 +41,12 @@ import '../models/transfer.dart';
 /// remember to record. Category edits deliberately append nothing — the ledger
 /// records stock, not metadata.
 class InventoryController extends ChangeNotifier {
-  InventoryController(this._repo, Snapshot initial)
-    : _items = List.of(initial.items),
+  // `this._api` is what prefer_initializing_formals asks for, but a named
+  // parameter cannot be private: there would be no name a caller could write.
+  InventoryController(this._repo, Snapshot initial, {InventoryApi? api})
+    // ignore: prefer_initializing_formals
+    : _api = api,
+      _items = List.of(initial.items),
       _movements = List.of(initial.movements),
       _suppliers = List.of(initial.suppliers),
       _customers = List.of(initial.customers),
@@ -44,6 +62,34 @@ class InventoryController extends ChangeNotifier {
   static const maxMovements = 500;
 
   final InventoryRepository _repo;
+
+  /// The shared inventory, when there is one.
+  ///
+  /// Null is the on-device path this app has always had, and is still what the
+  /// widget tests build. While both exist the difference is not cosmetic: with
+  /// an API the *server* owns the arithmetic, because it is the only party
+  /// that can see what other devices have already done.
+  final InventoryApi? _api;
+
+  bool get isShared => _api != null;
+
+  /// Set when the server refused a stock write because the count had moved
+  /// underneath us. Cleared by the next write that succeeds.
+  ///
+  /// Held rather than thrown because these writes are fire-and-forget from the
+  /// UI's point of view; the screen reads this and says so.
+  String? stockConflict;
+
+  /// Where the shared catalogue has got to.
+  ///
+  /// Only meaningful when [isShared]. On device the data is there before the
+  /// first frame, so there is no state between "not started" and "ready" for a
+  /// screen to show.
+  InventoryLoad load = InventoryLoad.idle;
+
+  /// Why the load failed, for the screen that has to say so.
+  Object? loadError;
+
   final IdGenerator _ids = IdGenerator();
 
   List<Item> _items;
@@ -157,7 +203,10 @@ class InventoryController extends ChangeNotifier {
 
   // --- Item mutations ------------------------------------------------------
 
-  Item createItem(Item draft) {
+  Future<Item> createItem(Item draft) async {
+    final api = _api;
+    if (api != null) return _createItemOnServer(api, draft);
+
     final now = DateTime.now();
     final item = Item(
       id: _uid(),
@@ -202,7 +251,10 @@ class InventoryController extends ChangeNotifier {
     return item;
   }
 
-  void updateItem(String id, Item draft) {
+  Future<void> updateItem(String id, Item draft) async {
+    final api = _api;
+    if (api != null) return _updateItemOnServer(api, id, draft);
+
     final existing = byId(id);
     if (existing == null) return;
 
@@ -232,7 +284,10 @@ class InventoryController extends ChangeNotifier {
     });
   }
 
-  void deleteItem(String id) {
+  Future<void> deleteItem(String id) async {
+    final api = _api;
+    if (api != null) return _deleteItemOnServer(api, id);
+
     final existing = byId(id);
     if (existing == null) return;
 
@@ -256,14 +311,14 @@ class InventoryController extends ChangeNotifier {
 
   /// Applies a signed change. Stock can never go below zero — a bigger "out"
   /// than you hold empties the bin instead of going below it.
-  void adjustStock(String id, int delta, {String note = ''}) {
+  Future<void> adjustStock(String id, int delta, {String note = ''}) async {
     final existing = byId(id);
     if (existing == null || delta == 0) return;
 
     final after = max(0, existing.quantity + delta);
     if (after == existing.quantity) return;
 
-    _applyQuantity(
+    await _changeQuantity(
       existing,
       after,
       delta > 0 ? MovementKind.stockIn : MovementKind.stockOut,
@@ -272,14 +327,736 @@ class InventoryController extends ChangeNotifier {
   }
 
   /// Sets an absolute count, e.g. after a physical stocktake.
-  void setStock(String id, int quantity, {String note = 'Stocktake'}) {
+  Future<void> setStock(
+    String id,
+    int quantity, {
+    String note = 'Stocktake',
+  }) async {
     final existing = byId(id);
     if (existing == null) return;
 
     final after = max(0, quantity);
     if (after == existing.quantity) return;
 
-    _applyQuantity(existing, after, MovementKind.adjust, note);
+    await _changeQuantity(existing, after, MovementKind.adjust, note);
+  }
+
+  /// Routes a quantity change to whichever party owns the arithmetic.
+  ///
+  /// On device that is this class. Against a shared inventory it is the
+  /// server: it is the only one that can see what other devices have already
+  /// done, and it refuses a write made against a count that has since moved.
+  Future<void> _changeQuantity(
+    Item existing,
+    int after,
+    MovementKind kind,
+    String note,
+  ) async {
+    final api = _api;
+    if (api == null) {
+      _applyQuantity(existing, after, kind, note);
+      return;
+    }
+    await _changeQuantityOnServer(api, existing, after, kind, note);
+  }
+
+  /// Asks the server to move the count, and takes its answer as the truth.
+  ///
+  /// Deliberately not optimistic. The local path updates the screen first and
+  /// persists afterwards, which is right when this device is the only writer.
+  /// Here a second device may already have sold the last of it, so showing a
+  /// number before the server has agreed to it would be showing a number that
+  /// may be about to be withdrawn.
+  Future<void> _changeQuantityOnServer(
+    InventoryApi api,
+    Item existing,
+    int after,
+    MovementKind kind,
+    String note,
+  ) async {
+    try {
+      final result = await api.adjustStock(
+        itemId: existing.id,
+        delta: after - existing.quantity,
+        // What this device believed was current. The server compares it and
+        // refuses if it has moved, rather than overwriting silently.
+        expectedQuantity: existing.quantity,
+        kind: kind.name,
+        location: existing.location.isEmpty ? 'Unassigned' : existing.location,
+        note: note,
+      );
+
+      _items = _items
+          .map((i) => i.id == result.item.id ? result.item : i)
+          .toList();
+      _putLevels(
+        result.item.id,
+        _settled(
+          result.item.id,
+          result.item.quantity - existing.quantity,
+          result.item.location,
+        ),
+      );
+      _record(result.movement);
+      stockConflict = null;
+      lastWriteError = null;
+    } on StockConflictException catch (conflict) {
+      // The count moved under us. Pull the item back so the screen shows what
+      // is actually there rather than the figure the user was working from —
+      // re-applying their change blindly is the overwrite this prevents.
+      stockConflict = conflict.message;
+      await _refreshItem(api, existing.id);
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: stock write failed: $error');
+    }
+    notifyListeners();
+  }
+
+  /// Raises the invoice on the server and adopts the result.
+  ///
+  /// No stock arithmetic here on purpose. The server decides what each line
+  /// actually takes — it can see stock this device has not heard about — and
+  /// writes the movements in the same transaction as the document. Working it
+  /// out here as well would produce two answers, only one of them true.
+  Future<Invoice?> _issueInvoiceOnServer(
+    InventoryApi api, {
+    String? salesOrderId,
+    String? customerId,
+    required List<InvoiceLine> lines,
+    double discount = 0,
+    double? taxRate,
+    DateTime? dueAt,
+    int? termDays,
+    String terms = '',
+    String notes = '',
+    DateTime? issuedAt,
+  }) async {
+    final now = DateTime.now();
+    final order = salesOrderId == null ? null : salesOrderById(salesOrderId);
+    final customer = customerById(customerId ?? order?.customerId);
+
+    // An invoice raised against a sales order does not move stock a second
+    // time: that order's despatch already did.
+    final movesStock = order == null;
+
+    final billed = <InvoiceLine>[];
+    for (final line in lines) {
+      if (line.quantity <= 0) continue;
+      final item = byId(line.itemId);
+      billed.add(
+        InvoiceLine(
+          id: line.id,
+          itemId: line.itemId,
+          itemName: line.itemName.isEmpty
+              ? (item?.name ?? line.itemName)
+              : line.itemName,
+          sku: line.sku.isEmpty ? (item?.sku ?? '') : line.sku,
+          unit: line.unit,
+          quantity: line.quantity,
+          unitPrice: line.unitPrice,
+          discount: line.discount,
+          // Captured now rather than read back later: profit reporting has to
+          // reflect what the stock cost at the moment it was sold.
+          costOfGoods: line.quantity * (item?.unitCost ?? 0),
+        ),
+      );
+    }
+    if (billed.isEmpty) return null;
+
+    // Blank id and reference: the server mints both. Allocating a reference
+    // here would let two devices raise the same invoice number.
+    final draft = Invoice(
+      id: '',
+      reference: '',
+      salesOrderId: order?.id,
+      customerId: customer?.id ?? customerId,
+      customerName: customer?.name ?? order?.customerName ?? '',
+      lines: billed,
+      discount: discount < 0 ? 0 : discount,
+      taxRate: (taxRate ?? _settings.taxRate).clamp(0, 1).toDouble(),
+      taxLabel: _settings.taxLabel,
+      terms: terms,
+      notes: notes,
+      movesStock: movesStock,
+      issuedAt: issuedAt ?? now,
+      dueAt: dueAt ?? _dueFrom(issuedAt ?? now, termDays),
+      createdAt: now,
+      updatedAt: now,
+    );
+
+    try {
+      final saved = await api.saveInvoice(draft);
+      _invoices = [saved, ..._invoices.where((i) => i.id != saved.id)];
+      if (saved.movesStock) await _refreshStockView(api);
+      lastWriteError = null;
+      notifyListeners();
+      return saved;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not raise the invoice: $error');
+      notifyListeners();
+      return null;
+    }
+  }
+
+  /// Issues the receipt on the server and adopts the result.
+  ///
+  /// Same division as the invoice path: this device says what was sold, the
+  /// server decides what that takes off the shelf and records the movements.
+  /// A counter sale is the one that moves stock; a receipt against a sales
+  /// order moves nothing, because that order's despatch already did.
+  Future<Receipt?> _issueReceiptOnServer(
+    InventoryApi api, {
+    String? salesOrderId,
+    String? customerId,
+    PaymentMethod method = PaymentMethod.cash,
+    required List<ReceiptLine> lines,
+    double discount = 0,
+    double? taxRate,
+    double amountPaid = 0,
+    String notes = '',
+    String cashier = '',
+    DateTime? issuedAt,
+  }) async {
+    final now = DateTime.now();
+    final order = salesOrderId == null ? null : salesOrderById(salesOrderId);
+    final customer = customerById(customerId ?? order?.customerId);
+    final movesStock = order == null;
+
+    final sold = <ReceiptLine>[];
+    for (final line in lines) {
+      if (line.quantity <= 0) continue;
+      final item = byId(line.itemId);
+      sold.add(
+        ReceiptLine(
+          id: line.id,
+          itemId: line.itemId,
+          itemName: line.itemName.isEmpty
+              ? (item?.name ?? line.itemName)
+              : line.itemName,
+          sku: line.sku.isEmpty ? (item?.sku ?? '') : line.sku,
+          unit: line.unit,
+          quantity: line.quantity,
+          unitPrice: line.unitPrice,
+          discount: line.discount,
+          quantityRefunded: line.quantityRefunded,
+          costOfGoods: line.quantity * (item?.unitCost ?? 0),
+        ),
+      );
+    }
+    if (sold.isEmpty) return null;
+
+    final draft = Receipt(
+      id: '',
+      reference: '',
+      salesOrderId: order?.id,
+      customerId: customer?.id ?? customerId,
+      customerName: customer?.name ?? order?.customerName ?? '',
+      method: method,
+      lines: sold,
+      discount: discount < 0 ? 0 : discount,
+      taxRate: (taxRate ?? _settings.taxRate).clamp(0, 1).toDouble(),
+      taxLabel: _settings.taxLabel,
+      amountPaid: amountPaid,
+      notes: notes,
+      cashier: cashier,
+      movesStock: movesStock,
+      issuedAt: issuedAt ?? now,
+      createdAt: now,
+      updatedAt: now,
+    );
+
+    try {
+      final saved = await api.saveReceipt(draft);
+      _receipts = [saved, ..._receipts.where((r) => r.id != saved.id)];
+      if (saved.movesStock) await _refreshStockView(api);
+      lastWriteError = null;
+      notifyListeners();
+      return saved;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not issue the receipt: $error');
+      notifyListeners();
+      return null;
+    }
+  }
+
+  /// Books a delivery in on the server and adopts the result.
+  ///
+  /// Returns the units the server actually accepted, which is not always what
+  /// was asked for: it clamps each line to what is still outstanding, and this
+  /// device may be working from an order another user has already received
+  /// against. Counting the request rather than the answer would overstate a
+  /// delivery in exactly that case.
+  Future<int> _receiveOnServer(
+    InventoryApi api,
+    PurchaseOrder order,
+    Map<String, int> received,
+  ) async {
+    final before = {
+      for (final line in order.lines) line.id: line.quantityReceived,
+    };
+
+    try {
+      // One location for the whole delivery, which is how goods actually
+      // arrive — and what the endpoint takes. The on-device path books each
+      // line into its own item's location instead; that difference is real,
+      // and the first configured location is the closest thing to a receiving
+      // bay this app knows about.
+      final saved = await api.receiveGoods(
+        order.id,
+        received,
+        location: _settings.locations.isEmpty
+            ? 'Unassigned'
+            : _settings.locations.first,
+      );
+
+      _purchaseOrders = _purchaseOrders
+          .map((o) => o.id == saved.id ? saved : o)
+          .toList();
+      await _refreshStockView(api);
+      lastWriteError = null;
+      notifyListeners();
+
+      var accepted = 0;
+      for (final line in saved.lines) {
+        accepted += line.quantityReceived - (before[line.id] ?? 0);
+      }
+      return accepted;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not book the delivery: $error');
+      notifyListeners();
+      return 0;
+    }
+  }
+
+  /// Raises a purchase order on the server.
+  ///
+  /// Ordering moves no stock, so there is nothing to re-read afterwards —
+  /// only the delivery does, through [receivePurchaseOrder].
+  Future<PurchaseOrder> _createPurchaseOrderOnServer(
+    InventoryApi api, {
+    String? supplierId,
+    DateTime? expectedAt,
+    String notes = '',
+    List<PurchaseOrderLine> lines = const [],
+  }) async {
+    final now = DateTime.now();
+    final supplier = supplierById(supplierId);
+
+    // Blank id and reference, as with invoices: the server mints both, so two
+    // devices cannot raise the same order number.
+    final draft = PurchaseOrder(
+      id: '',
+      reference: '',
+      supplierId: supplierId,
+      supplierName: supplier?.name ?? '',
+      expectedAt: expectedAt ?? _expectedFrom(supplier, now),
+      notes: notes,
+      lines: lines,
+      createdAt: now,
+      updatedAt: now,
+    );
+
+    try {
+      final saved = await api.savePurchaseOrder(draft);
+      _purchaseOrders = [
+        saved,
+        ..._purchaseOrders.where((o) => o.id != saved.id),
+      ];
+      lastWriteError = null;
+      notifyListeners();
+      return saved;
+    } catch (error) {
+      // Returned rather than thrown, because the local path cannot fail and
+      // the caller has never had to handle one. The order is not in
+      // purchaseOrders, so nothing downstream treats it as real.
+      lastWriteError = error;
+      debugPrint('Stockpile: could not raise the purchase order: $error');
+      notifyListeners();
+      return draft;
+    }
+  }
+
+  /// Despatches against a sales order on the server and adopts the result.
+  ///
+  /// Returns what actually left, diffed from the response. The server clamps
+  /// each line by what is still outstanding *and* what is on the shelf — and
+  /// the shelf is shared, so another device may have sold the last of it since
+  /// this order was opened. Counting the request would report a despatch that
+  /// did not happen.
+  Future<int> _despatchOnServer(
+    InventoryApi api,
+    SalesOrder order,
+    Map<String, int> sent,
+  ) async {
+    final before = {
+      for (final line in order.lines) line.id: line.quantityFulfilled,
+    };
+
+    try {
+      final saved = await api.despatchGoods(
+        order.id,
+        sent,
+        location: _settings.locations.isEmpty
+            ? 'Unassigned'
+            : _settings.locations.first,
+      );
+
+      _salesOrders = _salesOrders
+          .map((o) => o.id == saved.id ? saved : o)
+          .toList();
+      await _refreshStockView(api);
+      lastWriteError = null;
+      notifyListeners();
+
+      var despatched = 0;
+      for (final line in saved.lines) {
+        despatched += line.quantityFulfilled - (before[line.id] ?? 0);
+      }
+      return despatched;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not despatch the order: $error');
+      notifyListeners();
+      return 0;
+    }
+  }
+
+  /// Raises a sales order on the server.
+  ///
+  /// Committing to sell moves no stock — the despatch does — so there is
+  /// nothing to re-read here.
+  Future<SalesOrder> _createSalesOrderOnServer(
+    InventoryApi api, {
+    String? customerId,
+    DateTime? dueAt,
+    String notes = '',
+    List<SalesOrderLine> lines = const [],
+  }) async {
+    final now = DateTime.now();
+    final customer = customerById(customerId);
+
+    final draft = SalesOrder(
+      id: '',
+      reference: '',
+      customerId: customerId,
+      customerName: customer?.name ?? '',
+      priceTier: customer?.priceTier ?? PriceTier.retailer,
+      dueAt: dueAt,
+      notes: notes,
+      lines: lines,
+      createdAt: now,
+      updatedAt: now,
+    );
+
+    try {
+      final saved = await api.saveSalesOrder(draft);
+      _salesOrders = [saved, ..._salesOrders.where((o) => o.id != saved.id)];
+      lastWriteError = null;
+      notifyListeners();
+      return saved;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not raise the sales order: $error');
+      notifyListeners();
+      return draft;
+    }
+  }
+
+  /// Takes goods back on the server and adopts the result.
+  ///
+  /// Returns the number of *lines* something came back against, which is what
+  /// the local path has always returned and what the screen reports. Counted
+  /// from the response rather than the request: the server caps each line at
+  /// what is still kept, so asking for more than was bought moves nothing and
+  /// must not read as a refund.
+  Future<int> _refundOnServer(
+    InventoryApi api,
+    Receipt receipt,
+    Map<String, int> returned, {
+    bool restock = true,
+  }) async {
+    final before = {
+      for (final line in receipt.lines) line.id: line.quantityRefunded,
+    };
+
+    try {
+      final saved = await api.refundReceipt(
+        receipt.id,
+        returned,
+        restock: restock,
+        location: _settings.locations.isEmpty
+            ? 'Unassigned'
+            : _settings.locations.first,
+      );
+
+      _receipts = _receipts.map((r) => r.id == saved.id ? saved : r).toList();
+      // Only when the goods went back on: a broken return refunds money and
+      // moves no stock, so there is nothing to re-read.
+      if (restock && saved.movesStock) await _refreshStockView(api);
+      lastWriteError = null;
+      notifyListeners();
+
+      var lines = 0;
+      for (final line in saved.lines) {
+        if (line.quantityRefunded > (before[line.id] ?? 0)) lines++;
+      }
+      return lines;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not refund the receipt: $error');
+      notifyListeners();
+      return 0;
+    }
+  }
+
+  /// Adds an item to the shared catalogue.
+  ///
+  /// The opening quantity goes with it and the server books it in as stock
+  /// arriving, so a new item's count has a movement behind it like every
+  /// other — rather than appearing from nowhere on the other devices.
+  Future<Item> _createItemOnServer(InventoryApi api, Item draft) async {
+    try {
+      final saved = await api.createItem(draft);
+      _items = [saved, ..._items.where((i) => i.id != saved.id)];
+      if (_learnOptions(saved)) await _persistSettingsTo(api);
+      lastWriteError = null;
+      notifyListeners();
+      return saved;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not add the item: $error');
+      notifyListeners();
+      return draft;
+    }
+  }
+
+  /// Edits an item's details. Never its quantity — that only moves through an
+  /// adjustment, so the change carries a movement explaining it.
+  Future<void> _updateItemOnServer(
+    InventoryApi api,
+    String id,
+    Item draft,
+  ) async {
+    final existing = byId(id);
+    if (existing == null) return;
+
+    try {
+      final saved = await api.updateItem(id, draft);
+      _items = _items.map((i) => i.id == id ? saved : i).toList();
+      if (_learnOptions(saved)) await _persistSettingsTo(api);
+      lastWriteError = null;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not save the item: $error');
+    }
+    notifyListeners();
+  }
+
+  Future<void> _deleteItemOnServer(InventoryApi api, String id) async {
+    try {
+      await api.deleteItem(id);
+      _items = _items.where((i) => i.id != id).toList();
+      _levels.remove(id);
+      // Movements are left alone. They carry the item's name, so the ledger
+      // stays readable, and deleting them would erase the record of stock that
+      // genuinely moved.
+      lastWriteError = null;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not delete the item: $error');
+    }
+    notifyListeners();
+  }
+
+  /// Writes the picker lists back after an item taught us a new one.
+  ///
+  /// Shared, these belong to the workspace rather than the device: a category
+  /// somebody types on one screen has to appear in everybody else's picker.
+  Future<void> _persistSettingsTo(InventoryApi api) async {
+    try {
+      await api.saveCategories([
+        for (final name in _settings.categories)
+          (name: name, swatchIndex: _settings.categoryColors[name] ?? 0),
+      ]);
+      await api.saveLookupValues('location', _settings.locations);
+      await api.saveLookupValues('unit', _settings.units);
+    } catch (error) {
+      // The item itself saved; the picker will catch up on the next load.
+      debugPrint('Stockpile: could not save the picker lists: $error');
+    }
+  }
+
+  /// Creates or edits a supplier.
+  ///
+  /// One method for both, because the endpoint is an upsert: a blank id means
+  /// the server mints one, and an id it recognises is an edit. Splitting them
+  /// here would only be two names for the same request.
+  Future<Supplier> _saveSupplierOnServer(
+    InventoryApi api,
+    Supplier draft, {
+    String? id,
+  }) async {
+    // Rebuilt rather than copyWith: the id is the one field copyWith does not
+    // take, because on device it was never editable.
+    final payload = id == null
+        ? draft
+        : Supplier(
+            id: id,
+            name: draft.name,
+            contactName: draft.contactName,
+            phone: draft.phone,
+            email: draft.email,
+            address: draft.address,
+            leadTimeDays: draft.leadTimeDays,
+            paymentTerms: draft.paymentTerms,
+            notes: draft.notes,
+            archived: draft.archived,
+            createdAt: draft.createdAt,
+            updatedAt: draft.updatedAt,
+          );
+    try {
+      final saved = await api.saveSupplier(payload);
+      _suppliers = [saved, ..._suppliers.where((s) => s.id != saved.id)]
+        ..sort(_supplierOrder);
+      lastWriteError = null;
+      notifyListeners();
+      return saved;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not save the supplier: $error');
+      notifyListeners();
+      return payload;
+    }
+  }
+
+  Future<Customer> _saveCustomerOnServer(
+    InventoryApi api,
+    Customer draft, {
+    String? id,
+  }) async {
+    final payload = id == null
+        ? draft
+        : Customer(
+            id: id,
+            name: draft.name,
+            contactName: draft.contactName,
+            phone: draft.phone,
+            email: draft.email,
+            address: draft.address,
+            priceTier: draft.priceTier,
+            notes: draft.notes,
+            archived: draft.archived,
+            createdAt: draft.createdAt,
+            updatedAt: draft.updatedAt,
+          );
+    try {
+      final saved = await api.saveCustomer(payload);
+      _customers = [saved, ..._customers.where((c) => c.id != saved.id)]
+        ..sort(_customerOrder);
+      lastWriteError = null;
+      notifyListeners();
+      return saved;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not save the customer: $error');
+      notifyListeners();
+      return payload;
+    }
+  }
+
+  /// Fetches the shared catalogue, replacing whatever is held.
+  ///
+  /// Called once a session exists — the inventory is behind authentication, so
+  /// there is nothing to ask for before someone has signed in — and again
+  /// after signing in on a device that was signed out.
+  ///
+  /// A failure leaves the previous contents alone rather than blanking them.
+  /// Half a catalogue is still worth showing while the screen says the refresh
+  /// did not work; an empty one looks like a workspace with nothing in it,
+  /// which is the one thing this must never be mistaken for.
+  Future<void> reload() async {
+    final api = _api;
+    if (api == null) return;
+
+    load = InventoryLoad.loading;
+    loadError = null;
+    notifyListeners();
+
+    try {
+      final snapshot = await loadSharedSnapshot(api);
+      _items = List.of(snapshot.items);
+      _movements = List.of(snapshot.movements);
+      _suppliers = List.of(snapshot.suppliers);
+      _customers = List.of(snapshot.customers);
+      _purchaseOrders = List.of(snapshot.purchaseOrders);
+      _salesOrders = List.of(snapshot.salesOrders);
+      _receipts = List.of(snapshot.receipts);
+      _invoices = List.of(snapshot.invoices);
+      _transfers = List.of(snapshot.transfers);
+      _levels = Map.of(snapshot.levels);
+      _settings = snapshot.settings;
+      load = InventoryLoad.ready;
+    } catch (error) {
+      loadError = error;
+      load = InventoryLoad.failed;
+      debugPrint('Stockpile: could not load the inventory: $error');
+    }
+    notifyListeners();
+  }
+
+  /// Empties the held catalogue when the session ends.
+  ///
+  /// Signing out on a shared device has to leave nothing of the workspace on
+  /// screen for whoever signs in next.
+  void forgetSharedData() {
+    if (_api == null) return;
+    _items = [];
+    _movements = [];
+    _suppliers = [];
+    _customers = [];
+    _purchaseOrders = [];
+    _salesOrders = [];
+    _receipts = [];
+    _invoices = [];
+    _transfers = [];
+    _levels = {};
+    load = InventoryLoad.idle;
+    loadError = null;
+    notifyListeners();
+  }
+
+  /// Re-reads what a document just changed.
+  ///
+  /// Items and movements only. Per-bin levels are read by the screens that
+  /// show them, and fetching every item's breakdown here would be one request
+  /// per item to populate something usually off screen.
+  Future<void> _refreshStockView(InventoryApi api) async {
+    try {
+      final page = await api.items();
+      _items = page.items;
+      _movements = await api.movements(limit: maxMovements);
+    } catch (error) {
+      // The document itself saved. Reporting that is better than failing the
+      // whole operation over a stale list the next load will correct.
+      debugPrint('Stockpile: could not refresh after the document: $error');
+    }
+  }
+
+  /// Re-reads one item after a refusal, so the screen stops showing a count
+  /// the server has already disagreed with.
+  Future<void> _refreshItem(InventoryApi api, String id) async {
+    try {
+      final fresh = await api.item(id);
+      _items = _items.map((i) => i.id == id ? fresh.item : i).toList();
+      _putLevels(id, fresh.stock);
+    } catch (error) {
+      // The conflict message still stands and is the more useful of the two.
+      debugPrint('Stockpile: could not re-read $id: $error');
+    }
   }
 
   void _applyQuantity(
@@ -381,7 +1158,10 @@ class InventoryController extends ChangeNotifier {
 
   // --- Suppliers -----------------------------------------------------------
 
-  Supplier createSupplier(Supplier draft) {
+  Future<Supplier> createSupplier(Supplier draft) async {
+    final api = _api;
+    if (api != null) return _saveSupplierOnServer(api, draft);
+
     final now = DateTime.now();
     final supplier = draft.copyWith(updatedAt: now);
     final created = Supplier(
@@ -404,7 +1184,13 @@ class InventoryController extends ChangeNotifier {
     return created;
   }
 
-  void updateSupplier(String id, Supplier draft) {
+  Future<void> updateSupplier(String id, Supplier draft) async {
+    final api = _api;
+    if (api != null) {
+      await _saveSupplierOnServer(api, draft, id: id);
+      return;
+    }
+
     if (supplierById(id) == null) return;
     final updated = draft.copyWith(updatedAt: DateTime.now());
     _suppliers = _suppliers.map((s) => s.id == id ? updated : s).toList()
@@ -443,7 +1229,10 @@ class InventoryController extends ChangeNotifier {
 
   // --- Customers -----------------------------------------------------------
 
-  Customer createCustomer(Customer draft) {
+  Future<Customer> createCustomer(Customer draft) async {
+    final api = _api;
+    if (api != null) return _saveCustomerOnServer(api, draft);
+
     final now = DateTime.now();
     final created = Customer(
       id: _uid(),
@@ -464,7 +1253,13 @@ class InventoryController extends ChangeNotifier {
     return created;
   }
 
-  void updateCustomer(String id, Customer draft) {
+  Future<void> updateCustomer(String id, Customer draft) async {
+    final api = _api;
+    if (api != null) {
+      await _saveCustomerOnServer(api, draft, id: id);
+      return;
+    }
+
     if (customerById(id) == null) return;
     final updated = draft.copyWith(updatedAt: DateTime.now());
     _customers = _customers.map((c) => c.id == id ? updated : c).toList()
@@ -491,12 +1286,23 @@ class InventoryController extends ChangeNotifier {
     return '$prefix-${next.toString().padLeft(4, '0')}';
   }
 
-  PurchaseOrder createPurchaseOrder({
+  Future<PurchaseOrder> createPurchaseOrder({
     String? supplierId,
     DateTime? expectedAt,
     String notes = '',
     List<PurchaseOrderLine> lines = const [],
-  }) {
+  }) async {
+    final api = _api;
+    if (api != null) {
+      return _createPurchaseOrderOnServer(
+        api,
+        supplierId: supplierId,
+        expectedAt: expectedAt,
+        notes: notes,
+        lines: lines,
+      );
+    }
+
     final now = DateTime.now();
     final supplier = supplierById(supplierId);
     final order = PurchaseOrder(
@@ -601,13 +1407,18 @@ class InventoryController extends ChangeNotifier {
   /// so cost follows what was actually paid rather than the last price typed.
   ///
   /// Returns the number of lines that moved.
-  int receivePurchaseOrder(
+  Future<int> receivePurchaseOrder(
     String id,
     Map<String, int> received, {
     String note = '',
-  }) {
+  }) async {
     final order = purchaseOrderById(id);
     if (order == null || !order.status.isOpen) return 0;
+
+    final api = _api;
+    if (api != null) {
+      return _receiveOnServer(api, order, received);
+    }
 
     final now = DateTime.now();
     final updatedLines = <PurchaseOrderLine>[];
@@ -728,12 +1539,23 @@ class InventoryController extends ChangeNotifier {
   PriceTier priceTierFor(String? customerId) =>
       customerById(customerId)?.priceTier ?? PriceTier.retailer;
 
-  SalesOrder createSalesOrder({
+  Future<SalesOrder> createSalesOrder({
     String? customerId,
     DateTime? dueAt,
     String notes = '',
     List<SalesOrderLine> lines = const [],
-  }) {
+  }) async {
+    final api = _api;
+    if (api != null) {
+      return _createSalesOrderOnServer(
+        api,
+        customerId: customerId,
+        dueAt: dueAt,
+        notes: notes,
+        lines: lines,
+      );
+    }
+
     final now = DateTime.now();
     final customer = customerById(customerId);
     final order = SalesOrder(
@@ -844,9 +1666,18 @@ class InventoryController extends ChangeNotifier {
   /// negative, and the balance simply stays outstanding.
   ///
   /// Returns the number of lines that moved.
-  int fulfilSalesOrder(String id, Map<String, int> sent, {String note = ''}) {
+  Future<int> fulfilSalesOrder(
+    String id,
+    Map<String, int> sent, {
+    String note = '',
+  }) async {
     final order = salesOrderById(id);
     if (order == null || !order.status.isOpen) return 0;
+
+    final api = _api;
+    if (api != null) {
+      return _despatchOnServer(api, order, sent);
+    }
 
     final now = DateTime.now();
     final updatedLines = <SalesOrderLine>[];
@@ -1023,7 +1854,7 @@ class InventoryController extends ChangeNotifier {
   /// Quantities on a counter sale are clamped to what is actually on the
   /// shelf — stock is never allowed to go negative — and a line left with
   /// nothing to sell is dropped. Returns null when no line survives that.
-  Receipt? issueReceipt({
+  Future<Receipt?> issueReceipt({
     String? salesOrderId,
     String? customerId,
     PaymentMethod method = PaymentMethod.cash,
@@ -1034,8 +1865,25 @@ class InventoryController extends ChangeNotifier {
     String notes = '',
     String cashier = '',
     DateTime? issuedAt,
-  }) {
+  }) async {
     if (lines.isEmpty) return null;
+
+    final api = _api;
+    if (api != null) {
+      return _issueReceiptOnServer(
+        api,
+        salesOrderId: salesOrderId,
+        customerId: customerId,
+        method: method,
+        lines: lines,
+        discount: discount,
+        taxRate: taxRate,
+        amountPaid: amountPaid,
+        notes: notes,
+        cashier: cashier,
+        issuedAt: issuedAt,
+      );
+    }
 
     final now = DateTime.now();
     final order = salesOrderId == null ? null : salesOrderById(salesOrderId);
@@ -1153,14 +2001,19 @@ class InventoryController extends ChangeNotifier {
   /// inventing stock that is not there.
   ///
   /// Returns the number of lines that moved.
-  int refundReceipt(
+  Future<int> refundReceipt(
     String id,
     Map<String, int> returned, {
     bool restock = true,
     String note = '',
-  }) {
+  }) async {
     final receipt = receiptById(id);
     if (receipt == null || !receipt.status.isRefundable) return 0;
+
+    final api = _api;
+    if (api != null) {
+      return _refundOnServer(api, receipt, returned, restock: restock);
+    }
 
     final now = DateTime.now();
     final updatedLines = <ReceiptLine>[];
@@ -1237,12 +2090,33 @@ class InventoryController extends ChangeNotifier {
   /// have been returned the document has a history worth keeping, and the rest
   /// should be refunded rather than erased. A void puts back exactly the stock
   /// the receipt took, and nothing when the receipt never moved any.
-  bool voidReceipt(String id, {String reason = ''}) {
+  Future<bool> voidReceipt(String id, {String reason = ''}) async {
     final receipt = receiptById(id);
     if (receipt == null ||
         receipt.status != ReceiptStatus.issued ||
         receipt.unitsRefunded > 0) {
       return false;
+    }
+
+    final api = _api;
+    if (api != null) {
+      try {
+        final voided = await api.voidReceipt(id, reason: reason);
+        _receipts = _receipts
+            .map((r) => r.id == voided.id ? voided : r)
+            .toList();
+        // The server put the stock back and wrote the movement for it, so
+        // the counts here are stale until re-read.
+        if (voided.movesStock) await _refreshStockView(api);
+        lastWriteError = null;
+        notifyListeners();
+        return true;
+      } catch (error) {
+        lastWriteError = error;
+        debugPrint('Stockpile: could not void the receipt: $error');
+        notifyListeners();
+        return false;
+      }
     }
 
     final now = DateTime.now();
@@ -1417,7 +2291,13 @@ class InventoryController extends ChangeNotifier {
   /// Quantities on a standalone invoice are clamped to what is on the shelf,
   /// and a line left with nothing to sell is dropped. Returns null when no
   /// line survives that.
-  Invoice? issueInvoice({
+  /// Raises an invoice.
+  ///
+  /// Shared, the whole stock calculation below belongs to the
+  /// server: it is the only party that can see what other devices have already
+  /// sold, and it records the movements in the same transaction as the document.
+  /// This device sends the lines and adopts what comes back.
+  Future<Invoice?> issueInvoice({
     String? salesOrderId,
     String? customerId,
     required List<InvoiceLine> lines,
@@ -1428,8 +2308,25 @@ class InventoryController extends ChangeNotifier {
     String terms = '',
     String notes = '',
     DateTime? issuedAt,
-  }) {
+  }) async {
     if (lines.isEmpty) return null;
+
+    final api = _api;
+    if (api != null) {
+      return _issueInvoiceOnServer(
+        api,
+        salesOrderId: salesOrderId,
+        customerId: customerId,
+        lines: lines,
+        discount: discount,
+        taxRate: taxRate,
+        dueAt: dueAt,
+        termDays: termDays,
+        terms: terms,
+        notes: notes,
+        issuedAt: issuedAt,
+      );
+    }
 
     final now = DateTime.now();
     final order = salesOrderId == null ? null : salesOrderById(salesOrderId);
