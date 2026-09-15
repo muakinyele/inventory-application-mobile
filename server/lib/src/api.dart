@@ -20,6 +20,8 @@ import 'http/rate_limiter.dart';
 import 'http/routes/account_routes.dart';
 import 'http/routes/audit_routes.dart';
 import 'http/routes/auth_routes.dart';
+import 'http/routes/inventory_routes.dart';
+import 'inventory/inventory_service.dart';
 import 'http/routes/user_routes.dart';
 import 'rbac/access_service.dart';
 import 'users/account_service.dart';
@@ -75,6 +77,7 @@ class Api {
     final notifications = NotificationService(db: db, mailer: safeMailer);
 
     final auditService = AuditService(db, onError: onError);
+    final inventoryService = InventoryService(db);
     final access = AccessService(db);
     final tokenStore = TokenStore(db: db, tokens: tokens);
     final sessions = SessionService(
@@ -200,6 +203,16 @@ class Api {
       Pipeline()
           .addMiddleware(requireAuth())
           .addHandler(auditRoutes(audit: auditService).call),
+    );
+
+    // The shared inventory. Behind requireAuth like everything else: stock
+    // levels, costs and customer names are not public, and the client always
+    // has a session by the time it asks for them.
+    router.mount(
+      '/inventory',
+      Pipeline()
+          .addMiddleware(requireAuth())
+          .addHandler(inventoryRoutes(inventory: inventoryService).call),
     );
 
     router.all(
