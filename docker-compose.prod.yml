@@ -133,12 +133,15 @@ services:
       API_UPSTREAM: http://api:8080
       DNS_RESOLVER: 127.0.0.11
     ports:
-      # Bound to loopback, deliberately. The host's nginx terminates TLS and
-      # proxies to it, so the only way in is through the domain name — a
-      # request to http://<ip>:8080 now finds nothing listening on the public
-      # interface. Publishing on 0.0.0.0 would leave the app reachable by IP,
-      # bypassing TLS and the name-based virtual host entirely.
-      - "127.0.0.1:${WEB_PORT:-8080}:8080"
+      # Published on all interfaces. A loopback binding was tried, so that a
+      # host nginx could be the only way in, but that host already runs another
+      # site and the vhost for this one was never able to serve — which left
+      # the app reachable from nowhere. Until a working vhost is in place, this
+      # stays public: an app that is reachable is worth more than one that is
+      # theoretically better protected and down.
+      #
+      # TLS is terminated in front of this when something is there to do it.
+      - "${WEB_PORT:-8080}:8080"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
       interval: 15s
