@@ -79,11 +79,15 @@ class InventoryApi {
   /// count except through an adjustment, so that every change carries a
   /// movement explaining it. Sending it here would be silently ignored, which
   /// is worse than not sending it.
-  Future<Item> updateItem(Item draft) async {
-    final payload = _itemPayload(draft)..remove('quantity');
+  /// [id] is passed rather than read off [draft], because the editor builds a
+  /// draft from the form and has no reason to carry the id around in it.
+  Future<Item> updateItem(String id, Item draft) async {
+    final payload = _itemPayload(draft)
+      ..remove('quantity')
+      ..remove('id');
     final body = await _auth.send(
       'PATCH',
-      '/inventory/items/${draft.id}',
+      '/inventory/items/$id',
       body: payload,
     );
     return Item.fromJson(body['item'] as Map<String, dynamic>);

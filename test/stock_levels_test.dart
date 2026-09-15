@@ -30,7 +30,7 @@ void main() {
     test('a new item puts all its stock in its own location', () async {
       final c = await newController();
 
-      final item = c.createItem(
+      final item = await c.createItem(
         draft(name: 'Bolt', quantity: 12).copyWith(location: 'Warehouse'),
       );
 
@@ -41,7 +41,7 @@ void main() {
     test('stock with no location lands in Unassigned', () async {
       final c = await newController();
 
-      final item = c.createItem(draft(name: 'Bolt', quantity: 5));
+      final item = await c.createItem(draft(name: 'Bolt', quantity: 5));
 
       expect(c.stockByLocation(item.id), {unassignedLocation: 5});
       expectBalanced(c);
@@ -49,7 +49,7 @@ void main() {
 
     test('an adjustment books into the home bin', () async {
       final c = await newController();
-      final item = c.createItem(
+      final item = await c.createItem(
         draft(name: 'Bolt', quantity: 10).copyWith(location: 'Warehouse'),
       );
 
@@ -61,7 +61,7 @@ void main() {
 
     test('a receipt books into the home bin', () async {
       final c = await newController();
-      final item = c.createItem(
+      final item = await c.createItem(
         draft(name: 'Bolt', quantity: 4).copyWith(location: 'Warehouse'),
       );
       final po = await c.createPurchaseOrder(
@@ -84,9 +84,9 @@ void main() {
 
     test('deleting an item drops its bins', () async {
       final c = await newController();
-      final item = c.createItem(draft(name: 'Bolt', quantity: 10));
+      final item = await c.createItem(draft(name: 'Bolt', quantity: 10));
 
-      c.deleteItem(item.id);
+      await c.deleteItem(item.id);
 
       expect(c.stockByLocation(item.id), isEmpty);
       expect(c.unitsByLocation, isEmpty);
@@ -94,11 +94,14 @@ void main() {
 
     test('editing the location moves the stock with it', () async {
       final c = await newController();
-      final item = c.createItem(
+      final item = await c.createItem(
         draft(name: 'Bolt', quantity: 10).copyWith(location: 'Warehouse'),
       );
 
-      c.updateItem(item.id, c.byId(item.id)!.copyWith(location: 'Store Front'));
+      await c.updateItem(
+        item.id,
+        c.byId(item.id)!.copyWith(location: 'Store Front'),
+      );
 
       expect(c.stockByLocation(item.id), {'Store Front': 10});
       expectBalanced(c);
@@ -108,7 +111,7 @@ void main() {
       'stock parked elsewhere stays put when the home bin is renamed',
       () async {
         final c = await newController();
-        final item = c.createItem(
+        final item = await c.createItem(
           draft(name: 'Bolt', quantity: 10).copyWith(location: 'Warehouse'),
         );
         c.recordTransfer(
@@ -124,7 +127,7 @@ void main() {
           ],
         );
 
-        c.updateItem(
+        await c.updateItem(
           item.id,
           c.byId(item.id)!.copyWith(location: 'Store Front'),
         );
@@ -138,7 +141,7 @@ void main() {
   group('draining', () {
     test('a sale empties the home bin before touching the others', () async {
       final c = await newController();
-      final item = c.createItem(
+      final item = await c.createItem(
         draft(name: 'Bolt', quantity: 10).copyWith(location: 'Warehouse'),
       );
       c.recordTransfer(
@@ -175,7 +178,7 @@ void main() {
 
     test('emptying an item leaves no bins behind', () async {
       final c = await newController();
-      final item = c.createItem(
+      final item = await c.createItem(
         draft(name: 'Bolt', quantity: 6).copyWith(location: 'Warehouse'),
       );
 
@@ -189,7 +192,7 @@ void main() {
   group('transfers', () {
     test('a transfer moves stock without changing the total', () async {
       final c = await newController();
-      final item = c.createItem(
+      final item = await c.createItem(
         draft(name: 'Bolt', quantity: 10).copyWith(location: 'Warehouse'),
       );
 
@@ -215,7 +218,7 @@ void main() {
 
     test('it is clamped to what the source bin actually holds', () async {
       final c = await newController();
-      final item = c.createItem(
+      final item = await c.createItem(
         draft(name: 'Bolt', quantity: 4).copyWith(location: 'Warehouse'),
       );
 
@@ -239,7 +242,7 @@ void main() {
 
     test('a source bin with nothing in it moves nothing', () async {
       final c = await newController();
-      final item = c.createItem(
+      final item = await c.createItem(
         draft(name: 'Bolt', quantity: 4).copyWith(location: 'Warehouse'),
       );
 
@@ -262,7 +265,7 @@ void main() {
 
     test('a transfer to the same place is refused', () async {
       final c = await newController();
-      final item = c.createItem(
+      final item = await c.createItem(
         draft(name: 'Bolt', quantity: 4).copyWith(location: 'Warehouse'),
       );
 
@@ -285,7 +288,7 @@ void main() {
 
     test('it lands in the ledger tagged with the document', () async {
       final c = await newController();
-      final item = c.createItem(
+      final item = await c.createItem(
         draft(name: 'Bolt', quantity: 10).copyWith(location: 'Warehouse'),
       );
 
@@ -316,7 +319,7 @@ void main() {
 
     test('a new destination is folded into the location list', () async {
       final c = await newController();
-      final item = c.createItem(
+      final item = await c.createItem(
         draft(name: 'Bolt', quantity: 10).copyWith(location: 'Warehouse'),
       );
 
@@ -341,14 +344,14 @@ void main() {
   group('roll-ups', () {
     test('units and value are counted per location', () async {
       final c = await newController();
-      final bolt = c.createItem(
+      final bolt = await c.createItem(
         draft(
           name: 'Bolt',
           quantity: 10,
           unitCost: 100,
         ).copyWith(location: 'Warehouse'),
       );
-      c.createItem(
+      await c.createItem(
         draft(
           name: 'Nut',
           quantity: 4,
@@ -378,7 +381,7 @@ void main() {
     test('the breakdown survives a reload', () async {
       final repo = newRepository();
       final first = await controllerOver(repo);
-      final item = first.createItem(
+      final item = await first.createItem(
         draft(name: 'Bolt', quantity: 10).copyWith(location: 'Warehouse'),
       );
       first.recordTransfer(
@@ -422,7 +425,7 @@ void main() {
     test('a failed ledger write takes the stock change with it', () async {
       final repo = newRepository();
       final c = await controllerOver(repo);
-      final item = c.createItem(
+      final item = await c.createItem(
         draft(name: 'Bolt', quantity: 10).copyWith(location: 'Warehouse'),
       );
       await pumpWrites();

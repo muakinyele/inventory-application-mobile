@@ -37,8 +37,8 @@ void main() {
     test('creating one gives it an id and keeps the list sorted', () async {
       final c = await newController();
 
-      c.createSupplier(supplierDraft(name: 'Zenith Parts'));
-      c.createSupplier(supplierDraft(name: 'Apex Metals'));
+      await c.createSupplier(supplierDraft(name: 'Zenith Parts'));
+      await c.createSupplier(supplierDraft(name: 'Apex Metals'));
 
       expect(c.suppliers.map((s) => s.name), ['Apex Metals', 'Zenith Parts']);
       expect(c.suppliers.first.id, isNotEmpty);
@@ -46,8 +46,10 @@ void main() {
 
     test('an item can be linked to one and reads back its name', () async {
       final c = await newController();
-      final supplier = c.createSupplier(supplierDraft());
-      final item = c.createItem(draft().copyWith(supplierId: supplier.id));
+      final supplier = await c.createSupplier(supplierDraft());
+      final item = await c.createItem(
+        draft().copyWith(supplierId: supplier.id),
+      );
 
       expect(c.supplierNameFor(c.byId(item.id)!), 'Nexa Components');
       expect(c.itemCountForSupplier(supplier.id), 1);
@@ -55,8 +57,10 @@ void main() {
 
     test('deleting one unlinks its items but keeps the name as text', () async {
       final c = await newController();
-      final supplier = c.createSupplier(supplierDraft());
-      final item = c.createItem(draft().copyWith(supplierId: supplier.id));
+      final supplier = await c.createSupplier(supplierDraft());
+      final item = await c.createItem(
+        draft().copyWith(supplierId: supplier.id),
+      );
 
       c.deleteSupplier(supplier.id);
 
@@ -73,8 +77,8 @@ void main() {
     test('the unlinking survives a reload', () async {
       final repo = newRepository();
       final c = await controllerOver(repo);
-      final supplier = c.createSupplier(supplierDraft());
-      c.createItem(draft().copyWith(supplierId: supplier.id));
+      final supplier = await c.createSupplier(supplierDraft());
+      await c.createItem(draft().copyWith(supplierId: supplier.id));
       await pumpWrites();
 
       c.deleteSupplier(supplier.id);
@@ -89,9 +93,9 @@ void main() {
     test('editing keeps the id and persists', () async {
       final repo = newRepository();
       final c = await controllerOver(repo);
-      final supplier = c.createSupplier(supplierDraft(leadTime: 7));
+      final supplier = await c.createSupplier(supplierDraft(leadTime: 7));
 
-      c.updateSupplier(supplier.id, supplier.copyWith(leadTimeDays: 21));
+      await c.updateSupplier(supplier.id, supplier.copyWith(leadTimeDays: 21));
       await pumpWrites();
 
       final reloaded = await repo.load();
@@ -105,7 +109,7 @@ void main() {
       final repo = newRepository();
       final c = await controllerOver(repo);
 
-      c.createCustomer(customerDraft(tier: PriceTier.distributor));
+      await c.createCustomer(customerDraft(tier: PriceTier.distributor));
       await pumpWrites();
 
       expect(
@@ -122,7 +126,7 @@ void main() {
 
     test('deleting one removes it', () async {
       final c = await newController();
-      final customer = c.createCustomer(customerDraft());
+      final customer = await c.createCustomer(customerDraft());
 
       c.deleteCustomer(customer.id);
 
@@ -134,8 +138,8 @@ void main() {
     final repo = newRepository();
     final c = await controllerOver(repo);
 
-    c.createItem(draft(name: 'Loose'));
-    c.createItem(draft(name: 'Carton').copyWith(unitsPerPack: 24));
+    await c.createItem(draft(name: 'Loose'));
+    await c.createItem(draft(name: 'Carton').copyWith(unitsPerPack: 24));
     await pumpWrites();
 
     final items = (await repo.load()).items;

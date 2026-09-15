@@ -11,6 +11,7 @@ import 'package:stockpile/data/inventory_repository.dart';
 import 'package:stockpile/data/token_storage.dart';
 import 'package:stockpile/models/invoice.dart';
 import 'package:stockpile/models/item.dart';
+import 'package:stockpile/models/party.dart';
 import 'package:stockpile/models/purchase_order.dart';
 import 'package:stockpile/models/receipt.dart';
 import 'package:stockpile/models/sales_order.dart';
@@ -21,6 +22,10 @@ import 'package:stockpile/state/inventory_controller.dart';
 class _Server {
   final calls = <String>[];
   final bodies = <Map<String, dynamic>>[];
+
+  /// The last body sent to each route. `bodies.last` is not reliable once a
+  /// write triggers a follow-up — saving an item also writes the picker lists.
+  final lastBodyFor = <String, Map<String, dynamic>>{};
 
   /// The count the fake currently believes. Changed between calls to stage a
   /// second device having moved it.
@@ -33,7 +38,9 @@ class _Server {
     final route = '${request.method} ${request.url.path}';
     calls.add(route);
     if (request.body.isNotEmpty) {
-      bodies.add(jsonDecode(request.body) as Map<String, dynamic>);
+      final parsed = jsonDecode(request.body) as Map<String, dynamic>;
+      bodies.add(parsed);
+      lastBodyFor[route] = parsed;
     }
 
     if (failNext) {
@@ -256,6 +263,32 @@ class _Server {
           'issuedAt': '2026-09-15T10:00:00.000Z',
           'createdAt': '2026-09-15T10:00:00.000Z',
           'updatedAt': '2026-09-15T10:10:00.000Z',
+        },
+      });
+    }
+
+    if (route == 'POST /api/inventory/items') {
+      final body = jsonDecode(request.body) as Map<String, dynamic>;
+      return _ok({
+        'item': {..._item(quantity: 0), ...body, 'id': 'item-server-1'},
+      });
+    }
+
+    if (route.startsWith('PATCH /api/inventory/items/')) {
+      final body = jsonDecode(request.body) as Map<String, dynamic>;
+      return _ok({
+        'item': {..._item(quantity: quantity), ...body, 'id': 'i1'},
+      });
+    }
+
+    if (route == 'POST /api/inventory/suppliers') {
+      final body = jsonDecode(request.body) as Map<String, dynamic>;
+      return _ok({
+        'supplier': {
+          ...body,
+          'id': (body['id'] as String?)?.isNotEmpty == true
+              ? body['id']
+              : 'sup-server-1',
         },
       });
     }
@@ -779,6 +812,77 @@ void main() {
         reason: 'only the four actually bought',
       );
       expect(controller.byId('i1')!.quantity, 10);
+    });
+
+    test('a new item is added to the shared catalogue', () async {
+      final server = _Server();
+      final controller = await _controller(server);
+
+      final saved = await controller.createItem(
+        Item(
+          id: '',
+          name: 'Bolt',
+          quantity: 12,
+          location: 'Main',
+          createdAt: DateTime.utc(2026, 9, 15),
+          updatedAt: DateTime.utc(2026, 9, 15),
+        ),
+      );
+
+      expect(saved.id, 'item-server-1', reason: 'the server mints the id');
+      expect(controller.items.any((i) => i.id == 'item-server-1'), isTrue);
+      // The opening count goes with it, so the server books it in as stock
+      // arriving rather than it appearing from nowhere elsewhere.
+      expect(server.lastBodyFor['POST /api/inventory/items']!['quantity'], 12);
+    });
+
+    test('an edit never carries a quantity', () async {
+      // Counts move only through an adjustment, so each change has a movement
+      // behind it. A quantity here would be silently dropped.
+      final server = _Server();
+      final controller = await _controller(server);
+
+      await controller.updateItem(
+        'i1',
+        Item(
+          id: 'i1',
+          name: 'Widget renamed',
+          quantity: 999,
+          createdAt: DateTime.utc(2026, 9, 1),
+          updatedAt: DateTime.utc(2026, 9, 15),
+        ),
+      );
+
+      expect(
+        server.lastBodyFor['PATCH /api/inventory/items/i1']!.containsKey(
+          'quantity',
+        ),
+        isFalse,
+      );
+      expect(controller.byId('i1')!.name, 'Widget renamed');
+    });
+
+    test('a supplier edit keeps the id it was given', () async {
+      final server = _Server();
+      final controller = await _controller(server);
+
+      await controller.updateSupplier(
+        'sup-1',
+        Supplier(
+          id: '',
+          name: 'Acme',
+          createdAt: DateTime.utc(2026, 9, 1),
+          updatedAt: DateTime.utc(2026, 9, 15),
+        ),
+      );
+
+      // The editor builds a draft from the form and has no id in it; the
+      // caller's id is what identifies the row.
+      expect(
+        server.lastBodyFor['POST /api/inventory/suppliers']!['id'],
+        'sup-1',
+      );
+      expect(controller.suppliers.single.name, 'Acme');
     });
 
     test('nothing is shown before the server has agreed to it', () async {

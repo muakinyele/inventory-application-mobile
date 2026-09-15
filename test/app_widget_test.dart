@@ -146,7 +146,9 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      controller.createItem(draft(name: 'Bolt', quantity: 50, reorderLevel: 5));
+      await controller.createItem(
+        draft(name: 'Bolt', quantity: 50, reorderLevel: 5),
+      );
 
       await tester.pumpWidget(
         ChangeNotifierProvider.value(
@@ -414,7 +416,7 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(
+      final item = await controller.createItem(
         draft(name: 'Bolt', quantity: 20, unitCost: 100),
       );
       final order = await controller.createSalesOrder(
@@ -463,7 +465,7 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(
+      final item = await controller.createItem(
         draft(name: 'Bolt', quantity: 20, unitCost: 100),
       );
       await controller.issueReceipt(
@@ -501,7 +503,7 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(
+      final item = await controller.createItem(
         draft(name: 'Bolt', quantity: 20, unitCost: 100),
       );
       final receipt = (await controller.issueReceipt(
@@ -541,7 +543,9 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(draft(name: 'Bolt', quantity: 20));
+      final item = await controller.createItem(
+        draft(name: 'Bolt', quantity: 20),
+      );
       final receipt = (await controller.issueReceipt(
         lines: [
           ReceiptLine(
@@ -580,7 +584,7 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(
+      final item = await controller.createItem(
         draft(name: 'Bolt', quantity: 50, unitCost: 100),
       );
       final invoice = (await controller.issueInvoice(
@@ -626,7 +630,9 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(draft(name: 'Bolt', quantity: 20));
+      final item = await controller.createItem(
+        draft(name: 'Bolt', quantity: 20),
+      );
       final receipt = (await controller.issueReceipt(
         lines: [
           ReceiptLine(
@@ -661,7 +667,9 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(draft(name: 'Bolt', quantity: 20));
+      final item = await controller.createItem(
+        draft(name: 'Bolt', quantity: 20),
+      );
       final order = await controller.createSalesOrder(
         lines: [
           SalesOrderLine(
@@ -700,7 +708,7 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      controller.createItem(
+      await controller.createItem(
         draft(name: 'Bolt', quantity: 20, retailerPrice: 750),
       );
 
@@ -740,7 +748,7 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(
+      final item = await controller.createItem(
         draft(name: 'Bolt', quantity: 50, unitCost: 100),
       );
       final invoice = (await controller.issueInvoice(
@@ -782,7 +790,7 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(
+      final item = await controller.createItem(
         draft(name: 'Bolt', quantity: 50, unitCost: 100),
       );
       final invoice = (await controller.issueInvoice(
@@ -821,7 +829,7 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(
+      final item = await controller.createItem(
         draft(name: 'Bolt', quantity: 50, unitCost: 100),
       );
       final invoice = (await controller.issueInvoice(
@@ -867,7 +875,7 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(
+      final item = await controller.createItem(
         draft(name: 'Bolt', quantity: 50, unitCost: 100),
       );
       final invoice = (await controller.issueInvoice(
@@ -908,7 +916,7 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(
+      final item = await controller.createItem(
         draft(name: 'Bolt', quantity: 50, unitCost: 100),
       );
       final order = await controller.createSalesOrder(
@@ -966,7 +974,7 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(
+      final item = await controller.createItem(
         draft(name: 'Bolt', quantity: 50, unitCost: 100),
       );
       await controller.issueReceipt(
@@ -1037,7 +1045,7 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(
+      final item = await controller.createItem(
         draft(name: 'Bolt', quantity: 10).copyWith(location: 'Warehouse'),
       );
       controller.recordTransfer(
@@ -1080,7 +1088,7 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(
+      final item = await controller.createItem(
         draft(name: 'Bolt', quantity: 10).copyWith(location: 'Warehouse'),
       );
       controller.recordTransfer(
@@ -1118,7 +1126,7 @@ void main() {
       addTearDown(tester.view.reset);
 
       final controller = await newController();
-      final item = controller.createItem(
+      final item = await controller.createItem(
         draft(name: 'Bolt', quantity: 10).copyWith(location: 'Warehouse'),
       );
 
@@ -1250,7 +1258,7 @@ void main() {
       final controller = await _seededController();
       controller.eraseAll();
       final now = DateTime.now();
-      controller.createItem(
+      await controller.createItem(
         Item(
           id: '',
           name: 'Well stocked',

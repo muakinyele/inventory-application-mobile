@@ -147,10 +147,7 @@ void main() {
     final fake = _Fake()..failItems = true;
     final api = await _api(fake);
 
-    expect(
-      () => loadSharedSnapshot(api),
-      throwsA(isA<AuthApiException>()),
-    );
+    expect(() => loadSharedSnapshot(api), throwsA(isA<AuthApiException>()));
   });
 
   test('document references are the server\'s to allocate', () async {

@@ -30,7 +30,7 @@ void main() {
         taxRate: 0.075,
       ),
     );
-    final item = c.createItem(
+    final item = await c.createItem(
       draft(name: 'Bolt', quantity: 50, unitCost: 100, sku: 'B-1'),
     );
 
@@ -63,7 +63,7 @@ void main() {
   test('an overdue invoice renders', () async {
     TestWidgetsFlutterBinding.ensureInitialized();
     final c = await newController();
-    final item = c.createItem(draft(quantity: 50));
+    final item = await c.createItem(draft(quantity: 50));
     final invoice = (await c.issueInvoice(
       lines: [line(item.id)],
       dueAt: DateTime.now().subtract(const Duration(days: 10)),
@@ -78,7 +78,7 @@ void main() {
     'the CSV carries the balance and escapes what would break a row',
     () async {
       final c = await newController();
-      final item = c.createItem(draft(name: 'Bolt, 10mm', quantity: 50));
+      final item = await c.createItem(draft(name: 'Bolt, 10mm', quantity: 50));
       final invoice = (await c.issueInvoice(
         lines: [line(item.id, name: 'Bolt, 10mm')],
         notes: 'Said "invoice it"',
@@ -100,7 +100,7 @@ void main() {
 
   test('the filename names the invoice', () async {
     final c = await newController();
-    final item = c.createItem(draft(quantity: 50));
+    final item = await c.createItem(draft(quantity: 50));
     final invoice = (await c.issueInvoice(lines: [line(item.id)]))!;
 
     final name = InvoiceDocument(invoice, c.settings).filename('pdf');

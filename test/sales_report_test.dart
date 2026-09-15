@@ -86,7 +86,7 @@ void main() {
   group('figures', () {
     test('a counter sale reports revenue, cost, profit and margin', () async {
       final c = await newController();
-      final item = c.createItem(
+      final item = await c.createItem(
         draft(name: 'Bolt', quantity: 50, unitCost: 100, sku: 'B-1'),
       );
       await c.issueReceipt(
@@ -122,7 +122,7 @@ void main() {
     test('revenue is stated before tax', () async {
       final c = await newController();
       c.updateSettings(c.settings.copyWith(taxRate: 0.1));
-      final item = c.createItem(draft(quantity: 50, unitCost: 100));
+      final item = await c.createItem(draft(quantity: 50, unitCost: 100));
       await c.issueReceipt(
         lines: [
           ReceiptLine(
@@ -143,7 +143,7 @@ void main() {
       'a credit sale is revenue in full, with the balance outstanding',
       () async {
         final c = await newController();
-        final item = c.createItem(draft(quantity: 50, unitCost: 100));
+        final item = await c.createItem(draft(quantity: 50, unitCost: 100));
         final invoice = (await c.issueInvoice(
           lines: [
             InvoiceLine(
@@ -172,7 +172,7 @@ void main() {
 
     test('an invoice payment is never counted as a second sale', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 50, unitCost: 100));
+      final item = await c.createItem(draft(quantity: 50, unitCost: 100));
       final invoice = (await c.issueInvoice(
         lines: [
           InvoiceLine(
@@ -199,7 +199,7 @@ void main() {
 
     test('a receipt for a sales order is not counted twice either', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 50, unitCost: 100));
+      final item = await c.createItem(draft(quantity: 50, unitCost: 100));
       final order = await c.createSalesOrder(
         lines: [
           SalesOrderLine(
@@ -230,7 +230,7 @@ void main() {
 
     test('all three sources add up without overlapping', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 200, unitCost: 100));
+      final item = await c.createItem(draft(quantity: 200, unitCost: 100));
 
       // Counter.
       await c.issueReceipt(
@@ -287,7 +287,7 @@ void main() {
 
     test('a refund nets down both units and revenue', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 50, unitCost: 100));
+      final item = await c.createItem(draft(quantity: 50, unitCost: 100));
       final receipt = (await c.issueReceipt(
         lines: [
           ReceiptLine(
@@ -311,7 +311,7 @@ void main() {
 
     test('voided and cancelled documents are excluded entirely', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 50, unitCost: 100));
+      final item = await c.createItem(draft(quantity: 50, unitCost: 100));
       final receipt = (await c.issueReceipt(
         lines: [
           ReceiptLine(
@@ -347,8 +347,12 @@ void main() {
       'a bill-level discount is shared across the items it came off',
       () async {
         final c = await newController();
-        final a = c.createItem(draft(name: 'A', quantity: 50, unitCost: 10));
-        final b = c.createItem(draft(name: 'B', quantity: 50, unitCost: 10));
+        final a = await c.createItem(
+          draft(name: 'A', quantity: 50, unitCost: 10),
+        );
+        final b = await c.createItem(
+          draft(name: 'B', quantity: 50, unitCost: 10),
+        );
         await c.issueReceipt(
           lines: [
             ReceiptLine(
@@ -380,10 +384,12 @@ void main() {
 
     test('items are ranked by gross profit', () async {
       final c = await newController();
-      final thin = c.createItem(
+      final thin = await c.createItem(
         draft(name: 'Thin', quantity: 100, unitCost: 90),
       );
-      final fat = c.createItem(draft(name: 'Fat', quantity: 100, unitCost: 10));
+      final fat = await c.createItem(
+        draft(name: 'Fat', quantity: 100, unitCost: 10),
+      );
       await c.issueReceipt(
         lines: [
           ReceiptLine(
@@ -408,7 +414,7 @@ void main() {
 
     test('a sale outside the period is not in it', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 50, unitCost: 100));
+      final item = await c.createItem(draft(quantity: 50, unitCost: 100));
       await c.issueReceipt(
         lines: [
           ReceiptLine(
@@ -431,7 +437,7 @@ void main() {
 
     test('a loss reports negative profit and a negative margin', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 50, unitCost: 800));
+      final item = await c.createItem(draft(quantity: 50, unitCost: 800));
       await c.issueReceipt(
         lines: [
           ReceiptLine(
@@ -454,7 +460,7 @@ void main() {
     test('the PDF renders', () async {
       TestWidgetsFlutterBinding.ensureInitialized();
       final c = await newController();
-      final item = c.createItem(draft(quantity: 50, unitCost: 100));
+      final item = await c.createItem(draft(quantity: 50, unitCost: 100));
       await c.issueReceipt(
         lines: [
           ReceiptLine(
@@ -474,7 +480,7 @@ void main() {
 
     test('the workbook holds real numbers, not formatted text', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 50, unitCost: 100));
+      final item = await c.createItem(draft(quantity: 50, unitCost: 100));
       await c.issueReceipt(
         lines: [
           ReceiptLine(

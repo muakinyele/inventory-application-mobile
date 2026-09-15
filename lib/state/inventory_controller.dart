@@ -180,7 +180,10 @@ class InventoryController extends ChangeNotifier {
 
   // --- Item mutations ------------------------------------------------------
 
-  Item createItem(Item draft) {
+  Future<Item> createItem(Item draft) async {
+    final api = _api;
+    if (api != null) return _createItemOnServer(api, draft);
+
     final now = DateTime.now();
     final item = Item(
       id: _uid(),
@@ -225,7 +228,10 @@ class InventoryController extends ChangeNotifier {
     return item;
   }
 
-  void updateItem(String id, Item draft) {
+  Future<void> updateItem(String id, Item draft) async {
+    final api = _api;
+    if (api != null) return _updateItemOnServer(api, id, draft);
+
     final existing = byId(id);
     if (existing == null) return;
 
@@ -255,7 +261,10 @@ class InventoryController extends ChangeNotifier {
     });
   }
 
-  void deleteItem(String id) {
+  Future<void> deleteItem(String id) async {
+    final api = _api;
+    if (api != null) return _deleteItemOnServer(api, id);
+
     final existing = byId(id);
     if (existing == null) return;
 
@@ -781,6 +790,161 @@ class InventoryController extends ChangeNotifier {
     }
   }
 
+  /// Adds an item to the shared catalogue.
+  ///
+  /// The opening quantity goes with it and the server books it in as stock
+  /// arriving, so a new item's count has a movement behind it like every
+  /// other — rather than appearing from nowhere on the other devices.
+  Future<Item> _createItemOnServer(InventoryApi api, Item draft) async {
+    try {
+      final saved = await api.createItem(draft);
+      _items = [saved, ..._items.where((i) => i.id != saved.id)];
+      if (_learnOptions(saved)) await _persistSettingsTo(api);
+      lastWriteError = null;
+      notifyListeners();
+      return saved;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not add the item: $error');
+      notifyListeners();
+      return draft;
+    }
+  }
+
+  /// Edits an item's details. Never its quantity — that only moves through an
+  /// adjustment, so the change carries a movement explaining it.
+  Future<void> _updateItemOnServer(
+    InventoryApi api,
+    String id,
+    Item draft,
+  ) async {
+    final existing = byId(id);
+    if (existing == null) return;
+
+    try {
+      final saved = await api.updateItem(id, draft);
+      _items = _items.map((i) => i.id == id ? saved : i).toList();
+      if (_learnOptions(saved)) await _persistSettingsTo(api);
+      lastWriteError = null;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not save the item: $error');
+    }
+    notifyListeners();
+  }
+
+  Future<void> _deleteItemOnServer(InventoryApi api, String id) async {
+    try {
+      await api.deleteItem(id);
+      _items = _items.where((i) => i.id != id).toList();
+      _levels.remove(id);
+      // Movements are left alone. They carry the item's name, so the ledger
+      // stays readable, and deleting them would erase the record of stock that
+      // genuinely moved.
+      lastWriteError = null;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not delete the item: $error');
+    }
+    notifyListeners();
+  }
+
+  /// Writes the picker lists back after an item taught us a new one.
+  ///
+  /// Shared, these belong to the workspace rather than the device: a category
+  /// somebody types on one screen has to appear in everybody else's picker.
+  Future<void> _persistSettingsTo(InventoryApi api) async {
+    try {
+      await api.saveCategories([
+        for (final name in _settings.categories)
+          (name: name, swatchIndex: _settings.categoryColors[name] ?? 0),
+      ]);
+      await api.saveLookupValues('location', _settings.locations);
+      await api.saveLookupValues('unit', _settings.units);
+    } catch (error) {
+      // The item itself saved; the picker will catch up on the next load.
+      debugPrint('Stockpile: could not save the picker lists: $error');
+    }
+  }
+
+  /// Creates or edits a supplier.
+  ///
+  /// One method for both, because the endpoint is an upsert: a blank id means
+  /// the server mints one, and an id it recognises is an edit. Splitting them
+  /// here would only be two names for the same request.
+  Future<Supplier> _saveSupplierOnServer(
+    InventoryApi api,
+    Supplier draft, {
+    String? id,
+  }) async {
+    // Rebuilt rather than copyWith: the id is the one field copyWith does not
+    // take, because on device it was never editable.
+    final payload = id == null
+        ? draft
+        : Supplier(
+            id: id,
+            name: draft.name,
+            contactName: draft.contactName,
+            phone: draft.phone,
+            email: draft.email,
+            address: draft.address,
+            leadTimeDays: draft.leadTimeDays,
+            paymentTerms: draft.paymentTerms,
+            notes: draft.notes,
+            archived: draft.archived,
+            createdAt: draft.createdAt,
+            updatedAt: draft.updatedAt,
+          );
+    try {
+      final saved = await api.saveSupplier(payload);
+      _suppliers = [saved, ..._suppliers.where((s) => s.id != saved.id)]
+        ..sort(_supplierOrder);
+      lastWriteError = null;
+      notifyListeners();
+      return saved;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not save the supplier: $error');
+      notifyListeners();
+      return payload;
+    }
+  }
+
+  Future<Customer> _saveCustomerOnServer(
+    InventoryApi api,
+    Customer draft, {
+    String? id,
+  }) async {
+    final payload = id == null
+        ? draft
+        : Customer(
+            id: id,
+            name: draft.name,
+            contactName: draft.contactName,
+            phone: draft.phone,
+            email: draft.email,
+            address: draft.address,
+            priceTier: draft.priceTier,
+            notes: draft.notes,
+            archived: draft.archived,
+            createdAt: draft.createdAt,
+            updatedAt: draft.updatedAt,
+          );
+    try {
+      final saved = await api.saveCustomer(payload);
+      _customers = [saved, ..._customers.where((c) => c.id != saved.id)]
+        ..sort(_customerOrder);
+      lastWriteError = null;
+      notifyListeners();
+      return saved;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not save the customer: $error');
+      notifyListeners();
+      return payload;
+    }
+  }
+
   /// Re-reads what a document just changed.
   ///
   /// Items and movements only. Per-bin levels are read by the screens that
@@ -910,7 +1074,10 @@ class InventoryController extends ChangeNotifier {
 
   // --- Suppliers -----------------------------------------------------------
 
-  Supplier createSupplier(Supplier draft) {
+  Future<Supplier> createSupplier(Supplier draft) async {
+    final api = _api;
+    if (api != null) return _saveSupplierOnServer(api, draft);
+
     final now = DateTime.now();
     final supplier = draft.copyWith(updatedAt: now);
     final created = Supplier(
@@ -933,7 +1100,13 @@ class InventoryController extends ChangeNotifier {
     return created;
   }
 
-  void updateSupplier(String id, Supplier draft) {
+  Future<void> updateSupplier(String id, Supplier draft) async {
+    final api = _api;
+    if (api != null) {
+      await _saveSupplierOnServer(api, draft, id: id);
+      return;
+    }
+
     if (supplierById(id) == null) return;
     final updated = draft.copyWith(updatedAt: DateTime.now());
     _suppliers = _suppliers.map((s) => s.id == id ? updated : s).toList()
@@ -972,7 +1145,10 @@ class InventoryController extends ChangeNotifier {
 
   // --- Customers -----------------------------------------------------------
 
-  Customer createCustomer(Customer draft) {
+  Future<Customer> createCustomer(Customer draft) async {
+    final api = _api;
+    if (api != null) return _saveCustomerOnServer(api, draft);
+
     final now = DateTime.now();
     final created = Customer(
       id: _uid(),
@@ -993,7 +1169,13 @@ class InventoryController extends ChangeNotifier {
     return created;
   }
 
-  void updateCustomer(String id, Customer draft) {
+  Future<void> updateCustomer(String id, Customer draft) async {
+    final api = _api;
+    if (api != null) {
+      await _saveCustomerOnServer(api, draft, id: id);
+      return;
+    }
+
     if (customerById(id) == null) return;
     final updated = draft.copyWith(updatedAt: DateTime.now());
     _customers = _customers.map((c) => c.id == id ? updated : c).toList()

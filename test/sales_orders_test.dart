@@ -57,7 +57,7 @@ Future<(InventoryController, SalesOrder, String)> confirmedSale({
   double price = 500,
 }) async {
   final c = await newController();
-  final item = c.createItem(
+  final item = await c.createItem(
     draft(name: 'Bolt', quantity: onHand, unitCost: unitCost),
   );
   final order = await c.createSalesOrder(
@@ -148,7 +148,9 @@ void main() {
       'the tier is taken from the customer and frozen on the sale',
       () async {
         final c = await newController();
-        final buyer = c.createCustomer(customer(tier: PriceTier.distributor));
+        final buyer = await c.createCustomer(
+          customer(tier: PriceTier.distributor),
+        );
 
         final order = await c.createSalesOrder(customerId: buyer.id);
 
@@ -156,7 +158,7 @@ void main() {
         expect(order.customerName, 'Bello Stores');
 
         // Re-tiering the customer must not rewrite a sale already raised.
-        c.updateCustomer(
+        await c.updateCustomer(
           buyer.id,
           c.customerById(buyer.id)!.copyWith(priceTier: PriceTier.retailer),
         );
@@ -339,7 +341,7 @@ void main() {
     test('a sale survives a full reload, counter included', () async {
       final repo = newRepository();
       final first = await controllerOver(repo);
-      final item = first.createItem(draft(name: 'Bolt', quantity: 20));
+      final item = await first.createItem(draft(name: 'Bolt', quantity: 20));
       final order = await first.createSalesOrder(
         notes: 'Deliver to the back gate',
         lines: [line(item.id, 'Bolt', quantity: 8, price: 750)],

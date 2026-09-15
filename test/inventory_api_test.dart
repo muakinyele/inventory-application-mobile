@@ -133,7 +133,7 @@ void main() {
       // be silently dropped, which is worse than not sending it.
       fake.respond = (_) => {'item': _item()};
 
-      await api.updateItem(Item.fromJson(_item(quantity: 99)));
+      await api.updateItem('i1', Item.fromJson(_item(quantity: 99)));
 
       expect(fake.bodies.single.containsKey('quantity'), isFalse);
       expect(fake.bodies.single['name'], 'Widget');

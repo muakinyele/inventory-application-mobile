@@ -28,7 +28,7 @@ void main() {
   group('issuing', () {
     test('a counter sale takes the stock off the shelf', () async {
       final c = await newController();
-      final item = c.createItem(
+      final item = await c.createItem(
         draft(name: 'Bolt', quantity: 20, unitCost: 100),
       );
 
@@ -47,7 +47,7 @@ void main() {
 
     test('references run in their own sequence and are never reused', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 50));
+      final item = await c.createItem(draft(quantity: 50));
 
       final first = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt')],
@@ -67,7 +67,7 @@ void main() {
 
     test('the ledger records the sale against the receipt', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
 
       final receipt = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', quantity: 4)],
@@ -83,7 +83,7 @@ void main() {
 
     test('a line is trimmed to what is actually on the shelf', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 5));
+      final item = await c.createItem(draft(quantity: 5));
 
       final receipt = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', quantity: 9, price: 100)],
@@ -96,7 +96,7 @@ void main() {
 
     test('two lines for one item draw down the same stock', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 5));
+      final item = await c.createItem(draft(quantity: 5));
 
       final receipt = (await c.issueReceipt(
         lines: [
@@ -112,7 +112,7 @@ void main() {
 
     test('nothing on the shelf means no receipt at all', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 0));
+      final item = await c.createItem(draft(quantity: 0));
 
       expect(
         await c.issueReceipt(lines: [receiptLine(item.id, 'Bolt')]),
@@ -123,13 +123,13 @@ void main() {
 
     test('cost of goods is banked at the average when it leaves', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 10, unitCost: 120));
+      final item = await c.createItem(draft(quantity: 10, unitCost: 120));
 
       final receipt = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', quantity: 3, price: 500)],
       ))!;
       // A later cost change must not rewrite what the sale actually cost.
-      c.updateItem(item.id, c.byId(item.id)!.copyWith(unitCost: 900));
+      await c.updateItem(item.id, c.byId(item.id)!.copyWith(unitCost: 900));
 
       expect(c.receiptById(receipt.id)!.costOfGoods, 360);
       expect(c.receiptById(receipt.id)!.grossProfit, 1140);
@@ -137,7 +137,7 @@ void main() {
 
     test('a receipt against a sale moves no stock', () async {
       final c = await newController();
-      final item = c.createItem(draft(name: 'Bolt', quantity: 20));
+      final item = await c.createItem(draft(name: 'Bolt', quantity: 20));
       final order = await c.createSalesOrder(
         lines: [
           SalesOrderLine(
@@ -169,7 +169,7 @@ void main() {
 
     test('a sale with nothing sent has nothing to receipt', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
       final order = await c.createSalesOrder(
         lines: [
           SalesOrderLine(
@@ -190,7 +190,7 @@ void main() {
     test('discounts come off before tax', () async {
       final c = await newController();
       c.updateSettings(c.settings.copyWith(taxRate: 0.1, taxLabel: 'VAT'));
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
 
       final receipt = (await c.issueReceipt(
         lines: [
@@ -209,7 +209,7 @@ void main() {
 
     test('a discount bigger than the goods cannot go negative', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
 
       final receipt = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', quantity: 1, price: 100)],
@@ -222,7 +222,7 @@ void main() {
 
     test('an overpayment shows as change, not as a bigger total', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
 
       final receipt = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', quantity: 2, price: 500)],
@@ -237,7 +237,7 @@ void main() {
 
     test('an account sale is left owing and can be settled', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
 
       final receipt = (await c.issueReceipt(
         method: PaymentMethod.credit,
@@ -261,7 +261,7 @@ void main() {
     test('the receipt keeps the tax rate it was issued at', () async {
       final c = await newController();
       c.updateSettings(c.settings.copyWith(taxRate: 0.075));
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
 
       final receipt = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', quantity: 1, price: 1000)],
@@ -278,7 +278,7 @@ void main() {
       'goods coming back go on the shelf and net the receipt down',
       () async {
         final c = await newController();
-        final item = c.createItem(draft(quantity: 20, unitCost: 100));
+        final item = await c.createItem(draft(quantity: 20, unitCost: 100));
         final receipt = (await c.issueReceipt(
           lines: [receiptLine(item.id, 'Bolt', quantity: 4, price: 500)],
           amountPaid: 2000,
@@ -301,7 +301,7 @@ void main() {
 
     test('refunding everything closes the receipt', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
       final receipt = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', quantity: 4, price: 500)],
       ))!;
@@ -318,7 +318,7 @@ void main() {
     test('a refund gives back its share of discount and tax', () async {
       final c = await newController();
       c.updateSettings(c.settings.copyWith(taxRate: 0.1));
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
       final receipt = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', quantity: 4, price: 500)],
         discount: 400,
@@ -336,7 +336,7 @@ void main() {
 
     test('a refund without restocking returns money but no stock', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
       final receipt = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', quantity: 4, price: 500)],
       ))!;
@@ -350,7 +350,7 @@ void main() {
 
     test('a refund never exceeds what is left un-refunded', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
       final receipt = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', quantity: 3, price: 500)],
       ))!;
@@ -367,7 +367,7 @@ void main() {
   group('voids', () {
     test('a void puts back exactly what the receipt took', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
       final receipt = (await c.issueReceipt(
         lines: [
           receiptLine(item.id, 'Bolt', quantity: 3, id: 'a'),
@@ -388,7 +388,7 @@ void main() {
 
     test('voiding a receipt against a sale moves no stock', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
       final order = await c.createSalesOrder(
         lines: [
           SalesOrderLine(
@@ -415,7 +415,7 @@ void main() {
 
     test('a receipt with refunds against it cannot be voided', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
       final receipt = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', quantity: 4)],
       ))!;
@@ -427,7 +427,7 @@ void main() {
 
     test('only a voided receipt can be deleted', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
       final receipt = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt')],
       ))!;
@@ -444,7 +444,7 @@ void main() {
   group('takings', () {
     test('voids and refunds are netted out of the day', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 50));
+      final item = await c.createItem(draft(quantity: 50));
 
       await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', quantity: 2, price: 500)],
@@ -473,7 +473,7 @@ void main() {
     test('receipts survive a reload, refunds and all', () async {
       final repo = newRepository();
       final c = await controllerOver(repo);
-      final item = c.createItem(draft(quantity: 20, unitCost: 100));
+      final item = await c.createItem(draft(quantity: 20, unitCost: 100));
       final receipt = (await c.issueReceipt(
         method: PaymentMethod.transfer,
         lines: [
@@ -509,7 +509,7 @@ void main() {
     test('erasing everything clears the receipt book', () async {
       final repo = newRepository();
       final c = await controllerOver(repo);
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
       await c.issueReceipt(lines: [receiptLine(item.id, 'Bolt')]);
       await pumpWrites();
 
@@ -531,7 +531,7 @@ void main() {
           taxLabel: 'VAT',
         ),
       );
-      final item = c.createItem(
+      final item = await c.createItem(
         draft(name: 'Roofing bolt', quantity: 20, unitCost: 100, sku: 'RB-1'),
       );
       final receipt = (await c.issueReceipt(
@@ -571,7 +571,7 @@ void main() {
               'this receipt and its original packaging.',
         ),
       );
-      final item = c.createItem(
+      final item = await c.createItem(
         draft(name: 'Galvanised roofing sheet, 3 metre, heavy gauge'),
       );
       final receipt = (await c.issueReceipt(
@@ -598,7 +598,7 @@ void main() {
       'a word wider than the paper is cut rather than overhanging',
       () async {
         final c = await newController();
-        final item = c.createItem(draft(name: 'A' * 95));
+        final item = await c.createItem(draft(name: 'A' * 95));
         final receipt = (await c.issueReceipt(
           lines: [receiptLine(item.id, 'A' * 95)],
         ))!;
@@ -637,7 +637,7 @@ void main() {
 
     test('CSV escapes a value that would break the row', () async {
       final c = await newController();
-      final item = c.createItem(draft(name: 'Bolt, 10mm', quantity: 20));
+      final item = await c.createItem(draft(name: 'Bolt, 10mm', quantity: 20));
       final receipt = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt, 10mm')],
         notes: 'Said "keep the change"',

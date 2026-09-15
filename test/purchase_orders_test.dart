@@ -27,7 +27,7 @@ Future<(InventoryController, PurchaseOrder, String)> placedOrder({
   double cost = 100,
 }) async {
   final c = await newController();
-  final item = c.createItem(
+  final item = await c.createItem(
     draft(name: 'Bolt', quantity: onHand, unitCost: existingCost),
   );
   final order = await c.createPurchaseOrder(
@@ -85,7 +85,7 @@ void main() {
 
     test('the expected date defaults from the supplier lead time', () async {
       final c = await newController();
-      final supplier = c.createSupplier(
+      final supplier = await c.createSupplier(
         Supplier(
           id: '',
           name: 'Nexa',
@@ -216,7 +216,7 @@ void main() {
   test('orders, lines and counters survive a reload', () async {
     final repo = newRepository();
     final c = await controllerOver(repo);
-    final item = c.createItem(draft(name: 'Bolt', quantity: 0));
+    final item = await c.createItem(draft(name: 'Bolt', quantity: 0));
     final order = await c.createPurchaseOrder(
       lines: [line(item.id, 'Bolt', quantity: 8, cost: 50)],
       notes: 'Urgent',

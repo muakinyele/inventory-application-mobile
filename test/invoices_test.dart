@@ -26,7 +26,7 @@ void main() {
   group('issuing', () {
     test('a credit sale takes stock and books the money as owed', () async {
       final c = await newController();
-      final item = c.createItem(
+      final item = await c.createItem(
         draft(name: 'Bolt', quantity: 20, unitCost: 100),
       );
 
@@ -48,7 +48,7 @@ void main() {
 
     test('references run in their own sequence', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 50));
+      final item = await c.createItem(draft(quantity: 50));
 
       final first = (await c.issueInvoice(
         lines: [invoiceLine(item.id, 'Bolt')],
@@ -63,7 +63,7 @@ void main() {
 
     test('the ledger records the sale against the invoice', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
 
       final invoice = (await c.issueInvoice(
         lines: [invoiceLine(item.id, 'Bolt', quantity: 5)],
@@ -79,7 +79,7 @@ void main() {
 
     test('a line is trimmed to what is on the shelf', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 3));
+      final item = await c.createItem(draft(quantity: 3));
 
       final invoice = (await c.issueInvoice(
         lines: [invoiceLine(item.id, 'Bolt', quantity: 9, price: 100)],
@@ -91,7 +91,7 @@ void main() {
 
     test('an invoice against a sale moves no stock', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
       final order = await c.createSalesOrder(
         lines: [
           SalesOrderLine(
@@ -121,7 +121,7 @@ void main() {
   group('payment', () {
     test('paying issues a receipt and brings the balance down', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20, unitCost: 100));
+      final item = await c.createItem(draft(quantity: 20, unitCost: 100));
       final invoice = (await c.issueInvoice(
         lines: [invoiceLine(item.id, 'Bolt', quantity: 4, price: 500)],
       ))!;
@@ -152,7 +152,7 @@ void main() {
 
     test('paying it off in full closes the invoice', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
       final invoice = (await c.issueInvoice(
         lines: [invoiceLine(item.id, 'Bolt', quantity: 4, price: 500)],
       ))!;
@@ -171,7 +171,7 @@ void main() {
 
     test('a payment never exceeds the balance', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
       final invoice = (await c.issueInvoice(
         lines: [invoiceLine(item.id, 'Bolt', quantity: 4, price: 500)],
       ))!;
@@ -186,7 +186,7 @@ void main() {
 
     test('a settled invoice takes no further payment', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
       final invoice = (await c.issueInvoice(
         lines: [invoiceLine(item.id, 'Bolt', quantity: 4, price: 500)],
       ))!;
@@ -198,7 +198,7 @@ void main() {
 
     test('takings count the money paid, not the invoice value', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
       final invoice = (await c.issueInvoice(
         lines: [invoiceLine(item.id, 'Bolt', quantity: 4, price: 500)],
       ))!;
@@ -217,7 +217,7 @@ void main() {
   group('overdue', () {
     test('an invoice past its due date with money owing is overdue', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
       final invoice = (await c.issueInvoice(
         lines: [invoiceLine(item.id, 'Bolt')],
         dueAt: DateTime.now().subtract(const Duration(days: 3)),
@@ -230,7 +230,7 @@ void main() {
 
     test('paying it clears the overdue flag', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
       final invoice = (await c.issueInvoice(
         lines: [invoiceLine(item.id, 'Bolt', quantity: 4, price: 500)],
         dueAt: DateTime.now().subtract(const Duration(days: 3)),
@@ -246,7 +246,7 @@ void main() {
   group('cancellation', () {
     test('cancelling puts back exactly what the invoice took', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
       final invoice = (await c.issueInvoice(
         lines: [
           invoiceLine(item.id, 'Bolt', quantity: 3, id: 'a'),
@@ -268,7 +268,7 @@ void main() {
 
     test('an invoice with a payment against it cannot be cancelled', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
       final invoice = (await c.issueInvoice(
         lines: [invoiceLine(item.id, 'Bolt', quantity: 4, price: 500)],
       ))!;
@@ -280,7 +280,7 @@ void main() {
 
     test('only a cancelled invoice can be deleted', () async {
       final c = await newController();
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
       final invoice = (await c.issueInvoice(
         lines: [invoiceLine(item.id, 'Bolt')],
       ))!;
@@ -298,7 +298,7 @@ void main() {
     test('invoices and their payments survive a reload', () async {
       final repo = newRepository();
       final c = await controllerOver(repo);
-      final item = c.createItem(draft(quantity: 20, unitCost: 100));
+      final item = await c.createItem(draft(quantity: 20, unitCost: 100));
       final invoice = (await c.issueInvoice(
         lines: [
           invoiceLine(item.id, 'Bolt', quantity: 4, price: 500, discount: 100),
@@ -332,7 +332,7 @@ void main() {
     test('erasing everything clears the invoice book', () async {
       final repo = newRepository();
       final c = await controllerOver(repo);
-      final item = c.createItem(draft(quantity: 20));
+      final item = await c.createItem(draft(quantity: 20));
       await c.issueInvoice(lines: [invoiceLine(item.id, 'Bolt')]);
       await pumpWrites();
 
