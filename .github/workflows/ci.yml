@@ -160,6 +160,15 @@ jobs:
     timeout-minutes: 40
     # No point burning 40 minutes on an image whose contents already failed.
     needs: [client, api]
+    # Skipped on main, where the deploy workflow's `publish` job builds the
+    # same two images minutes later and actually pushes them. Building here as
+    # well meant the web image — the slow one — was built twice per merge, on
+    # top of the run that already passed on the pull request.
+    #
+    # Pull requests still build and smoke-test, which is where it matters:
+    # a broken Dockerfile is caught before merge, not after. A direct push to
+    # main skips this, and `publish` failing is then the signal.
+    if: github.event_name != 'push' || github.ref_name != 'main'
 
     strategy:
       fail-fast: false
