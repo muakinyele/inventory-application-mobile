@@ -34,11 +34,11 @@ void main() {
       draft(name: 'Bolt', quantity: 50, unitCost: 100, sku: 'B-1'),
     );
 
-    final unpaid = c.issueInvoice(
+    final unpaid = (await c.issueInvoice(
       lines: [line(item.id)],
       termDays: 30,
       terms: '30 days net',
-    )!;
+    ))!;
     var bytes = await InvoiceDocument(unpaid, c.settings).toPdf();
     expect(String.fromCharCodes(bytes.take(5)), '%PDF-');
     expect(bytes.length, greaterThan(1000));
@@ -54,7 +54,7 @@ void main() {
     ).toPdf();
     expect(String.fromCharCodes(bytes.take(5)), '%PDF-');
 
-    final other = c.issueInvoice(lines: [line(item.id, id: 'x')])!;
+    final other = (await c.issueInvoice(lines: [line(item.id, id: 'x')]))!;
     c.cancelInvoice(other.id, reason: 'Duplicate');
     bytes = await InvoiceDocument(c.invoiceById(other.id)!, c.settings).toPdf();
     expect(String.fromCharCodes(bytes.take(5)), '%PDF-');
@@ -64,10 +64,10 @@ void main() {
     TestWidgetsFlutterBinding.ensureInitialized();
     final c = await newController();
     final item = c.createItem(draft(quantity: 50));
-    final invoice = c.issueInvoice(
+    final invoice = (await c.issueInvoice(
       lines: [line(item.id)],
       dueAt: DateTime.now().subtract(const Duration(days: 10)),
-    )!;
+    ))!;
 
     expect(invoice.isOverdue, isTrue);
     final bytes = await InvoiceDocument(invoice, c.settings).toPdf();
@@ -79,10 +79,10 @@ void main() {
     () async {
       final c = await newController();
       final item = c.createItem(draft(name: 'Bolt, 10mm', quantity: 50));
-      final invoice = c.issueInvoice(
+      final invoice = (await c.issueInvoice(
         lines: [line(item.id, name: 'Bolt, 10mm')],
         notes: 'Said "invoice it"',
-      )!;
+      ))!;
       c.payInvoice(invoice.id, 500);
 
       final csv = invoicesToCsv([c.invoiceById(invoice.id)!]);
@@ -101,7 +101,7 @@ void main() {
   test('the filename names the invoice', () async {
     final c = await newController();
     final item = c.createItem(draft(quantity: 50));
-    final invoice = c.issueInvoice(lines: [line(item.id)])!;
+    final invoice = (await c.issueInvoice(lines: [line(item.id)]))!;
 
     final name = InvoiceDocument(invoice, c.settings).filename('pdf');
     expect(name, startsWith(invoice.reference));

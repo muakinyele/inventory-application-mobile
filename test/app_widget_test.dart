@@ -583,7 +583,7 @@ void main() {
       final item = controller.createItem(
         draft(name: 'Bolt', quantity: 50, unitCost: 100),
       );
-      final invoice = controller.issueInvoice(
+      final invoice = (await controller.issueInvoice(
         lines: [
           InvoiceLine(
             id: 'a',
@@ -593,7 +593,7 @@ void main() {
             unitPrice: 500,
           ),
         ],
-      )!;
+      ))!;
       final receipt = controller.payInvoice(
         invoice.id,
         800,
@@ -743,7 +743,7 @@ void main() {
       final item = controller.createItem(
         draft(name: 'Bolt', quantity: 50, unitCost: 100),
       );
-      final invoice = controller.issueInvoice(
+      final invoice = (await controller.issueInvoice(
         lines: [
           InvoiceLine(
             id: 'a',
@@ -754,7 +754,7 @@ void main() {
           ),
         ],
         termDays: 30,
-      )!;
+      ))!;
 
       await tester.pumpWidget(
         ChangeNotifierProvider.value(
@@ -785,7 +785,7 @@ void main() {
       final item = controller.createItem(
         draft(name: 'Bolt', quantity: 50, unitCost: 100),
       );
-      final invoice = controller.issueInvoice(
+      final invoice = (await controller.issueInvoice(
         lines: [
           InvoiceLine(
             id: 'a',
@@ -795,7 +795,7 @@ void main() {
             unitPrice: 500,
           ),
         ],
-      )!;
+      ))!;
 
       await tester.pumpWidget(
         ChangeNotifierProvider.value(
@@ -824,7 +824,7 @@ void main() {
       final item = controller.createItem(
         draft(name: 'Bolt', quantity: 50, unitCost: 100),
       );
-      final invoice = controller.issueInvoice(
+      final invoice = (await controller.issueInvoice(
         lines: [
           InvoiceLine(
             id: 'a',
@@ -834,7 +834,7 @@ void main() {
             unitPrice: 500,
           ),
         ],
-      )!;
+      ))!;
 
       await tester.pumpWidget(
         ChangeNotifierProvider.value(
@@ -870,7 +870,7 @@ void main() {
       final item = controller.createItem(
         draft(name: 'Bolt', quantity: 50, unitCost: 100),
       );
-      final invoice = controller.issueInvoice(
+      final invoice = (await controller.issueInvoice(
         lines: [
           InvoiceLine(
             id: 'a',
@@ -880,7 +880,7 @@ void main() {
             unitPrice: 500,
           ),
         ],
-      )!;
+      ))!;
 
       // Straight to the document, as a link or a reload would arrive.
       await tester.pumpWidget(
@@ -924,7 +924,7 @@ void main() {
       );
       controller.confirmSalesOrder(order.id);
       controller.fulfilSalesOrder(order.id, {'l1': 4});
-      controller.issueInvoice(
+      await controller.issueInvoice(
         salesOrderId: order.id,
         lines: [
           InvoiceLine(

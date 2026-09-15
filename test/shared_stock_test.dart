@@ -9,6 +9,7 @@ import 'package:stockpile/data/database.dart';
 import 'package:stockpile/data/inventory_api.dart';
 import 'package:stockpile/data/inventory_repository.dart';
 import 'package:stockpile/data/token_storage.dart';
+import 'package:stockpile/models/invoice.dart';
 import 'package:stockpile/models/item.dart';
 import 'package:stockpile/state/inventory_controller.dart';
 
@@ -45,7 +46,8 @@ class _Server {
           jsonEncode({
             'error': {
               'code': 'stock_conflict',
-              'message': 'This item now reads $quantity, not '
+              'message':
+                  'This item now reads $quantity, not '
                   '${body['expectedQuantity']}.',
             },
           }),
@@ -69,6 +71,36 @@ class _Server {
           'at': '2026-09-15T10:00:00.000Z',
         },
       });
+    }
+
+    if (route == 'POST /api/documents/invoices') {
+      final body = jsonDecode(request.body) as Map<String, dynamic>;
+      final lines = (body['lines'] as List).cast<Map<String, dynamic>>();
+      if (body['movesStock'] == true) {
+        for (final line in lines) {
+          quantity -= (line['quantity'] as num).toInt();
+        }
+      }
+      return _ok({
+        'invoice': {
+          ...body,
+          // The server mints both, whatever the client sent.
+          'id': 'inv-server-1',
+          'reference': 'INV-0042',
+          'lines': lines,
+        },
+      });
+    }
+
+    if (route == 'GET /api/inventory/items') {
+      return _ok({
+        'items': [_item(quantity: quantity)],
+        'total': 1,
+      });
+    }
+
+    if (route == 'GET /api/inventory/movements') {
+      return _ok({'movements': <Object?>[]});
     }
 
     if (route.contains('/inventory/items/')) {
@@ -229,6 +261,99 @@ void main() {
         10,
         reason: 'nothing was applied locally',
       );
+    });
+
+    test('an invoice is raised by the server, not numbered here', () async {
+      final server = _Server();
+      final controller = await _controller(server);
+
+      final invoice = await controller.issueInvoice(
+        lines: const [
+          InvoiceLine(
+            id: 'l1',
+            itemId: 'i1',
+            itemName: 'Widget',
+            quantity: 3,
+            unitPrice: 5,
+          ),
+        ],
+      );
+
+      // Sent blank: allocating a reference locally would let two devices raise
+      // the same invoice number.
+      final sent = server.bodies.last;
+      expect(sent['id'], '');
+      expect(sent['reference'], '');
+
+      expect(invoice, isNotNull);
+      expect(invoice!.reference, 'INV-0042');
+      expect(invoice.id, 'inv-server-1');
+      expect(controller.invoices.first.reference, 'INV-0042');
+    });
+
+    test('the stock it took comes back from the server', () async {
+      final server = _Server();
+      final controller = await _controller(server);
+
+      await controller.issueInvoice(
+        lines: const [
+          InvoiceLine(
+            id: 'l1',
+            itemId: 'i1',
+            itemName: 'Widget',
+            quantity: 4,
+            unitPrice: 5,
+          ),
+        ],
+      );
+
+      // Re-read rather than computed here: the server is the only party that
+      // can see what other devices have already sold.
+      expect(controller.byId('i1')!.quantity, 6);
+      expect(server.calls, contains('GET /api/inventory/items'));
+    });
+
+    test('cost of goods is captured at the moment of sale', () async {
+      final server = _Server();
+      final controller = await _controller(server);
+
+      await controller.issueInvoice(
+        lines: const [
+          InvoiceLine(
+            id: 'l1',
+            itemId: 'i1',
+            itemName: 'Widget',
+            quantity: 2,
+            unitPrice: 5,
+          ),
+        ],
+      );
+
+      final line =
+          (server.bodies.last['lines'] as List).first as Map<String, dynamic>;
+      expect(line.containsKey('costOfGoods'), isTrue);
+    });
+
+    test('a failed invoice is reported and raises nothing', () async {
+      final server = _Server()..failNext = true;
+      final controller = await _controller(server);
+
+      final invoice = await controller.issueInvoice(
+        lines: const [
+          InvoiceLine(
+            id: 'l1',
+            itemId: 'i1',
+            itemName: 'Widget',
+            quantity: 1,
+            unitPrice: 5,
+          ),
+        ],
+      );
+
+      expect(invoice, isNull);
+      expect(controller.lastWriteError, isNotNull);
+      expect(controller.invoices, isEmpty);
+      expect(controller.byId('i1')!.quantity, 10, reason: 'stock untouched');
     });
 
     test('nothing is shown before the server has agreed to it', () async {

@@ -169,7 +169,7 @@ class _InvoiceEditorPageState extends State<InvoiceEditorPage> {
       }
     }
 
-    final invoice = _controller.issueInvoice(
+    final invoice = await _controller.issueInvoice(
       salesOrderId: _order?.id,
       customerId: _customerId,
       lines: lines,

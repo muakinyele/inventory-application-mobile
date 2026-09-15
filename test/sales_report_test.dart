@@ -144,7 +144,7 @@ void main() {
       () async {
         final c = await newController();
         final item = c.createItem(draft(quantity: 50, unitCost: 100));
-        final invoice = c.issueInvoice(
+        final invoice = (await c.issueInvoice(
           lines: [
             InvoiceLine(
               id: 'a',
@@ -154,7 +154,7 @@ void main() {
               unitPrice: 500,
             ),
           ],
-        )!;
+        ))!;
 
         var report = thisMonth(c);
         expect(report.revenue, 5000);
@@ -173,7 +173,7 @@ void main() {
     test('an invoice payment is never counted as a second sale', () async {
       final c = await newController();
       final item = c.createItem(draft(quantity: 50, unitCost: 100));
-      final invoice = c.issueInvoice(
+      final invoice = (await c.issueInvoice(
         lines: [
           InvoiceLine(
             id: 'a',
@@ -183,7 +183,7 @@ void main() {
             unitPrice: 500,
           ),
         ],
-      )!;
+      ))!;
       c.payInvoice(invoice.id, 2000);
       c.payInvoice(invoice.id, 3000);
 
@@ -245,7 +245,7 @@ void main() {
         ],
       );
       // Credit.
-      c.issueInvoice(
+      await c.issueInvoice(
         lines: [
           InvoiceLine(
             id: 'b',
@@ -323,7 +323,7 @@ void main() {
           ),
         ],
       )!;
-      final invoice = c.issueInvoice(
+      final invoice = (await c.issueInvoice(
         lines: [
           InvoiceLine(
             id: 'b',
@@ -333,7 +333,7 @@ void main() {
             unitPrice: 500,
           ),
         ],
-      )!;
+      ))!;
       c.voidReceipt(receipt.id);
       c.cancelInvoice(invoice.id);
 

@@ -381,6 +381,110 @@ class InventoryController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Raises the invoice on the server and adopts the result.
+  ///
+  /// No stock arithmetic here on purpose. The server decides what each line
+  /// actually takes — it can see stock this device has not heard about — and
+  /// writes the movements in the same transaction as the document. Working it
+  /// out here as well would produce two answers, only one of them true.
+  Future<Invoice?> _issueInvoiceOnServer(
+    InventoryApi api, {
+    String? salesOrderId,
+    String? customerId,
+    required List<InvoiceLine> lines,
+    double discount = 0,
+    double? taxRate,
+    DateTime? dueAt,
+    int? termDays,
+    String terms = '',
+    String notes = '',
+    DateTime? issuedAt,
+  }) async {
+    final now = DateTime.now();
+    final order = salesOrderId == null ? null : salesOrderById(salesOrderId);
+    final customer = customerById(customerId ?? order?.customerId);
+
+    // An invoice raised against a sales order does not move stock a second
+    // time: that order's despatch already did.
+    final movesStock = order == null;
+
+    final billed = <InvoiceLine>[];
+    for (final line in lines) {
+      if (line.quantity <= 0) continue;
+      final item = byId(line.itemId);
+      billed.add(
+        InvoiceLine(
+          id: line.id,
+          itemId: line.itemId,
+          itemName: line.itemName.isEmpty
+              ? (item?.name ?? line.itemName)
+              : line.itemName,
+          sku: line.sku.isEmpty ? (item?.sku ?? '') : line.sku,
+          unit: line.unit,
+          quantity: line.quantity,
+          unitPrice: line.unitPrice,
+          discount: line.discount,
+          // Captured now rather than read back later: profit reporting has to
+          // reflect what the stock cost at the moment it was sold.
+          costOfGoods: line.quantity * (item?.unitCost ?? 0),
+        ),
+      );
+    }
+    if (billed.isEmpty) return null;
+
+    // Blank id and reference: the server mints both. Allocating a reference
+    // here would let two devices raise the same invoice number.
+    final draft = Invoice(
+      id: '',
+      reference: '',
+      salesOrderId: order?.id,
+      customerId: customer?.id ?? customerId,
+      customerName: customer?.name ?? order?.customerName ?? '',
+      lines: billed,
+      discount: discount < 0 ? 0 : discount,
+      taxRate: (taxRate ?? _settings.taxRate).clamp(0, 1).toDouble(),
+      taxLabel: _settings.taxLabel,
+      terms: terms,
+      notes: notes,
+      movesStock: movesStock,
+      issuedAt: issuedAt ?? now,
+      dueAt: dueAt ?? _dueFrom(issuedAt ?? now, termDays),
+      createdAt: now,
+      updatedAt: now,
+    );
+
+    try {
+      final saved = await api.saveInvoice(draft);
+      _invoices = [saved, ..._invoices.where((i) => i.id != saved.id)];
+      if (saved.movesStock) await _refreshStockView(api);
+      lastWriteError = null;
+      notifyListeners();
+      return saved;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not raise the invoice: $error');
+      notifyListeners();
+      return null;
+    }
+  }
+
+  /// Re-reads what a document just changed.
+  ///
+  /// Items and movements only. Per-bin levels are read by the screens that
+  /// show them, and fetching every item's breakdown here would be one request
+  /// per item to populate something usually off screen.
+  Future<void> _refreshStockView(InventoryApi api) async {
+    try {
+      final page = await api.items();
+      _items = page.items;
+      _movements = await api.movements(limit: maxMovements);
+    } catch (error) {
+      // The document itself saved. Reporting that is better than failing the
+      // whole operation over a stale list the next load will correct.
+      debugPrint('Stockpile: could not refresh after the document: $error');
+    }
+  }
+
   /// Re-reads one item after a refusal, so the screen stops showing a count
   /// the server has already disagreed with.
   Future<void> _refreshItem(InventoryApi api, String id) async {
@@ -1529,7 +1633,13 @@ class InventoryController extends ChangeNotifier {
   /// Quantities on a standalone invoice are clamped to what is on the shelf,
   /// and a line left with nothing to sell is dropped. Returns null when no
   /// line survives that.
-  Invoice? issueInvoice({
+  /// Raises an invoice.
+  ///
+  /// Shared, the whole stock calculation below belongs to the
+  /// server: it is the only party that can see what other devices have already
+  /// sold, and it records the movements in the same transaction as the document.
+  /// This device sends the lines and adopts what comes back.
+  Future<Invoice?> issueInvoice({
     String? salesOrderId,
     String? customerId,
     required List<InvoiceLine> lines,
@@ -1540,8 +1650,25 @@ class InventoryController extends ChangeNotifier {
     String terms = '',
     String notes = '',
     DateTime? issuedAt,
-  }) {
+  }) async {
     if (lines.isEmpty) return null;
+
+    final api = _api;
+    if (api != null) {
+      return _issueInvoiceOnServer(
+        api,
+        salesOrderId: salesOrderId,
+        customerId: customerId,
+        lines: lines,
+        discount: discount,
+        taxRate: taxRate,
+        dueAt: dueAt,
+        termDays: termDays,
+        terms: terms,
+        notes: notes,
+        issuedAt: issuedAt,
+      );
+    }
 
     final now = DateTime.now();
     final order = salesOrderId == null ? null : salesOrderById(salesOrderId);

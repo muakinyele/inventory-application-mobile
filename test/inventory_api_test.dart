@@ -20,7 +20,9 @@ class _Fake {
   Map<String, dynamic>? error;
 
   http.Client client() => MockClient((request) async {
-    calls.add('${request.method} ${request.url.path}${request.url.hasQuery ? '?${request.url.query}' : ''}');
+    calls.add(
+      '${request.method} ${request.url.path}${request.url.hasQuery ? '?${request.url.query}' : ''}',
+    );
     authHeaders.add(request.headers['authorization']);
     final body = request.body.isEmpty
         ? <String, dynamic>{}
