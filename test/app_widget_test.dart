@@ -380,7 +380,7 @@ void main() {
 
       final controller = await newController(seeded: true);
       final item = controller.items.firstWhere((i) => i.quantity >= 10);
-      final order = controller.createSalesOrder(
+      final order = await controller.createSalesOrder(
         lines: [
           SalesOrderLine(
             id: 'l1',
@@ -392,7 +392,7 @@ void main() {
         ],
       );
       controller.confirmSalesOrder(order.id);
-      controller.fulfilSalesOrder(order.id, {'l1': 4});
+      await controller.fulfilSalesOrder(order.id, {'l1': 4});
 
       await tester.pumpWidget(
         ChangeNotifierProvider.value(
@@ -417,7 +417,7 @@ void main() {
       final item = controller.createItem(
         draft(name: 'Bolt', quantity: 20, unitCost: 100),
       );
-      final order = controller.createSalesOrder(
+      final order = await controller.createSalesOrder(
         lines: [
           SalesOrderLine(
             id: 'l1',
@@ -429,7 +429,7 @@ void main() {
         ],
       );
       controller.confirmSalesOrder(order.id);
-      controller.fulfilSalesOrder(order.id, {'l1': 10});
+      await controller.fulfilSalesOrder(order.id, {'l1': 10});
 
       await tester.pumpWidget(
         ChangeNotifierProvider.value(
@@ -662,7 +662,7 @@ void main() {
 
       final controller = await newController();
       final item = controller.createItem(draft(name: 'Bolt', quantity: 20));
-      final order = controller.createSalesOrder(
+      final order = await controller.createSalesOrder(
         lines: [
           SalesOrderLine(
             id: 'l1',
@@ -686,7 +686,7 @@ void main() {
       // Nothing has gone out, so there is nothing to receipt yet.
       expect(find.text('Issue receipt'), findsNothing);
 
-      controller.fulfilSalesOrder(order.id, {'l1': 4});
+      await controller.fulfilSalesOrder(order.id, {'l1': 4});
       await tester.pumpAndSettle();
 
       expect(find.text('Issue receipt'), findsOneWidget);
@@ -911,7 +911,7 @@ void main() {
       final item = controller.createItem(
         draft(name: 'Bolt', quantity: 50, unitCost: 100),
       );
-      final order = controller.createSalesOrder(
+      final order = await controller.createSalesOrder(
         lines: [
           SalesOrderLine(
             id: 'l1',
@@ -923,7 +923,7 @@ void main() {
         ],
       );
       controller.confirmSalesOrder(order.id);
-      controller.fulfilSalesOrder(order.id, {'l1': 4});
+      await controller.fulfilSalesOrder(order.id, {'l1': 4});
       await controller.issueInvoice(
         salesOrderId: order.id,
         lines: [

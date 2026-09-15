@@ -648,6 +648,92 @@ class InventoryController extends ChangeNotifier {
     }
   }
 
+  /// Despatches against a sales order on the server and adopts the result.
+  ///
+  /// Returns what actually left, diffed from the response. The server clamps
+  /// each line by what is still outstanding *and* what is on the shelf — and
+  /// the shelf is shared, so another device may have sold the last of it since
+  /// this order was opened. Counting the request would report a despatch that
+  /// did not happen.
+  Future<int> _despatchOnServer(
+    InventoryApi api,
+    SalesOrder order,
+    Map<String, int> sent,
+  ) async {
+    final before = {
+      for (final line in order.lines) line.id: line.quantityFulfilled,
+    };
+
+    try {
+      final saved = await api.despatchGoods(
+        order.id,
+        sent,
+        location: _settings.locations.isEmpty
+            ? 'Unassigned'
+            : _settings.locations.first,
+      );
+
+      _salesOrders = _salesOrders
+          .map((o) => o.id == saved.id ? saved : o)
+          .toList();
+      await _refreshStockView(api);
+      lastWriteError = null;
+      notifyListeners();
+
+      var despatched = 0;
+      for (final line in saved.lines) {
+        despatched += line.quantityFulfilled - (before[line.id] ?? 0);
+      }
+      return despatched;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not despatch the order: $error');
+      notifyListeners();
+      return 0;
+    }
+  }
+
+  /// Raises a sales order on the server.
+  ///
+  /// Committing to sell moves no stock — the despatch does — so there is
+  /// nothing to re-read here.
+  Future<SalesOrder> _createSalesOrderOnServer(
+    InventoryApi api, {
+    String? customerId,
+    DateTime? dueAt,
+    String notes = '',
+    List<SalesOrderLine> lines = const [],
+  }) async {
+    final now = DateTime.now();
+    final customer = customerById(customerId);
+
+    final draft = SalesOrder(
+      id: '',
+      reference: '',
+      customerId: customerId,
+      customerName: customer?.name ?? '',
+      priceTier: customer?.priceTier ?? PriceTier.retailer,
+      dueAt: dueAt,
+      notes: notes,
+      lines: lines,
+      createdAt: now,
+      updatedAt: now,
+    );
+
+    try {
+      final saved = await api.saveSalesOrder(draft);
+      _salesOrders = [saved, ..._salesOrders.where((o) => o.id != saved.id)];
+      lastWriteError = null;
+      notifyListeners();
+      return saved;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not raise the sales order: $error');
+      notifyListeners();
+      return draft;
+    }
+  }
+
   /// Re-reads what a document just changed.
   ///
   /// Items and movements only. Per-bin levels are read by the screens that
@@ -1140,12 +1226,23 @@ class InventoryController extends ChangeNotifier {
   PriceTier priceTierFor(String? customerId) =>
       customerById(customerId)?.priceTier ?? PriceTier.retailer;
 
-  SalesOrder createSalesOrder({
+  Future<SalesOrder> createSalesOrder({
     String? customerId,
     DateTime? dueAt,
     String notes = '',
     List<SalesOrderLine> lines = const [],
-  }) {
+  }) async {
+    final api = _api;
+    if (api != null) {
+      return _createSalesOrderOnServer(
+        api,
+        customerId: customerId,
+        dueAt: dueAt,
+        notes: notes,
+        lines: lines,
+      );
+    }
+
     final now = DateTime.now();
     final customer = customerById(customerId);
     final order = SalesOrder(
@@ -1256,9 +1353,18 @@ class InventoryController extends ChangeNotifier {
   /// negative, and the balance simply stays outstanding.
   ///
   /// Returns the number of lines that moved.
-  int fulfilSalesOrder(String id, Map<String, int> sent, {String note = ''}) {
+  Future<int> fulfilSalesOrder(
+    String id,
+    Map<String, int> sent, {
+    String note = '',
+  }) async {
     final order = salesOrderById(id);
     if (order == null || !order.status.isOpen) return 0;
+
+    final api = _api;
+    if (api != null) {
+      return _despatchOnServer(api, order, sent);
+    }
 
     final now = DateTime.now();
     final updatedLines = <SalesOrderLine>[];

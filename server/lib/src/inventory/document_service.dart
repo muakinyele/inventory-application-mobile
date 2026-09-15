@@ -645,6 +645,94 @@ class DocumentService {
     });
   }
 
+  /// Despatches goods against a sales order: stock out, and the line's
+  /// fulfilled count moves up by what actually went.
+  ///
+  /// The mirror of [receiveGoods], with one extra constraint. A delivery can
+  /// only be limited by what was ordered; a despatch is also limited by what
+  /// is on the shelf, and the shelf is shared — another device may have sold
+  /// the last of it since this order was opened. Each line is therefore
+  /// clamped twice, and the caller is told what actually left rather than what
+  /// it asked for.
+  Future<({SalesOrder order, List<SalesOrderLine> lines})> despatchGoods({
+    required String orderId,
+    required Map<String, int> sentByLineId,
+    required String actorId,
+    String location = InventoryService.unassigned,
+  }) async {
+    return db.transaction(() async {
+      final order = await (db.select(
+        db.salesOrders,
+      )..where((t) => t.id.equals(orderId))).getSingleOrNull();
+      if (order == null) throw ApiError.notFound;
+
+      final lines = await _salesOrderLines(orderId);
+      final byId = {for (final line in lines) line.id: line};
+
+      for (final entry in sentByLineId.entries) {
+        final line = byId[entry.key];
+        if (line == null) {
+          throw ApiError.badRequest('No line ${entry.key} on this order.');
+        }
+        if (entry.value <= 0) continue;
+
+        final outstanding = line.quantityOrdered - line.quantityFulfilled;
+        final item = await inventory.requireItem(line.itemId);
+        // Whichever runs out first: the order, or the shelf.
+        final quantity = [
+          entry.value,
+          outstanding,
+          item.quantity,
+        ].reduce((a, b) => a < b ? a : b);
+        if (quantity <= 0) continue;
+
+        await inventory.adjustStock(
+          itemId: line.itemId,
+          delta: -quantity,
+          kind: 'sale',
+          actorId: actorId,
+          location: location,
+          note: 'Despatched on ${order.reference}',
+          documentId: orderId,
+        );
+
+        await (db.update(
+          db.salesOrderLines,
+        )..where((t) => t.id.equals(line.id))).write(
+          SalesOrderLinesCompanion(
+            quantityFulfilled: Value(line.quantityFulfilled + quantity),
+            // Banked at despatch, not read back later: profit reporting has
+            // to reflect what the stock cost when it left.
+            costOfGoods: Value(line.costOfGoods + quantity * item.unitCost),
+          ),
+        );
+      }
+
+      final updated = await _salesOrderLines(orderId);
+      final complete = updated.every(
+        (line) => line.quantityFulfilled >= line.quantityOrdered,
+      );
+      final now = DateTime.now().toUtc();
+
+      await (db.update(
+        db.salesOrders,
+      )..where((t) => t.id.equals(orderId))).write(
+        SalesOrdersCompanion(
+          status: Value(complete ? 'fulfilled' : 'partial'),
+          closedAt: complete ? Value(now) : const Value.absent(),
+          updatedAt: Value(now),
+        ),
+      );
+
+      return (
+        order: await (db.select(
+          db.salesOrders,
+        )..where((t) => t.id.equals(orderId))).getSingle(),
+        lines: updated,
+      );
+    });
+  }
+
   // ------------------------------------------------------------------
   // Transfers
   // ------------------------------------------------------------------

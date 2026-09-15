@@ -60,7 +60,7 @@ Future<(InventoryController, SalesOrder, String)> confirmedSale({
   final item = c.createItem(
     draft(name: 'Bolt', quantity: onHand, unitCost: unitCost),
   );
-  final order = c.createSalesOrder(
+  final order = await c.createSalesOrder(
     lines: [line(item.id, 'Bolt', quantity: ordered, price: price)],
   );
   c.confirmSalesOrder(order.id);
@@ -74,10 +74,10 @@ void main() {
     test('references are sequential and never reused', () async {
       final c = await newController();
 
-      final first = c.createSalesOrder();
-      final second = c.createSalesOrder();
+      final first = await c.createSalesOrder();
+      final second = await c.createSalesOrder();
       c.deleteSalesOrder(second.id);
-      final third = c.createSalesOrder();
+      final third = await c.createSalesOrder();
 
       expect(first.reference, 'SO-0001');
       expect(second.reference, 'SO-0002');
@@ -92,8 +92,8 @@ void main() {
       final c = await newController();
 
       expect((await c.createPurchaseOrder()).reference, 'PO-0001');
-      expect(c.createSalesOrder().reference, 'SO-0001');
-      expect(c.createSalesOrder().reference, 'SO-0002');
+      expect((await c.createSalesOrder()).reference, 'SO-0001');
+      expect((await c.createSalesOrder()).reference, 'SO-0002');
       expect((await c.createPurchaseOrder()).reference, 'PO-0002');
     });
 
@@ -107,7 +107,7 @@ void main() {
 
     test('an empty draft refuses to confirm', () async {
       final c = await newController();
-      final order = c.createSalesOrder();
+      final order = await c.createSalesOrder();
 
       c.confirmSalesOrder(order.id);
 
@@ -125,7 +125,7 @@ void main() {
 
     test('a sale that has shipped cannot be deleted', () async {
       final (c, order, _) = await confirmedSale(ordered: 4);
-      c.fulfilSalesOrder(order.id, {'l1': 4});
+      await c.fulfilSalesOrder(order.id, {'l1': 4});
 
       c.deleteSalesOrder(order.id);
 
@@ -136,7 +136,7 @@ void main() {
       final (c, order, itemId) = await confirmedSale(onHand: 20, ordered: 5);
       c.cancelSalesOrder(order.id);
 
-      final moved = c.fulfilSalesOrder(order.id, {'l1': 5});
+      final moved = await c.fulfilSalesOrder(order.id, {'l1': 5});
 
       expect(moved, 0);
       expect(c.byId(itemId)!.quantity, 20);
@@ -150,7 +150,7 @@ void main() {
         final c = await newController();
         final buyer = c.createCustomer(customer(tier: PriceTier.distributor));
 
-        final order = c.createSalesOrder(customerId: buyer.id);
+        final order = await c.createSalesOrder(customerId: buyer.id);
 
         expect(order.priceTier, PriceTier.distributor);
         expect(order.customerName, 'Bello Stores');
@@ -168,7 +168,7 @@ void main() {
     test('a walk-in is quoted at retailer rates', () async {
       final c = await newController();
 
-      expect(c.createSalesOrder().priceTier, PriceTier.retailer);
+      expect((await c.createSalesOrder()).priceTier, PriceTier.retailer);
       expect(c.priceTierFor(null), PriceTier.retailer);
     });
 
@@ -211,7 +211,7 @@ void main() {
     test('a full send empties the line and closes the sale', () async {
       final (c, order, itemId) = await confirmedSale(onHand: 20, ordered: 10);
 
-      final moved = c.fulfilSalesOrder(order.id, {'l1': 10});
+      final moved = await c.fulfilSalesOrder(order.id, {'l1': 10});
 
       expect(moved, 1);
       expect(c.byId(itemId)!.quantity, 10);
@@ -224,7 +224,7 @@ void main() {
     test('a part send leaves the balance outstanding', () async {
       final (c, order, itemId) = await confirmedSale(onHand: 20, ordered: 10);
 
-      c.fulfilSalesOrder(order.id, {'l1': 4});
+      await c.fulfilSalesOrder(order.id, {'l1': 4});
 
       expect(c.byId(itemId)!.quantity, 16);
       final after = c.salesOrderById(order.id)!;
@@ -236,7 +236,7 @@ void main() {
     test('sending more than ordered is clamped to the balance', () async {
       final (c, order, itemId) = await confirmedSale(onHand: 50, ordered: 10);
 
-      c.fulfilSalesOrder(order.id, {'l1': 99});
+      await c.fulfilSalesOrder(order.id, {'l1': 99});
 
       expect(c.byId(itemId)!.quantity, 40);
       expect(c.salesOrderById(order.id)!.unitsFulfilled, 10);
@@ -245,7 +245,7 @@ void main() {
     test('stock is never sent below zero', () async {
       final (c, order, itemId) = await confirmedSale(onHand: 3, ordered: 10);
 
-      c.fulfilSalesOrder(order.id, {'l1': 10});
+      await c.fulfilSalesOrder(order.id, {'l1': 10});
 
       expect(c.byId(itemId)!.quantity, 0);
       final after = c.salesOrderById(order.id)!;
@@ -266,7 +266,7 @@ void main() {
     test('a send with nothing on the shelf moves nothing', () async {
       final (c, order, itemId) = await confirmedSale(onHand: 0, ordered: 10);
 
-      final moved = c.fulfilSalesOrder(order.id, {'l1': 10});
+      final moved = await c.fulfilSalesOrder(order.id, {'l1': 10});
 
       expect(moved, 0);
       expect(c.byId(itemId)!.quantity, 0);
@@ -276,7 +276,7 @@ void main() {
     test('each send raises a movement tagged with the sale', () async {
       final (c, order, itemId) = await confirmedSale(onHand: 20, ordered: 10);
 
-      c.fulfilSalesOrder(order.id, {'l1': 6});
+      await c.fulfilSalesOrder(order.id, {'l1': 6});
 
       final movement = c.movements.first;
       expect(movement.documentId, order.id);
@@ -297,7 +297,7 @@ void main() {
         price: 500,
       );
 
-      c.fulfilSalesOrder(order.id, {'l1': 5});
+      await c.fulfilSalesOrder(order.id, {'l1': 5});
 
       // A later restock at a higher price moves the average cost, which must
       // not rewrite what the first five units actually cost.
@@ -306,7 +306,7 @@ void main() {
       );
       c.placePurchaseOrder(po.id);
       await c.receivePurchaseOrder(po.id, {'pl1': 15});
-      c.fulfilSalesOrder(order.id, {'l1': 5});
+      await c.fulfilSalesOrder(order.id, {'l1': 5});
 
       final after = c.salesOrderById(order.id)!;
       // 5 @ 100, then 5 @ the rolled-forward average of
@@ -327,7 +327,7 @@ void main() {
     test('revenue counts what shipped, total counts what was quoted', () async {
       final (c, order, _) = await confirmedSale(ordered: 10, price: 500);
 
-      c.fulfilSalesOrder(order.id, {'l1': 3});
+      await c.fulfilSalesOrder(order.id, {'l1': 3});
 
       final after = c.salesOrderById(order.id)!;
       expect(after.total, 5000);
@@ -340,12 +340,12 @@ void main() {
       final repo = newRepository();
       final first = await controllerOver(repo);
       final item = first.createItem(draft(name: 'Bolt', quantity: 20));
-      final order = first.createSalesOrder(
+      final order = await first.createSalesOrder(
         notes: 'Deliver to the back gate',
         lines: [line(item.id, 'Bolt', quantity: 8, price: 750)],
       );
       first.confirmSalesOrder(order.id);
-      first.fulfilSalesOrder(order.id, {'l1': 3});
+      await first.fulfilSalesOrder(order.id, {'l1': 3});
       await pumpWrites();
 
       final second = await controllerOver(repo);
@@ -360,7 +360,7 @@ void main() {
       expect(reloaded.lines.single.costOfGoods, closeTo(6, 0.01));
       expect(second.byId(item.id)!.quantity, 17);
       expect(
-        second.createSalesOrder().reference,
+        (await second.createSalesOrder()).reference,
         'SO-0002',
         reason: 'the counter must carry across a reload',
       );

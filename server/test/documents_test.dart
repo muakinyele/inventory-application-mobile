@@ -393,6 +393,107 @@ void main() {
     });
   });
 
+  group('despatch', () {
+    test('despatching moves stock and fulfils the line', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 12);
+
+      final created = await server.post(
+        '/documents/sales-orders',
+        accessToken: s.accessToken,
+        body: {
+          'status': 'confirmed',
+          'lines': [
+            {
+              'itemId': id,
+              'itemName': 'Widget',
+              'quantityOrdered': 5,
+              'unitPrice': 4.0,
+            },
+          ],
+        },
+      );
+      final orderId = created.json['salesOrder']['id'] as String;
+      final lineId = created.json['salesOrder']['lines'][0]['id'] as String;
+      expect(await quantityOf(s, id), 12, reason: 'confirming moves nothing');
+
+      final sent = await server.post(
+        '/documents/sales-orders/$orderId/despatch',
+        accessToken: s.accessToken,
+        body: {
+          'sent': {lineId: 3},
+        },
+      );
+
+      expect(sent.json['salesOrder']['status'], 'partial');
+      expect(sent.json['salesOrder']['lines'][0]['quantityFulfilled'], 3);
+      expect(await quantityOf(s, id), 9);
+    });
+
+    test('a despatch is limited by the shelf, not just the order', () async {
+      // The constraint a delivery does not have: another device may have sold
+      // the last of it since this order was opened.
+      final s = await admin();
+      final id = await item(s, quantity: 2);
+
+      final created = await server.post(
+        '/documents/sales-orders',
+        accessToken: s.accessToken,
+        body: {
+          'lines': [
+            {'itemId': id, 'itemName': 'Widget', 'quantityOrdered': 10},
+          ],
+        },
+      );
+      final orderId = created.json['salesOrder']['id'] as String;
+      final lineId = created.json['salesOrder']['lines'][0]['id'] as String;
+
+      final sent = await server.post(
+        '/documents/sales-orders/$orderId/despatch',
+        accessToken: s.accessToken,
+        body: {
+          'sent': {lineId: 10},
+        },
+      );
+
+      expect(
+        sent.json['salesOrder']['lines'][0]['quantityFulfilled'],
+        2,
+        reason: 'only what was on the shelf',
+      );
+      expect(await quantityOf(s, id), 0);
+      expect(sent.json['salesOrder']['status'], 'partial');
+    });
+
+    test('an order is fulfilled once every line has gone', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 10);
+
+      final created = await server.post(
+        '/documents/sales-orders',
+        accessToken: s.accessToken,
+        body: {
+          'lines': [
+            {'itemId': id, 'itemName': 'Widget', 'quantityOrdered': 4},
+          ],
+        },
+      );
+      final orderId = created.json['salesOrder']['id'] as String;
+      final lineId = created.json['salesOrder']['lines'][0]['id'] as String;
+
+      final sent = await server.post(
+        '/documents/sales-orders/$orderId/despatch',
+        accessToken: s.accessToken,
+        body: {
+          'sent': {lineId: 4},
+        },
+      );
+
+      expect(sent.json['salesOrder']['status'], 'fulfilled');
+      expect(await quantityOf(s, id), 6);
+    });
+  });
+
   group('shared and guarded', () {
     test('a document raised by one user is visible to another', () async {
       final owner = await admin();

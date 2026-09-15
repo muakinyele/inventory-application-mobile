@@ -13,6 +13,7 @@ import 'package:stockpile/models/invoice.dart';
 import 'package:stockpile/models/item.dart';
 import 'package:stockpile/models/purchase_order.dart';
 import 'package:stockpile/models/receipt.dart';
+import 'package:stockpile/models/sales_order.dart';
 import 'package:stockpile/state/inventory_controller.dart';
 
 /// Stands in for the server. These assert what the controller does with the
@@ -172,6 +173,53 @@ class _Server {
               'quantityOrdered': 10,
               'quantityReceived': accepted,
               'unitCost': 1.0,
+              'position': 0,
+            },
+          ],
+          'createdAt': '2026-09-15T10:00:00.000Z',
+          'updatedAt': '2026-09-15T10:05:00.000Z',
+        },
+      });
+    }
+
+    if (route == 'POST /api/documents/sales-orders') {
+      final body = jsonDecode(request.body) as Map<String, dynamic>;
+      return _ok({
+        'salesOrder': {
+          ...body,
+          'id': 'so-server-1',
+          'reference': 'SO-0021',
+          'status': 'confirmed',
+          'lines': [
+            for (final line in (body['lines'] as List))
+              {...(line as Map<String, dynamic>), 'id': 'so-line-1'},
+          ],
+        },
+      });
+    }
+
+    if (route.startsWith('POST /api/documents/sales-orders/') &&
+        route.endsWith('/despatch')) {
+      final body = jsonDecode(request.body) as Map<String, dynamic>;
+      final asked = ((body['sent'] as Map)['so-line-1'] as num).toInt();
+      // Clamped by the shelf, which is the constraint a delivery does not
+      // have: only what is actually there can go.
+      final went = asked > quantity ? quantity : asked;
+      quantity -= went;
+      return _ok({
+        'salesOrder': {
+          'id': 'so-server-1',
+          'reference': 'SO-0021',
+          'status': went >= 20 ? 'fulfilled' : 'partial',
+          'lines': [
+            {
+              'id': 'so-line-1',
+              'itemId': 'i1',
+              'itemName': 'Widget',
+              'quantityOrdered': 20,
+              'quantityFulfilled': went,
+              'unitPrice': 4.0,
+              'costOfGoods': 0.0,
               'position': 0,
             },
           ],
@@ -582,6 +630,40 @@ void main() {
         controller.purchaseOrderById(order.id)!.status,
         PurchaseStatus.partial,
       );
+    });
+
+    test('a despatch reports what actually left the shelf', () async {
+      // Asked for twenty, only ten on hand. The server sends what it has and
+      // says so; counting the request would report a despatch that did not
+      // happen.
+      final server = _Server();
+      final controller = await _controller(server);
+
+      final order = await controller.createSalesOrder(
+        lines: const [
+          SalesOrderLine(
+            id: '',
+            itemId: 'i1',
+            itemName: 'Widget',
+            quantityOrdered: 20,
+            unitPrice: 4,
+          ),
+        ],
+      );
+      expect(order.reference, 'SO-0021');
+      expect(
+        controller.byId('i1')!.quantity,
+        10,
+        reason: 'confirming moves nothing',
+      );
+
+      final despatched = await controller.fulfilSalesOrder(order.id, {
+        'so-line-1': 20,
+      });
+
+      expect(despatched, 10, reason: 'only what was on the shelf');
+      expect(controller.byId('i1')!.quantity, 0);
+      expect(controller.salesOrderById(order.id)!.status, SalesStatus.partial);
     });
 
     test('nothing is shown before the server has agreed to it', () async {

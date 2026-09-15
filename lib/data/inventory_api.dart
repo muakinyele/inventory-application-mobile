@@ -339,6 +339,22 @@ class InventoryApi {
     return salesOrderFromJson(body['salesOrder'] as Map<String, dynamic>);
   }
 
+  /// Despatching is what moves stock, not confirming the order. Each line is
+  /// clamped by the server to what is still outstanding *and* what is on the
+  /// shelf, so what comes back may be less than was sent.
+  Future<SalesOrder> despatchGoods(
+    String orderId,
+    Map<String, int> sentByLineId, {
+    String location = 'Unassigned',
+  }) async {
+    final body = await _auth.send(
+      'POST',
+      '/documents/sales-orders/$orderId/despatch',
+      body: {'sent': sentByLineId, 'location': location},
+    );
+    return salesOrderFromJson(body['salesOrder'] as Map<String, dynamic>);
+  }
+
   Future<List<Transfer>> transfers() async {
     final body = await _auth.send('GET', '/documents/transfers');
     return _list(body['transfers']).map(transferFromJson).toList();

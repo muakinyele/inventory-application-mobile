@@ -200,7 +200,7 @@ void main() {
     test('a receipt for a sales order is not counted twice either', () async {
       final c = await newController();
       final item = c.createItem(draft(quantity: 50, unitCost: 100));
-      final order = c.createSalesOrder(
+      final order = await c.createSalesOrder(
         lines: [
           SalesOrderLine(
             id: 'l1',
@@ -212,7 +212,7 @@ void main() {
         ],
       );
       c.confirmSalesOrder(order.id);
-      c.fulfilSalesOrder(order.id, {'l1': 10});
+      await c.fulfilSalesOrder(order.id, {'l1': 10});
       await c.issueReceipt(
         salesOrderId: order.id,
         lines: c.receiptLinesForSalesOrder(c.salesOrderById(order.id)!),
@@ -257,7 +257,7 @@ void main() {
         ],
       );
       // Sales order.
-      final order = c.createSalesOrder(
+      final order = await c.createSalesOrder(
         lines: [
           SalesOrderLine(
             id: 'l1',
@@ -269,7 +269,7 @@ void main() {
         ],
       );
       c.confirmSalesOrder(order.id);
-      c.fulfilSalesOrder(order.id, {'l1': 30});
+      await c.fulfilSalesOrder(order.id, {'l1': 30});
 
       final report = thisMonth(c);
 

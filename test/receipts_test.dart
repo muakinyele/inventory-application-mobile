@@ -138,7 +138,7 @@ void main() {
     test('a receipt against a sale moves no stock', () async {
       final c = await newController();
       final item = c.createItem(draft(name: 'Bolt', quantity: 20));
-      final order = c.createSalesOrder(
+      final order = await c.createSalesOrder(
         lines: [
           SalesOrderLine(
             id: 'l1',
@@ -150,7 +150,7 @@ void main() {
         ],
       );
       c.confirmSalesOrder(order.id);
-      c.fulfilSalesOrder(order.id, {'l1': 6});
+      await c.fulfilSalesOrder(order.id, {'l1': 6});
       expect(c.byId(item.id)!.quantity, 14);
 
       final lines = c.receiptLinesForSalesOrder(c.salesOrderById(order.id)!);
@@ -170,7 +170,7 @@ void main() {
     test('a sale with nothing sent has nothing to receipt', () async {
       final c = await newController();
       final item = c.createItem(draft(quantity: 20));
-      final order = c.createSalesOrder(
+      final order = await c.createSalesOrder(
         lines: [
           SalesOrderLine(
             id: 'l1',
@@ -389,7 +389,7 @@ void main() {
     test('voiding a receipt against a sale moves no stock', () async {
       final c = await newController();
       final item = c.createItem(draft(quantity: 20));
-      final order = c.createSalesOrder(
+      final order = await c.createSalesOrder(
         lines: [
           SalesOrderLine(
             id: 'l1',
@@ -401,7 +401,7 @@ void main() {
         ],
       );
       c.confirmSalesOrder(order.id);
-      c.fulfilSalesOrder(order.id, {'l1': 5});
+      await c.fulfilSalesOrder(order.id, {'l1': 5});
 
       final receipt = (await c.issueReceipt(
         salesOrderId: order.id,

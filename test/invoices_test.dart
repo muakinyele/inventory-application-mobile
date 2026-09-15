@@ -92,7 +92,7 @@ void main() {
     test('an invoice against a sale moves no stock', () async {
       final c = await newController();
       final item = c.createItem(draft(quantity: 20));
-      final order = c.createSalesOrder(
+      final order = await c.createSalesOrder(
         lines: [
           SalesOrderLine(
             id: 'l1',
@@ -104,7 +104,7 @@ void main() {
         ],
       );
       c.confirmSalesOrder(order.id);
-      c.fulfilSalesOrder(order.id, {'l1': 6});
+      await c.fulfilSalesOrder(order.id, {'l1': 6});
       expect(c.byId(item.id)!.quantity, 14);
 
       final invoice = (await c.issueInvoice(

@@ -154,7 +154,7 @@ void main() {
         ],
       );
 
-      final so = c.createSalesOrder(
+      final so = await c.createSalesOrder(
         lines: [
           SalesOrderLine(
             id: 'l1',
@@ -166,7 +166,7 @@ void main() {
         ],
       );
       c.confirmSalesOrder(so.id);
-      c.fulfilSalesOrder(so.id, {'l1': 8});
+      await c.fulfilSalesOrder(so.id, {'l1': 8});
 
       // 6 in Warehouse goes first, then the remaining 2 come out of the Van.
       expect(c.stockByLocation(item.id), {'Van': 2});

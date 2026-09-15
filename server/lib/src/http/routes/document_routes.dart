@@ -253,6 +253,35 @@ Router documentRoutes({required DocumentService documents}) {
     });
   });
 
+  /// Despatching is what moves stock, not confirming the order.
+  router.post('/sales-orders/<id>/despatch', (
+    Request request,
+    String id,
+  ) async {
+    final caller = request.require('inventory.adjust');
+    final body = await readJsonBody(request);
+
+    final raw = body['sent'];
+    if (raw is! Map || raw.isEmpty) {
+      throw ApiError.badRequest('sent must name at least one line.');
+    }
+
+    final sent = <String, int>{
+      for (final entry in raw.entries)
+        entry.key.toString(): (entry.value as num?)?.toInt() ?? 0,
+    };
+
+    final result = await documents.despatchGoods(
+      orderId: id,
+      sentByLineId: sent,
+      actorId: caller.user.id,
+      location: body['location'] as String? ?? 'Unassigned',
+    );
+    return jsonResponse({
+      'salesOrder': salesOrderJson(result.order, result.lines),
+    });
+  });
+
   // ------------------------------------------------------------------
   // Transfers — created through /inventory/stock/transfer, read here
   // ------------------------------------------------------------------
