@@ -19,9 +19,8 @@ flowchart TB
     end
 
     subgraph host["Deployment host"]
-        N["host nginx :80 · :443<br/>TLS · name-based vhosts"]
         subgraph stack["docker compose"]
-            E["web<br/>nginx 127.0.0.1:8080"]
+            E["web<br/>nginx :8080"]
             F["api<br/>Dart :8080"]
             G[("db<br/>PostgreSQL 16")]
             H["migrate<br/>runs once, exits"]
@@ -29,10 +28,7 @@ flowchart TB
         V[("db-data<br/>named volume")]
     end
 
-    U["Browser"] -->|"https://store.chedraolympas.com"| N
-    X["By IP / other Host"] -->|"falls through"| N
-    N -->|"proxy_pass"| E
-    N -->|"no server_name match"| O["neighbouring site<br/>assetmanagement.oasisproducts.ng"]
+    U["Browser"] -->|"https"| E
     E -->|"static files"| U
     E -->|"/api/* proxied"| F
     F --> G
@@ -46,9 +42,6 @@ flowchart TB
 
     style G fill:#2a78d6,color:#fff
     style D fill:#0b7c79,color:#fff
-    style N fill:#5a3d8a,color:#fff
-    style X fill:#8a2f2f,color:#fff
-    style O fill:#4a4a4a,color:#fff
 ```
 
 **Why the client is served by the proxy.** The Flutter web bundle is built
@@ -114,11 +107,10 @@ docker compose down -v                  # stop and destroy the database
   rather than failing on rsync's exit 127.
 - A directory to deploy into, owned by the deploy user.
 - SSH on port 22, or `DEPLOY_PORT` set to whatever it listens on.
-- **A host nginx with a certificate**, proxying to `127.0.0.1:8080`. This is
-  required, not optional: the `web` container publishes on loopback only, so
-  without something in front the app is not reachable at all. It speaks plain
-  HTTP and is not meant to face the internet directly. See
-  [Putting the host nginx in front](#putting-the-host-nginx-in-front).
+- TLS terminated in front of the stack — a load balancer, or a host nginx with
+  a certificate, proxying to `127.0.0.1:8080`. The `web` container speaks
+  plain HTTP and is not meant to face the internet directly. It publishes on
+  all interfaces, so the app is reachable with or without that front end.
 
 ### Secrets and variables
 
@@ -185,128 +177,8 @@ review before the job starts: Settings → Environments → `production` →
 
 ## First-time host setup
 
-Two things are done once, by hand, on the host. Neither belongs in the deploy
-workflow: the certificate is tied to the machine and outlives any release, and
-the first administrator is an account, not an artefact.
-
-### Putting the host nginx in front
-
-The site config lives in `deploy/nginx/store.chedraolympas.com.conf` and is
-installed as a single self-contained file:
-
-```
-/etc/nginx/conf.d/store.chedraolympas.com.conf
-```
-
-One domain, one file, named after it. Nothing else in `conf.d` is read,
-edited or moved — which is what keeps the neighbouring site safe. RHEL's
-stock `nginx.conf` already carries `include /etc/nginx/conf.d/*.conf;` inside
-its `http` block; the setup script checks for that line before writing, since
-a `conf.d` that nginx does not include would leave the file inert with no
-error to show for it.
-
-It is the *host's* nginx, in front of the stack — distinct from the nginx
-inside the `web` container, which serves the Flutter bundle and proxies
-`/api`.
-
-It terminates TLS for the domain. It does **not** claim `default_server`, and
-that is deliberate: this host is shared. `assetmanagement.oasisproducts.ng`
-already runs here and already owns `default_server` on both `:80` and `:443`.
-nginx permits exactly one per address:port, so a second would fail `nginx -t`
-with *a duplicate default server*, and a restart on that config would refuse
-to start — taking the other site down, not just ours.
-
-Nothing is lost by leaving it alone. A request to `http://102.223.37.105` does
-not match `server_name store.chedraolympas.com`, so it falls through to the
-existing default server and is answered by that other application. It never
-reaches this app, which is what "reachable only by the domain name" asks for.
-
-The lock that actually does work for this app is the container binding to
-`127.0.0.1:8080` — that closes the one path, `http://102.223.37.105:8080`,
-which bypassed nginx entirely.
-
-Certificates come first, and there is a circle to break: the real config
-refuses to start without `/etc/letsencrypt/live/…/fullchain.pem`, but certbot
-needs a running nginx to answer the ACME challenge. `bootstrap.conf` exists
-for exactly that minute — it needs no certificate.
-
-Both configs are synced to the host by the deploy, into `$DEPLOY_PATH/nginx/`,
-so the copy you install is the one the commit was tested with. Run these on
-the host:
-
-The host is RHEL/Rocky 9 (nginx 1.20.1), so `dnf`, and there is no
-`sites-enabled`. Run these on the host:
-
-```bash
-cd "$DEPLOY_PATH"
-sudo nginx -t                      # the other site must be healthy first
-sudo dnf install -y epel-release || true
-sudo dnf install -y nginx certbot
-sudo mkdir -p /var/www/certbot && sudo chmod 755 /var/www /var/www/certbot
-
-# 1. Bootstrap: HTTP only, enough for certbot to prove the domain.
-sudo cp nginx/bootstrap.conf /etc/nginx/conf.d/store.chedraolympas.com.conf
-sudo nginx -t && sudo systemctl reload nginx
-
-# 2. Certificate. The host already holds a wildcard for *.chedraolympas.com,
-#    which covers this name — nginx-setup.sh finds it and uses it. certbot
-#    only runs when nothing on the host covers the domain.
-sudo ls /etc/letsencrypt/live/          # what is already here
-# only if nothing covers it:
-# sudo certbot certonly --webroot -w /var/www/certbot \
-#   -d store.chedraolympas.com --agree-tos -m you@example.com --no-eff-email
-
-# 3. Swap in the real config.
-sudo cp nginx/store.chedraolympas.com.conf \
-  /etc/nginx/conf.d/store.chedraolympas.com.conf
-
-# 4. SELinux: without this nginx is denied the connection to 127.0.0.1:8080
-#    and every request is a 502 that looks like the app is down.
-sudo setsebool -P httpd_can_network_connect 1
-
-sudo nginx -t && sudo systemctl reload nginx
-```
-
-Every step is gated behind `nginx -t`, so a bad config is never reloaded and
-the neighbouring site is never at risk.
-
-**A missing certificate path fails loudly in the wrong place.** nginx cannot
-load a certificate that is not there, so `nginx -t` fails; `systemctl reload`
-then changes nothing and the *previous* config keeps serving. The domain falls
-through to the neighbouring vhost, which answers with its own certificate, and
-the browser reports `ERR_CERT_COMMON_NAME_INVALID`. It looks like a TLS
-problem. It is a file path. Check `nginx -t` before believing anything the
-browser says.
-
-Removing the distro's default vhost in step 1 matters: it is itself a
-`default_server` on port 80, and nginx refuses to start with two of them.
-
-Renewal is certbot's systemd timer, already installed by the package. It
-renews through the `/.well-known/acme-challenge/` location, which the real
-config keeps open on port 80 for that reason. Reload nginx after a renewal —
-`sudo systemctl edit certbot.service` and add a `--deploy-hook`, or leave the
-weekly reload to the package's own hook if your distribution ships one. Check
-it works before the certificate actually matters:
-
-```bash
-sudo certbot renew --dry-run
-```
-
-Then confirm both halves — the name serves, the IP does not:
-
-```bash
-# Our domain serves the app.
-curl -sS -o /dev/null -w '%{http_code}\n' https://store.chedraolympas.com/healthz  # 200
-# The bypass is closed (after the deploy that binds to loopback).
-curl -sS -m 5 http://102.223.37.105:8080/                                          # refused
-# The IP still belongs to the neighbouring site, as it did before.
-curl -sSI -m 5 http://102.223.37.105/ | grep -i location   # assetmanagement.oasisproducts.ng
-```
-
-**Sequencing.** The loopback binding arrives with the deploy that carries this
-compose file. Install nginx *first* and the change is invisible; deploy first
-and the site is unreachable by IP with nothing yet listening on 443. If that
-happens the recovery is just to finish the nginx steps — no rollback needed.
+One thing is done once, by hand, on the host. It does not belong in the deploy
+workflow: the first administrator is an account, not an artefact.
 
 ### Creating the first administrator
 
