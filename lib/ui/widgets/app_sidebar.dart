@@ -104,6 +104,11 @@ const settingsItem = NavItem('/settings', 'Settings', Icons.settings_outlined);
 /// Pinned to the sidebar foot beside Settings, rather than sitting in
 /// [navItems]: it is where you go to manage yourself, not a place in the
 /// workspace.
+/// Not a destination: nothing routes here, and [_NavTile] reads only the icon
+/// and the label. It is a NavItem so the action is styled identically to the
+/// tiles above it rather than being a lookalike that drifts out of step.
+const signOutItem = NavItem('', 'Sign out', Icons.logout_outlined);
+
 const accountItem = NavItem(
   '/account',
   'My account',
@@ -136,6 +141,7 @@ class AppSidebar extends StatefulWidget {
     required this.workspaceName,
     required this.can,
     this.showAccount = true,
+    this.onSignOut,
     this.alertCount = 0,
     this.collapsed = false,
     this.onToggleCollapsed,
@@ -157,6 +163,11 @@ class AppSidebar extends StatefulWidget {
   /// False when there is no session in scope, so the account destination is
   /// not offered. Only a widget test built without authentication sees this.
   final bool showAccount;
+
+  /// Ends the session. Null hides the control — there is nothing to sign out
+  /// of when no session is in scope, which is the case in widget tests that
+  /// build the shell without authentication.
+  final VoidCallback? onSignOut;
 
   /// Icons only, no labels.
   final bool collapsed;
@@ -351,6 +362,17 @@ class _AppSidebarState extends State<AppSidebar> {
                         collapsed: collapsed,
                         onTap: () => onSelect(navItems.length),
                       ),
+                      if (widget.onSignOut != null) ...[
+                        const SizedBox(height: Insets.xs),
+                        _NavTile(
+                          item: signOutItem,
+                          // Never selected: it is an action, not somewhere you
+                          // can be.
+                          selected: false,
+                          collapsed: collapsed,
+                          onTap: widget.onSignOut!,
+                        ),
+                      ],
                     ],
                   ),
                 ),
