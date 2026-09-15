@@ -113,6 +113,32 @@ Router documentRoutes({required DocumentService documents}) {
     }, statusCode: 201);
   });
 
+  router.post('/receipts/<id>/refund', (Request request, String id) async {
+    final caller = request.require('receipts.create');
+    final body = await readJsonBody(request);
+
+    final raw = body['returned'];
+    if (raw is! Map || raw.isEmpty) {
+      throw ApiError.badRequest('returned must name at least one line.');
+    }
+
+    final returned = <String, int>{
+      for (final entry in raw.entries)
+        entry.key.toString(): (entry.value as num?)?.toInt() ?? 0,
+    };
+
+    final result = await documents.refundReceipt(
+      id: id,
+      returnedByLineId: returned,
+      actorId: caller.user.id,
+      // Defaults to putting the goods back. Broken returns are the exception
+      // and the caller has to say so.
+      restock: body['restock'] != false,
+      location: body['location'] as String? ?? 'Unassigned',
+    );
+    return jsonResponse({'receipt': receiptJson(result.receipt, result.lines)});
+  });
+
   router.post('/receipts/<id>/void', (Request request, String id) async {
     final caller = request.require('receipts.create');
     final body = await readJsonBody(request);

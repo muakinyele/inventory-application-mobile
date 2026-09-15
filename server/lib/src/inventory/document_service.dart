@@ -306,6 +306,100 @@ class DocumentService {
     });
   }
 
+  /// Takes goods back against a receipt.
+  ///
+  /// Distinct from a void, which tears the whole document up and is only
+  /// allowed while nothing has come back. A refund is partial by nature: each
+  /// line is clamped to what is still kept, and the receipt settles to
+  /// `refunded` only once every line has been returned in full.
+  ///
+  /// [restock] is the reason this cannot simply mirror the sale. Goods that
+  /// come back saleable go on the shelf; goods that come back broken do not,
+  /// and the money is still refunded either way. Stock and money part company
+  /// here, which is why the flag exists rather than being inferred.
+  Future<({Receipt receipt, List<ReceiptLine> lines})> refundReceipt({
+    required String id,
+    required Map<String, int> returnedByLineId,
+    required String actorId,
+    bool restock = true,
+    String location = InventoryService.unassigned,
+  }) async {
+    return db.transaction(() async {
+      final receipt = await (db.select(
+        db.receipts,
+      )..where((t) => t.id.equals(id))).getSingleOrNull();
+      if (receipt == null) throw ApiError.notFound;
+      if (receipt.status == 'voided') {
+        throw ApiError.badRequest('A voided receipt has nothing to refund.');
+      }
+
+      final lines = await _receiptLines(id);
+      final byId = {for (final line in lines) line.id: line};
+      var touched = 0;
+
+      for (final entry in returnedByLineId.entries) {
+        final line = byId[entry.key];
+        if (line == null) {
+          throw ApiError.badRequest('No line ${entry.key} on this receipt.');
+        }
+        final kept = line.quantity - line.quantityRefunded;
+        final quantity = entry.value > kept ? kept : entry.value;
+        if (quantity <= 0) continue;
+
+        touched++;
+        await (db.update(
+          db.receiptLines,
+        )..where((t) => t.id.equals(line.id))).write(
+          ReceiptLinesCompanion(
+            quantityRefunded: Value(line.quantityRefunded + quantity),
+          ),
+        );
+
+        // Only a receipt that took stock has any to give back, and only if the
+        // goods are fit to sell again.
+        if (restock && receipt.movesStock) {
+          await inventory.adjustStock(
+            itemId: line.itemId,
+            delta: quantity,
+            kind: 'refund',
+            actorId: actorId,
+            location: location,
+            note: 'Returned on ${receipt.reference}',
+            documentId: id,
+          );
+        }
+      }
+
+      if (touched == 0) {
+        return (receipt: receipt, lines: lines);
+      }
+
+      final updated = await _receiptLines(id);
+      final settled = updated.every(
+        (line) => line.quantityRefunded >= line.quantity,
+      );
+      final now = DateTime.now().toUtc();
+
+      await (db.update(db.receipts)..where((t) => t.id.equals(id))).write(
+        ReceiptsCompanion(
+          // These match the client's ReceiptStatus members by name; a value it
+          // cannot parse falls back to `issued`, which would show a refunded
+          // sale as live.
+          status: Value(settled ? 'refunded' : 'partRefunded'),
+          refundedAt: Value(now),
+          updatedAt: Value(now),
+        ),
+      );
+
+      return (
+        receipt: await (db.select(
+          db.receipts,
+        )..where((t) => t.id.equals(id))).getSingle(),
+        lines: updated,
+      );
+    });
+  }
+
   /// Voids a receipt and returns the stock.
   Future<Receipt> voidReceipt({
     required String id,

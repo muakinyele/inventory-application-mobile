@@ -229,6 +229,37 @@ class _Server {
       });
     }
 
+    if (route.startsWith('POST /api/documents/receipts/') &&
+        route.endsWith('/refund')) {
+      final body = jsonDecode(request.body) as Map<String, dynamic>;
+      final asked = ((body['returned'] as Map)['l1'] as num).toInt();
+      // Capped at what is still kept — four were bought.
+      final back = asked > 4 ? 4 : asked;
+      if (body['restock'] == true) quantity += back;
+      return _ok({
+        'receipt': {
+          'id': 'rcp-server-1',
+          'reference': 'RCP-0007',
+          'status': back >= 4 ? 'refunded' : 'partRefunded',
+          'movesStock': true,
+          'lines': [
+            {
+              'id': 'l1',
+              'itemId': 'i1',
+              'itemName': 'Widget',
+              'quantity': 4,
+              'unitPrice': 3.0,
+              'quantityRefunded': back,
+              'position': 0,
+            },
+          ],
+          'issuedAt': '2026-09-15T10:00:00.000Z',
+          'createdAt': '2026-09-15T10:00:00.000Z',
+          'updatedAt': '2026-09-15T10:10:00.000Z',
+        },
+      });
+    }
+
     if (route == 'GET /api/inventory/items') {
       return _ok({
         'items': [_item(quantity: quantity)],
@@ -664,6 +695,90 @@ void main() {
       expect(despatched, 10, reason: 'only what was on the shelf');
       expect(controller.byId('i1')!.quantity, 0);
       expect(controller.salesOrderById(order.id)!.status, SalesStatus.partial);
+    });
+
+    test('a return puts the goods back and settles the receipt', () async {
+      final server = _Server();
+      final controller = await _controller(server);
+
+      final receipt = (await controller.issueReceipt(
+        lines: const [
+          ReceiptLine(
+            id: 'l1',
+            itemId: 'i1',
+            itemName: 'Widget',
+            quantity: 4,
+            unitPrice: 3,
+          ),
+        ],
+      ))!;
+      expect(controller.byId('i1')!.quantity, 6);
+
+      final lines = await controller.refundReceipt(receipt.id, {'l1': 4});
+
+      expect(lines, 1, reason: 'one line had something come back');
+      expect(
+        controller.receiptById(receipt.id)!.status,
+        ReceiptStatus.refunded,
+      );
+      expect(controller.byId('i1')!.quantity, 10);
+    });
+
+    test('broken goods are refunded without going back on', () async {
+      // Stock and money part company: the customer is repaid, the shelf is
+      // not replenished.
+      final server = _Server();
+      final controller = await _controller(server);
+
+      final receipt = (await controller.issueReceipt(
+        lines: const [
+          ReceiptLine(
+            id: 'l1',
+            itemId: 'i1',
+            itemName: 'Widget',
+            quantity: 4,
+            unitPrice: 3,
+          ),
+        ],
+      ))!;
+      expect(controller.byId('i1')!.quantity, 6);
+
+      await controller.refundReceipt(receipt.id, {'l1': 4}, restock: false);
+
+      expect(
+        controller.receiptById(receipt.id)!.status,
+        ReceiptStatus.refunded,
+      );
+      expect(controller.byId('i1')!.quantity, 6, reason: 'shelf unchanged');
+    });
+
+    test('asking for more than was bought is not a refund', () async {
+      // The server caps at what is still kept, so the count has to come from
+      // the answer. Counting the request would report a return that never
+      // happened.
+      final server = _Server();
+      final controller = await _controller(server);
+
+      final receipt = (await controller.issueReceipt(
+        lines: const [
+          ReceiptLine(
+            id: 'l1',
+            itemId: 'i1',
+            itemName: 'Widget',
+            quantity: 4,
+            unitPrice: 3,
+          ),
+        ],
+      ))!;
+
+      await controller.refundReceipt(receipt.id, {'l1': 99});
+
+      expect(
+        controller.receiptById(receipt.id)!.lines.single.quantityRefunded,
+        4,
+        reason: 'only the four actually bought',
+      );
+      expect(controller.byId('i1')!.quantity, 10);
     });
 
     test('nothing is shown before the server has agreed to it', () async {

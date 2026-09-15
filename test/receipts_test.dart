@@ -285,7 +285,7 @@ void main() {
         ))!;
         expect(c.byId(item.id)!.quantity, 16);
 
-        final moved = c.refundReceipt(receipt.id, {'rl1': 1});
+        final moved = await c.refundReceipt(receipt.id, {'rl1': 1});
 
         expect(moved, 1);
         expect(c.byId(item.id)!.quantity, 17);
@@ -306,7 +306,7 @@ void main() {
         lines: [receiptLine(item.id, 'Bolt', quantity: 4, price: 500)],
       ))!;
 
-      c.refundReceipt(receipt.id, {'rl1': 4});
+      await c.refundReceipt(receipt.id, {'rl1': 4});
       final after = c.receiptById(receipt.id)!;
 
       expect(after.status, ReceiptStatus.refunded);
@@ -326,7 +326,7 @@ void main() {
       // 2000 - 400 = 1600 + 10% = 1760.
       expect(receipt.total, closeTo(1760, 0.001));
 
-      c.refundReceipt(receipt.id, {'rl1': 2});
+      await c.refundReceipt(receipt.id, {'rl1': 2});
       final after = c.receiptById(receipt.id)!;
 
       // Half the goods back: half the discounted subtotal, plus its tax.
@@ -342,7 +342,7 @@ void main() {
       ))!;
       expect(c.byId(item.id)!.quantity, 16);
 
-      c.refundReceipt(receipt.id, {'rl1': 2}, restock: false);
+      await c.refundReceipt(receipt.id, {'rl1': 2}, restock: false);
 
       expect(c.byId(item.id)!.quantity, 16);
       expect(c.receiptById(receipt.id)!.refundTotal, 1000);
@@ -355,11 +355,11 @@ void main() {
         lines: [receiptLine(item.id, 'Bolt', quantity: 3, price: 500)],
       ))!;
 
-      c.refundReceipt(receipt.id, {'rl1': 99});
+      await c.refundReceipt(receipt.id, {'rl1': 99});
       expect(c.receiptById(receipt.id)!.unitsRefunded, 3);
 
       // Nothing left to give back.
-      expect(c.refundReceipt(receipt.id, {'rl1': 1}), 0);
+      expect(await c.refundReceipt(receipt.id, {'rl1': 1}), 0);
       expect(c.byId(item.id)!.quantity, 20);
     });
   });
@@ -419,7 +419,7 @@ void main() {
       final receipt = (await c.issueReceipt(
         lines: [receiptLine(item.id, 'Bolt', quantity: 4)],
       ))!;
-      c.refundReceipt(receipt.id, {'rl1': 1});
+      await c.refundReceipt(receipt.id, {'rl1': 1});
 
       expect(await c.voidReceipt(receipt.id), isFalse);
       expect(c.receiptById(receipt.id)!.status, ReceiptStatus.partRefunded);
@@ -457,7 +457,7 @@ void main() {
         lines: [receiptLine(item.id, 'Bolt', quantity: 6, price: 500, id: 'c')],
       ))!;
 
-      c.refundReceipt(refunded.id, {'b': 2});
+      await c.refundReceipt(refunded.id, {'b': 2});
       await c.voidReceipt(voided.id);
 
       // 1000 cash + (2000 - 1000) card, and nothing from the void.
@@ -484,7 +484,7 @@ void main() {
         notes: 'Collected in person',
         cashier: 'Ada',
       ))!;
-      c.refundReceipt(receipt.id, {'rl1': 1});
+      await c.refundReceipt(receipt.id, {'rl1': 1});
       await pumpWrites();
 
       final reloaded = await controllerOver(repo);
@@ -703,7 +703,7 @@ void main() {
     test('the PDF renders a voided receipt and a refunded one', () async {
       TestWidgetsFlutterBinding.ensureInitialized();
       final (receipt, settings, c) = await sample();
-      c.refundReceipt(receipt.id, {'rl1': 1});
+      await c.refundReceipt(receipt.id, {'rl1': 1});
       final refunded = await ReceiptDocument(
         c.receiptById(receipt.id)!,
         settings,

@@ -275,6 +275,29 @@ class InventoryApi {
     return receiptFromJson(body['receipt'] as Map<String, dynamic>);
   }
 
+  /// Takes goods back against a receipt.
+  ///
+  /// [restock] is why this is not simply the sale in reverse: goods that come
+  /// back saleable go on the shelf, goods that come back broken do not, and
+  /// the money is refunded either way.
+  Future<Receipt> refundReceipt(
+    String id,
+    Map<String, int> returnedByLineId, {
+    bool restock = true,
+    String location = 'Unassigned',
+  }) async {
+    final body = await _auth.send(
+      'POST',
+      '/documents/receipts/$id/refund',
+      body: {
+        'returned': returnedByLineId,
+        'restock': restock,
+        'location': location,
+      },
+    );
+    return receiptFromJson(body['receipt'] as Map<String, dynamic>);
+  }
+
   Future<Receipt> voidReceipt(String id, {String reason = ''}) async {
     final body = await _auth.send(
       'POST',

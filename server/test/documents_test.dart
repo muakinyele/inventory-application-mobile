@@ -266,6 +266,137 @@ void main() {
     });
   });
 
+  group('refunds', () {
+    Future<(String, String)> issuedReceipt(TestSession s, String itemId) async {
+      final created = await server.post(
+        '/documents/receipts',
+        accessToken: s.accessToken,
+        body: {
+          'status': 'issued',
+          'movesStock': true,
+          'lines': [
+            {
+              'itemId': itemId,
+              'itemName': 'Widget',
+              'quantity': 5,
+              'unitPrice': 2.0,
+            },
+          ],
+        },
+      );
+      return (
+        created.json['receipt']['id'] as String,
+        created.json['receipt']['lines'][0]['id'] as String,
+      );
+    }
+
+    test('a partial return puts back only what came back', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 10);
+      final (receiptId, lineId) = await issuedReceipt(s, id);
+      expect(await quantityOf(s, id), 5);
+
+      final refunded = await server.post(
+        '/documents/receipts/$receiptId/refund',
+        accessToken: s.accessToken,
+        body: {
+          'returned': {lineId: 2},
+        },
+      );
+
+      expect(refunded.json['receipt']['status'], 'partRefunded');
+      expect(refunded.json['receipt']['lines'][0]['quantityRefunded'], 2);
+      expect(await quantityOf(s, id), 7);
+    });
+
+    test('returning everything settles the receipt', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 10);
+      final (receiptId, lineId) = await issuedReceipt(s, id);
+
+      final refunded = await server.post(
+        '/documents/receipts/$receiptId/refund',
+        accessToken: s.accessToken,
+        body: {
+          'returned': {lineId: 5},
+        },
+      );
+
+      expect(refunded.json['receipt']['status'], 'refunded');
+      expect(await quantityOf(s, id), 10);
+    });
+
+    test('broken goods are refunded but not restocked', () async {
+      // Stock and money part company here, which is why restock is a flag
+      // rather than something inferred from the return.
+      final s = await admin();
+      final id = await item(s, quantity: 10);
+      final (receiptId, lineId) = await issuedReceipt(s, id);
+      expect(await quantityOf(s, id), 5);
+
+      final refunded = await server.post(
+        '/documents/receipts/$receiptId/refund',
+        accessToken: s.accessToken,
+        body: {
+          'returned': {lineId: 3},
+          'restock': false,
+        },
+      );
+
+      expect(refunded.json['receipt']['lines'][0]['quantityRefunded'], 3);
+      expect(await quantityOf(s, id), 5, reason: 'nothing went back on');
+    });
+
+    test('a return is capped at what is still kept', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 10);
+      final (receiptId, lineId) = await issuedReceipt(s, id);
+
+      await server.post(
+        '/documents/receipts/$receiptId/refund',
+        accessToken: s.accessToken,
+        body: {
+          'returned': {lineId: 4},
+        },
+      );
+      final second = await server.post(
+        '/documents/receipts/$receiptId/refund',
+        accessToken: s.accessToken,
+        body: {
+          'returned': {lineId: 9},
+        },
+      );
+
+      expect(
+        second.json['receipt']['lines'][0]['quantityRefunded'],
+        5,
+        reason: 'only the one still kept came back',
+      );
+      expect(await quantityOf(s, id), 10);
+    });
+
+    test('a voided receipt has nothing to refund', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 10);
+      final (receiptId, lineId) = await issuedReceipt(s, id);
+
+      await server.post(
+        '/documents/receipts/$receiptId/void',
+        accessToken: s.accessToken,
+        body: {'reason': 'Wrong item'},
+      );
+      final response = await server.post(
+        '/documents/receipts/$receiptId/refund',
+        accessToken: s.accessToken,
+        body: {
+          'returned': {lineId: 1},
+        },
+      );
+
+      expect(response.statusCode, 400);
+    });
+  });
+
   group('purchase orders', () {
     test('ordering does not move stock; receiving does', () async {
       final s = await admin();

@@ -300,7 +300,7 @@ void main() {
         ],
       ))!;
 
-      c.refundReceipt(receipt.id, {'a': 4});
+      await c.refundReceipt(receipt.id, {'a': 4});
       final report = thisMonth(c);
 
       expect(report.unitsSold, 6);

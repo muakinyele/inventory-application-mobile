@@ -734,6 +734,53 @@ class InventoryController extends ChangeNotifier {
     }
   }
 
+  /// Takes goods back on the server and adopts the result.
+  ///
+  /// Returns the number of *lines* something came back against, which is what
+  /// the local path has always returned and what the screen reports. Counted
+  /// from the response rather than the request: the server caps each line at
+  /// what is still kept, so asking for more than was bought moves nothing and
+  /// must not read as a refund.
+  Future<int> _refundOnServer(
+    InventoryApi api,
+    Receipt receipt,
+    Map<String, int> returned, {
+    bool restock = true,
+  }) async {
+    final before = {
+      for (final line in receipt.lines) line.id: line.quantityRefunded,
+    };
+
+    try {
+      final saved = await api.refundReceipt(
+        receipt.id,
+        returned,
+        restock: restock,
+        location: _settings.locations.isEmpty
+            ? 'Unassigned'
+            : _settings.locations.first,
+      );
+
+      _receipts = _receipts.map((r) => r.id == saved.id ? saved : r).toList();
+      // Only when the goods went back on: a broken return refunds money and
+      // moves no stock, so there is nothing to re-read.
+      if (restock && saved.movesStock) await _refreshStockView(api);
+      lastWriteError = null;
+      notifyListeners();
+
+      var lines = 0;
+      for (final line in saved.lines) {
+        if (line.quantityRefunded > (before[line.id] ?? 0)) lines++;
+      }
+      return lines;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not refund the receipt: $error');
+      notifyListeners();
+      return 0;
+    }
+  }
+
   /// Re-reads what a document just changed.
   ///
   /// Items and movements only. Per-bin levels are read by the screens that
@@ -1688,14 +1735,19 @@ class InventoryController extends ChangeNotifier {
   /// inventing stock that is not there.
   ///
   /// Returns the number of lines that moved.
-  int refundReceipt(
+  Future<int> refundReceipt(
     String id,
     Map<String, int> returned, {
     bool restock = true,
     String note = '',
-  }) {
+  }) async {
     final receipt = receiptById(id);
     if (receipt == null || !receipt.status.isRefundable) return 0;
+
+    final api = _api;
+    if (api != null) {
+      return _refundOnServer(api, receipt, returned, restock: restock);
+    }
 
     final now = DateTime.now();
     final updatedLines = <ReceiptLine>[];
