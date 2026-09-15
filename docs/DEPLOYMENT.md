@@ -107,10 +107,22 @@ docker compose down -v                  # stop and destroy the database
   rather than failing on rsync's exit 127.
 - A directory to deploy into, owned by the deploy user.
 - SSH on port 22, or `DEPLOY_PORT` set to whatever it listens on.
-- TLS terminated in front of the stack — a load balancer, or a host nginx with
-  a certificate, proxying to `127.0.0.1:8080`. The `web` container speaks
-  plain HTTP and is not meant to face the internet directly. It publishes on
-  all interfaces, so the app is reachable with or without that front end.
+- **A host nginx with a certificate**, proxying to `127.0.0.1:8080`. Required,
+  not optional: `web` binds to loopback, so without it the app is reachable
+  from nowhere. The working vhost is committed at
+  `deploy/nginx/store.chedraolympas.com.conf`.
+
+  It is **not** installed by the deploy — that is a one-time `sudo` step, and
+  the deploy has no business editing a file shared with the other sites on
+  that host. Copy it to `/etc/nginx/conf.d/`, then `nginx -t` before any
+  reload.
+
+  That host is shared: `assetmanagement.oasisproducts.ng` (Snipe-IT) and
+  `sslmonitor.oasisproducts.ng` run there too, and Snipe-IT owns
+  `default_server`. The vhost deliberately does not claim it — nginx allows
+  one per address:port, and a second makes `nginx -t` fail, which turns every
+  later `reload` into a silent no-op and would take all three sites down on a
+  restart.
 
 ### Secrets and variables
 
