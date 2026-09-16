@@ -1140,6 +1140,157 @@ void main() {
     });
   });
 
+  group('what a sale can still be sent', () {
+    Future<(String, String)> confirmed(
+      TestSession s,
+      String itemId, {
+      int ordered = 5,
+    }) async {
+      final created = await server.post(
+        '/documents/sales-orders',
+        accessToken: s.accessToken,
+        body: {
+          'status': 'confirmed',
+          'lines': [
+            {
+              'itemId': itemId,
+              'itemName': 'Widget',
+              'quantityOrdered': ordered,
+              'unitPrice': 4.0,
+            },
+          ],
+        },
+      );
+      return (
+        created.json['salesOrder']['id'] as String,
+        created.json['salesOrder']['lines'][0]['id'] as String,
+      );
+    }
+
+    test('sending more than ordered is clamped to the balance', () async {
+      // Two separate ceilings: the order and the shelf. This one has plenty on
+      // the shelf, so the order is what binds.
+      final s = await admin();
+      final id = await item(s, quantity: 100);
+      final (orderId, lineId) = await confirmed(s, id, ordered: 5);
+
+      final sent = await server.post(
+        '/documents/sales-orders/$orderId/despatch',
+        accessToken: s.accessToken,
+        body: {
+          'sent': {lineId: 40},
+        },
+      );
+
+      expect(sent.json['salesOrder']['lines'][0]['quantityFulfilled'], 5);
+      expect(sent.json['salesOrder']['status'], 'fulfilled');
+      expect(await quantityOf(s, id), 95);
+    });
+
+    test('a second send tops up rather than starting again', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 100);
+      final (orderId, lineId) = await confirmed(s, id, ordered: 10);
+
+      await server.post(
+        '/documents/sales-orders/$orderId/despatch',
+        accessToken: s.accessToken,
+        body: {
+          'sent': {lineId: 4},
+        },
+      );
+      final second = await server.post(
+        '/documents/sales-orders/$orderId/despatch',
+        accessToken: s.accessToken,
+        body: {
+          'sent': {lineId: 4},
+        },
+      );
+
+      expect(second.json['salesOrder']['lines'][0]['quantityFulfilled'], 8);
+      expect(second.json['salesOrder']['status'], 'partial');
+      expect(await quantityOf(s, id), 92);
+    });
+
+    test('a send with nothing on the shelf moves nothing', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 0);
+      final (orderId, lineId) = await confirmed(s, id, ordered: 5);
+
+      final sent = await server.post(
+        '/documents/sales-orders/$orderId/despatch',
+        accessToken: s.accessToken,
+        body: {
+          'sent': {lineId: 5},
+        },
+      );
+
+      expect(sent.statusCode, 200);
+      expect(sent.json['salesOrder']['lines'][0]['quantityFulfilled'], 0);
+      expect(await quantityOf(s, id), 0);
+      expect(
+        sent.json['salesOrder']['status'],
+        'partial',
+        reason: 'nothing went, so nothing is fulfilled',
+      );
+    });
+
+    test('cost of goods is banked at the cost on the day it shipped', () async {
+      // Read from the item at despatch, not from the order. A price agreed
+      // weeks ago says nothing about what the stock cost when it left.
+      final s = await admin();
+      final response = await server.post(
+        '/inventory/items',
+        accessToken: s.accessToken,
+        body: {
+          'name': 'Widget',
+          'quantity': 10,
+          'unitCost': 2.5,
+          'location': 'Main',
+        },
+      );
+      final id = response.json['item']['id'] as String;
+      final (orderId, lineId) = await confirmed(s, id, ordered: 4);
+
+      final sent = await server.post(
+        '/documents/sales-orders/$orderId/despatch',
+        accessToken: s.accessToken,
+        body: {
+          'sent': {lineId: 4},
+        },
+      );
+
+      expect(
+        (sent.json['salesOrder']['lines'][0]['costOfGoods'] as num).toDouble(),
+        closeTo(10.0, 0.0001),
+        reason: 'four units at 2.50',
+      );
+    });
+
+    test('each send raises a movement tagged with the sale', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 20);
+      final (orderId, lineId) = await confirmed(s, id, ordered: 3);
+
+      await server.post(
+        '/documents/sales-orders/$orderId/despatch',
+        accessToken: s.accessToken,
+        body: {
+          'sent': {lineId: 3},
+        },
+      );
+
+      final history = await server.get(
+        '/inventory/movements?item=$id',
+        accessToken: s.accessToken,
+      );
+      final tagged = (history.json['movements'] as List).where(
+        (m) => m['documentId'] == orderId,
+      );
+      expect(tagged, isNotEmpty);
+    });
+  });
+
   group('a cancelled sale sends nothing', () {
     test('despatch is refused once the order is cancelled', () async {
       // The mirror of the cancelled purchase order. Both were unguarded; the
