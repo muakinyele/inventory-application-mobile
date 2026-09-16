@@ -38,6 +38,9 @@ class _Server {
   /// What the fake server has recorded against the one invoice it knows about.
   double invoicePaid = 0;
 
+  /// Whether the erase actually reached the server.
+  bool erased = false;
+
   bool conflictNext = false;
   bool failNext = false;
 
@@ -346,6 +349,12 @@ class _Server {
 
     if (route.startsWith('PUT /api/inventory/lookups/')) {
       return _ok({'lookups': <Object?>[]});
+    }
+
+    if (route == 'DELETE /api/inventory') {
+      erased = true;
+      quantity = 0;
+      return http.Response('', 204);
     }
 
     if (route == 'GET /api/inventory/items') {
@@ -1136,6 +1145,34 @@ void main() {
           server.lastBodyFor['PATCH /api/inventory/preferences']!['preferences']
               as Map<String, dynamic>;
       expect(sent['companyName'], 'Chedra Olympas');
+    });
+
+    test('erasing reaches the server, not just the screen', () async {
+      // It cleared the lists and wrote to a local database nothing reads, so
+      // everything came back on the next load — and none of it had ever left
+      // anybody else's screen.
+      final server = _Server();
+      final controller = await _controller(server);
+      expect(controller.items, isNotEmpty);
+
+      await controller.eraseAll();
+
+      expect(server.erased, isTrue, reason: 'the server was never asked');
+      expect(controller.items, isEmpty);
+      expect(controller.movements, isEmpty);
+    });
+
+    test('a failed erase leaves the catalogue where it is', () async {
+      // Showing an empty catalogue the server still holds is exactly the
+      // confusion this is meant to end.
+      final server = _Server()..failNext = true;
+      final controller = await _controller(server);
+      final before = controller.items.length;
+
+      await controller.eraseAll();
+
+      expect(controller.items.length, before);
+      expect(controller.lastWriteError, isNotNull);
     });
 
     test('nothing is shown before the server has agreed to it', () async {

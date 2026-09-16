@@ -591,6 +591,115 @@ void main() {
     });
   });
 
+  group('erasing', () {
+    test('it empties the inventory and everything hanging off it', () async {
+      final session = await admin();
+      final id = await createItem(session, quantity: 10, location: 'Main');
+      await server.post(
+        '/inventory/suppliers',
+        accessToken: session.accessToken,
+        body: {'id': '', 'name': 'Acme'},
+      );
+      await server.post(
+        '/documents/invoices',
+        accessToken: session.accessToken,
+        body: {
+          'lines': [
+            {'itemId': id, 'itemName': 'Widget', 'quantity': 1},
+          ],
+        },
+      );
+
+      final response = await server.delete(
+        '/inventory',
+        accessToken: session.accessToken,
+      );
+      expect(response.statusCode, 204);
+
+      final items = await server.get(
+        '/inventory/items',
+        accessToken: session.accessToken,
+      );
+      expect(items.json['total'], 0);
+
+      final stock = await server.get(
+        '/inventory/stock',
+        accessToken: session.accessToken,
+      );
+      expect(stock.json['stock'], isEmpty);
+
+      final movements = await server.get(
+        '/inventory/movements',
+        accessToken: session.accessToken,
+      );
+      expect(movements.json['movements'], isEmpty);
+
+      final suppliers = await server.get(
+        '/inventory/suppliers',
+        accessToken: session.accessToken,
+      );
+      expect(suppliers.json['suppliers'], isEmpty);
+
+      final invoices = await server.get(
+        '/documents/invoices',
+        accessToken: session.accessToken,
+      );
+      expect(invoices.json['invoices'], isEmpty);
+    });
+
+    test('a row with a blank id goes with the rest', () async {
+      // The reason this came up. Rows created before the blank-id fix carry
+      // id '', which no screen can open and no delete can name — the URL for
+      // one is /items/ and matches nothing. Erasing has to reach them.
+      final session = await admin();
+      await server.customStatement(
+        "INSERT INTO items (id, name, sku, barcode, category, location, "
+        "quantity, reorder_level, unit, unit_cost, retailer_price, "
+        "distributor_price, supplier, units_per_pack, notes, created_at, "
+        // Epoch milliseconds: drift stores a DateTime as bigint here, not as
+        // a timestamp, so `now()` is the wrong type.
+        "updated_at) VALUES ('', 'Orphan', '', '', '', '', 0, 0, 'pcs', 0, 0, "
+        "0, '', 1, '', 1758000000000, 1758000000000)",
+      );
+
+      final before = await server.get(
+        '/inventory/items',
+        accessToken: session.accessToken,
+      );
+      expect(before.json['total'], 1);
+
+      await server.delete('/inventory', accessToken: session.accessToken);
+
+      final after = await server.get(
+        '/inventory/items',
+        accessToken: session.accessToken,
+      );
+      expect(after.json['total'], 0);
+    });
+
+    test('it leaves the accounts alone', () async {
+      // Clearing the stock is not asking to be signed out, and the audit trail
+      // is the record of who did what — including this.
+      final session = await admin();
+      await server.delete('/inventory', accessToken: session.accessToken);
+
+      final me = await server.get(
+        '/auth/session/me',
+        accessToken: session.accessToken,
+      );
+      expect(me.statusCode, 200, reason: 'still signed in');
+    });
+
+    test('staff cannot erase the workspace', () async {
+      final staff = await server.signedInUser(email: 'staff@example.com');
+      final response = await server.delete(
+        '/inventory',
+        accessToken: staff.accessToken,
+      );
+      expect(response.statusCode, 403);
+    });
+  });
+
   group('workspace settings', () {
     test('preferences are shared, and merged rather than replaced', () async {
       final session = await admin();

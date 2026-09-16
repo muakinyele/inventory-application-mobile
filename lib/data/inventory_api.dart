@@ -23,6 +23,13 @@ class InventoryApi {
 
   final AuthApi _auth;
 
+  /// Empties the inventory on the server.
+  ///
+  /// Accounts, roles and the audit trail are left alone — clearing the stock
+  /// is not asking to be signed out, and the record of who did what includes
+  /// this.
+  Future<void> eraseEverything() => _auth.send('DELETE', '/inventory');
+
   // ------------------------------------------------------------------
   // Items
   // ------------------------------------------------------------------

@@ -26,7 +26,10 @@ class ProductCard extends StatelessWidget {
   final Item item;
   final String currency;
   final Color categoryColor;
-  final VoidCallback onTap;
+
+  /// Null when the row cannot be opened. A card that looks tappable and
+  /// does nothing is worse than one that plainly is not.
+  final VoidCallback? onTap;
   final void Function(int delta)? onAdjust;
   final VoidCallback? onMenu;
 

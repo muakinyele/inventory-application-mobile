@@ -123,6 +123,13 @@ class TestServer {
     }
   }
 
+  /// Runs SQL the API has no route for.
+  ///
+  /// Used to plant rows the app can no longer create — a row with a blank id,
+  /// say — so a fix for them can be tested against the shape they actually
+  /// have rather than a reconstruction of it.
+  Future<void> customStatement(String sql) => db.customStatement(sql);
+
   Future<void> close() async => db.close();
 
   // ------------------------------------------------------------------

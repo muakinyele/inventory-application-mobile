@@ -3208,11 +3208,47 @@ class InventoryController extends ChangeNotifier {
     settings: const AppSettings(),
   );
 
-  void eraseAll() => _replace(
-    items: const [],
-    movements: const [],
-    settings: const AppSettings(),
-  );
+  /// Empties the workspace's inventory.
+  ///
+  /// Shared, this has to reach the server or it clears the screen and nothing
+  /// else: the rows come back on the next load, and they never left anybody
+  /// else's. That is what it did until now.
+  Future<void> eraseAll() async {
+    final api = _api;
+    if (api == null) {
+      _replace(
+        items: const [],
+        movements: const [],
+        settings: const AppSettings(),
+      );
+      return;
+    }
+
+    try {
+      await api.eraseEverything();
+      lastWriteError = null;
+    } catch (error) {
+      // Nothing is cleared locally on a failure. Showing an empty catalogue
+      // the server still holds is the confusion this is meant to end.
+      lastWriteError = error;
+      debugPrint('Stockpile: could not erase the inventory: $error');
+      notifyListeners();
+      return;
+    }
+
+    _items = const [];
+    _movements = const [];
+    _suppliers = const [];
+    _customers = const [];
+    _purchaseOrders = const [];
+    _salesOrders = const [];
+    _receipts = const [];
+    _invoices = const [];
+    _transfers = const [];
+    _levels = {};
+    _settings = const AppSettings();
+    notifyListeners();
+  }
 
   void _replace({
     required List<Item> items,

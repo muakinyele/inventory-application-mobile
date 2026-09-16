@@ -71,6 +71,18 @@ Router inventoryRoutes({required InventoryService inventory}) {
     return Response(204);
   });
 
+  /// Empties the inventory. Accounts, roles and the audit trail are left
+  /// alone — they are not inventory, and somebody clearing the stock has not
+  /// asked to be signed out.
+  ///
+  /// Behind settings.manage rather than items.delete: this is not a bigger
+  /// version of deleting an item, it is a decision about the whole workspace.
+  router.delete('/', (Request request) async {
+    request.require('settings.manage');
+    await inventory.eraseEverything();
+    return Response(204);
+  });
+
   // ------------------------------------------------------------------
   // Stock
   // ------------------------------------------------------------------
