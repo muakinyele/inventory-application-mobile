@@ -338,6 +338,82 @@ void main() {
     });
   });
 
+  group('money already taken', () {
+    test('an invoice with a payment against it cannot be cancelled', () async {
+      // Cancelling returns the stock. If money has been taken against the
+      // invoice, that leaves the goods back on the shelf and the payment still
+      // banked — the books and the shelf disagree, and nothing on either side
+      // records why.
+      final s = await admin();
+      final id = await item(s, quantity: 10);
+
+      final created = await server.post(
+        '/documents/invoices',
+        accessToken: s.accessToken,
+        body: {
+          'customerName': 'A customer',
+          'movesStock': true,
+          'amountPaid': 25.0,
+          'lines': [
+            {
+              'itemId': id,
+              'itemName': 'Widget',
+              'quantity': 4,
+              'unitPrice': 10.0,
+            },
+          ],
+        },
+      );
+      final invoiceId = created.json['invoice']['id'] as String;
+      expect(await quantityOf(s, id), 6);
+
+      final response = await server.post(
+        '/documents/invoices/$invoiceId/cancel',
+        accessToken: s.accessToken,
+        body: {'reason': 'Ordered in error'},
+      );
+
+      expect(response.statusCode, 400);
+      expect(
+        await quantityOf(s, id),
+        6,
+        reason: 'the stock stayed out, because the money stayed in',
+      );
+
+      final read = await server.get(
+        '/documents/invoices/$invoiceId',
+        accessToken: s.accessToken,
+      );
+      expect(read.json['invoice']['status'], isNot('cancelled'));
+    });
+
+    test('an unpaid invoice still cancels', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 10);
+
+      final created = await server.post(
+        '/documents/invoices',
+        accessToken: s.accessToken,
+        body: {
+          'movesStock': true,
+          'lines': [
+            {'itemId': id, 'itemName': 'Widget', 'quantity': 4},
+          ],
+        },
+      );
+
+      final response = await server.post(
+        '/documents/invoices/${created.json['invoice']['id']}/cancel',
+        accessToken: s.accessToken,
+        body: {'reason': 'Ordered in error'},
+      );
+
+      expect(response.statusCode, 200);
+      expect(response.json['invoice']['status'], 'cancelled');
+      expect(await quantityOf(s, id), 10);
+    });
+  });
+
   group('receipts', () {
     test('issuing takes stock and voiding returns it', () async {
       final s = await admin();

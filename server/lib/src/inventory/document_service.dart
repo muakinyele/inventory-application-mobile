@@ -164,6 +164,18 @@ class DocumentService {
       if (current == null) throw ApiError.notFound;
       if (current.status == 'cancelled') return current;
 
+      // Cancelling returns the stock. With money already taken against the
+      // invoice that would put the goods back on the shelf and leave the
+      // payment banked — the books and the shelf disagreeing, with nothing on
+      // either side recording why. A paid invoice is refunded or credited,
+      // not struck off.
+      if (current.amountPaid > 0) {
+        throw ApiError.badRequest(
+          'Invoice ${current.reference} has been paid against and cannot be '
+          'cancelled. Refund the payment first.',
+        );
+      }
+
       if (current.movesStock) {
         await _reverseDocumentStock(
           documentId: id,
