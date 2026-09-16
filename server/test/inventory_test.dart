@@ -237,6 +237,96 @@ void main() {
     });
   });
 
+  group('bins', () {
+    test('stock with no location named lands somewhere countable', () async {
+      // Never a blank bin: stock whose location nobody recorded still has to
+      // be findable, so it sits in a named one.
+      final session = await admin();
+      final id = await createItem(session, quantity: 0, location: '');
+
+      await server.post(
+        '/inventory/stock/adjust',
+        accessToken: session.accessToken,
+        body: {'itemId': id, 'delta': 5},
+      );
+
+      final read = await server.get(
+        '/inventory/items/$id',
+        accessToken: session.accessToken,
+      );
+      final bins = {
+        for (final bin in read.json['stock'] as List)
+          bin['location'] as String: bin['quantity'] as int,
+      };
+      expect(bins.keys, isNot(contains('')));
+      expect(bins['Unassigned'], 5);
+    });
+
+    test('taking more than one bin holds drains the others', () async {
+      // The bin totals and the item total have to stay honest together. Guarding
+      // only the total lets a bin go negative while the sum still adds up,
+      // which reads as stock sitting in a place that has none.
+      final session = await admin();
+      final id = await createItem(session, quantity: 0, location: 'Main');
+
+      await server.post(
+        '/inventory/stock/adjust',
+        accessToken: session.accessToken,
+        body: {'itemId': id, 'delta': 3, 'location': 'Main'},
+      );
+      await server.post(
+        '/inventory/stock/adjust',
+        accessToken: session.accessToken,
+        body: {'itemId': id, 'delta': 7, 'location': 'Back room'},
+      );
+
+      // Ten on hand, only three of them in Main.
+      final sale = await server.post(
+        '/inventory/stock/adjust',
+        accessToken: session.accessToken,
+        body: {
+          'itemId': id,
+          'delta': -8,
+          'location': 'Main',
+          'expectedQuantity': 10,
+        },
+      );
+      expect(sale.statusCode, 200);
+      expect(sale.json['item']['quantity'], 2);
+
+      final read = await server.get(
+        '/inventory/items/$id',
+        accessToken: session.accessToken,
+      );
+      for (final bin in read.json['stock'] as List) {
+        expect(
+          bin['quantity'] as int,
+          greaterThanOrEqualTo(0),
+          reason: '${bin['location']} went negative',
+        );
+      }
+    });
+
+    test('deleting an item takes its bins with it', () async {
+      final session = await admin();
+      final id = await createItem(session, quantity: 4, location: 'Main');
+
+      await server.delete(
+        '/inventory/items/$id',
+        accessToken: session.accessToken,
+      );
+
+      final stock = await server.get(
+        '/inventory/stock',
+        accessToken: session.accessToken,
+      );
+      final rows = (stock.json['stock'] as List).where(
+        (row) => row['itemId'] == id,
+      );
+      expect(rows, isEmpty);
+    });
+  });
+
   group('transfers', () {
     test(
       'a transfer moves stock between bins without changing the total',

@@ -225,7 +225,7 @@ class InventoryService {
       }
 
       final bin = location.isEmpty ? unassigned : location;
-      await _writeStockLevel(itemId, bin, delta);
+      await _moveStock(itemId, bin, delta);
 
       final movement = MovementsCompanion.insert(
         id: newId(),
@@ -342,6 +342,65 @@ class InventoryService {
 
       return movements;
     });
+  }
+
+  /// Books a change against the named bin, spilling to the others when it has
+  /// to.
+  ///
+  /// Stock coming in goes where it was sent. Stock going out comes from the
+  /// named bin first and then from wherever else the item is held, because the
+  /// bin somebody sold from is not always the one with enough in it.
+  ///
+  /// Without this a sale larger than its own bin left that bin negative while
+  /// the item total stayed right — the sum adds up, and the breakdown claims
+  /// stock is sitting somewhere that has none. The total is already guarded by
+  /// the caller, so only the distribution is decided here.
+  Future<void> _moveStock(String itemId, String bin, int delta) async {
+    if (delta >= 0) {
+      await _writeStockLevel(itemId, bin, delta);
+      return;
+    }
+
+    var owed = -delta;
+
+    final fromNamed = await _quantityAt(itemId, bin);
+    final takeHere = owed < fromNamed ? owed : fromNamed;
+    if (takeHere > 0) {
+      await _writeStockLevel(itemId, bin, -takeHere);
+      owed -= takeHere;
+    }
+    if (owed == 0) return;
+
+    // Fullest first, so the shortfall is covered in as few places as it can
+    // be rather than scattering small remainders across every bin.
+    final others =
+        await (db.select(db.stockLevels)
+              ..where(
+                (t) => t.itemId.equals(itemId) & t.location.equals(bin).not(),
+              )
+              ..orderBy([
+                (t) => OrderingTerm(
+                  expression: t.quantity,
+                  mode: OrderingMode.desc,
+                ),
+              ]))
+            .get();
+
+    for (final row in others) {
+      if (owed == 0) break;
+      if (row.quantity <= 0) continue;
+      final take = owed < row.quantity ? owed : row.quantity;
+      await _writeStockLevel(itemId, row.location, -take);
+      owed -= take;
+    }
+
+    // Anything still owed has nowhere to come from. The caller has already
+    // refused a change that would take the total below zero, so this can only
+    // mean the bins hold less than the total claims — a disagreement worth
+    // recording against the named bin rather than losing.
+    if (owed > 0) {
+      await _writeStockLevel(itemId, bin, -owed);
+    }
   }
 
   /// Adds [delta] to one bin and keeps [Items.quantity] equal to the sum.
