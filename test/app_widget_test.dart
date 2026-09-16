@@ -601,31 +601,38 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      final controller = await newController();
-      final item = await controller.createItem(
-        draft(name: 'Bolt', quantity: 50, unitCost: 100),
-      );
-      final invoice = (await controller.issueInvoice(
-        lines: [
-          InvoiceLine(
-            id: 'a',
-            itemId: item.id,
-            itemName: 'Bolt',
-            quantity: 4,
-            unitPrice: 500,
+      final controller = await seededController(
+        invoices: [
+          seedInvoice(
+            id: 'inv1',
+            reference: 'INV-0001',
+            amountPaid: 1500,
+            lines: const [
+              InvoiceLine(
+                id: 'il1',
+                itemId: 'i1',
+                itemName: 'Bolt',
+                quantity: 3,
+                unitPrice: 500,
+              ),
+            ],
           ),
         ],
-      ))!;
-      final receipt = (await controller.payInvoice(
-        invoice.id,
-        800,
-        method: PaymentMethod.transfer,
-      ))!;
+        receipts: [
+          seedReceipt(
+            id: 'r1',
+            reference: 'RC-0001',
+            invoiceId: 'inv1',
+            amountPaid: 1500,
+            lines: const [],
+          ),
+        ],
+      );
 
       await tester.pumpWidget(
         ChangeNotifierProvider.value(
           value: controller,
-          child: StockpileApp(initialLocation: '/receipts/${receipt.id}'),
+          child: StockpileApp(initialLocation: '/receipts/r1'),
         ),
       );
       await tester.pumpAndSettle();
@@ -645,27 +652,31 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      final controller = await newController();
-      final item = await controller.createItem(
-        draft(name: 'Bolt', quantity: 20),
-      );
-      final receipt = (await controller.issueReceipt(
-        lines: [
-          ReceiptLine(
-            id: 'rl1',
-            itemId: item.id,
-            itemName: 'Bolt',
-            quantity: 3,
-            unitPrice: 500,
+      final controller = await seededController(
+        receipts: [
+          seedReceipt(
+            id: 'r1',
+            reference: 'RC-0001',
+            status: ReceiptStatus.voided,
+            voidReason: 'Rang up twice',
+            amountPaid: 1500,
+            lines: const [
+              ReceiptLine(
+                id: 'rl1',
+                itemId: 'i1',
+                itemName: 'Bolt',
+                quantity: 3,
+                unitPrice: 500,
+              ),
+            ],
           ),
         ],
-      ))!;
-      await controller.voidReceipt(receipt.id, reason: 'Rang up twice');
+      );
 
       await tester.pumpWidget(
         ChangeNotifierProvider.value(
           value: controller,
-          child: StockpileApp(initialLocation: '/receipts/${receipt.id}'),
+          child: StockpileApp(initialLocation: '/receipts/r1'),
         ),
       );
       await tester.pumpAndSettle();

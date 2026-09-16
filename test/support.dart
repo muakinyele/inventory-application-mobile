@@ -144,12 +144,13 @@ Invoice seedInvoice({
 Receipt seedReceipt({
   required String id,
   required List<ReceiptLine> lines,
-  String reference = 'RCP-0001',
+  String reference = 'RC-0001',
   String customerName = '',
   double amountPaid = 0,
   double discount = 0,
   double taxRate = 0,
   ReceiptStatus status = ReceiptStatus.issued,
+  String voidReason = '',
   String? invoiceId,
   String? salesOrderId,
   DateTime? issuedAt,
@@ -166,6 +167,7 @@ Receipt seedReceipt({
     discount: discount,
     taxRate: taxRate,
     amountPaid: amountPaid,
+    voidReason: voidReason,
     // A receipt against a document moves nothing: the document already did.
     movesStock: invoiceId == null && salesOrderId == null,
     issuedAt: at,
