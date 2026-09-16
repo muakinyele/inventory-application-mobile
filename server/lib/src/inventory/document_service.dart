@@ -147,6 +147,96 @@ class DocumentService {
     });
   }
 
+  /// Records money taken against an invoice.
+  ///
+  /// An operation rather than a field, which is the whole point. While
+  /// `amountPaid` was something each client wrote, two people settling the
+  /// same invoice each sent their own total and the second silently replaced
+  /// the first — the later payment looked like the only one, and the money in
+  /// between vanished from the record. Here the running total is read and
+  /// added to inside one transaction, so payments accumulate.
+  ///
+  /// The amount is capped at the balance. Anything beyond it is change, not
+  /// revenue, and an invoice that reads as more than paid is a figure nobody
+  /// can reconcile. What was actually applied comes back in the invoice, so
+  /// the till can show the difference.
+  Future<({Invoice invoice, double applied})> recordPayment({
+    required String id,
+    required double amount,
+    required String actorId,
+  }) async {
+    if (amount <= 0) {
+      throw ApiError.badRequest('A payment has to be more than nothing.');
+    }
+
+    return db.transaction(() async {
+      final invoice = await (db.select(
+        db.invoices,
+      )..where((t) => t.id.equals(id))).getSingleOrNull();
+      if (invoice == null) throw ApiError.notFound;
+
+      if (invoice.status == 'cancelled') {
+        throw ApiError.badRequest(
+          'Invoice ${invoice.reference} was cancelled and takes no payment.',
+        );
+      }
+
+      final lines = await _invoiceLines(id);
+      final total = _invoiceTotal(invoice, lines);
+      final balance = total - invoice.amountPaid;
+
+      // Rounded the way the client's isSettled is, so a total of 4999.999999
+      // out of a percentage tax does not leave an invoice owing a hundredth of
+      // a penny forever.
+      if (balance < 0.005) {
+        throw ApiError.badRequest(
+          'Invoice ${invoice.reference} is already settled.',
+        );
+      }
+
+      final applied = amount > balance ? balance : amount;
+      final paid = invoice.amountPaid + applied;
+      final settled = (total - paid) < 0.005;
+      final now = DateTime.now().toUtc();
+
+      await (db.update(db.invoices)..where((t) => t.id.equals(id))).write(
+        InvoicesCompanion(
+          amountPaid: Value(paid),
+          // Matching the client's InvoiceStatus members by name.
+          status: Value(settled ? 'paid' : 'partPaid'),
+          closedAt: settled ? Value(now) : const Value.absent(),
+          updatedAt: Value(now),
+        ),
+      );
+
+      return (
+        invoice: await (db.select(
+          db.invoices,
+        )..where((t) => t.id.equals(id))).getSingle(),
+        applied: applied,
+      );
+    });
+  }
+
+  /// The invoice's total, computed the same way the client computes it.
+  ///
+  /// Duplicated deliberately rather than trusted from the request: a balance
+  /// the payer supplies is a balance the payer can be wrong about, and this is
+  /// the number that decides whether money is owed.
+  double _invoiceTotal(Invoice invoice, List<InvoiceLine> lines) {
+    final gross = lines.fold(0.0, (sum, l) => sum + l.quantity * l.unitPrice);
+    final lineDiscount = lines.fold(0.0, (sum, l) => sum + l.discount);
+
+    // Capped at the goods themselves, so an over-generous discount cannot make
+    // an invoice negative.
+    final discount = (lineDiscount + invoice.discount).clamp(
+      0.0,
+      gross <= 0 ? 0.0 : gross,
+    );
+    final subtotal = (gross - discount).clamp(0.0, double.infinity);
+    return subtotal + subtotal * invoice.taxRate;
+  }
+
   /// Cancels an invoice and puts the stock back.
   ///
   /// Never deleted. An invoice that was issued is a thing that happened, and

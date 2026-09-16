@@ -63,6 +63,34 @@ Router documentRoutes({required DocumentService documents}) {
     return jsonResponse({'invoice': invoiceJson(saved.invoice, saved.lines)});
   });
 
+  /// Money taken against an invoice.
+  ///
+  /// A POST that adds, not a PATCH that sets: two tills settling the same
+  /// invoice have to accumulate rather than overwrite each other.
+  router.post('/invoices/<id>/payments', (Request request, String id) async {
+    final caller = request.require('invoices.update');
+    final body = await readJsonBody(request);
+
+    final amount = body['amount'];
+    if (amount is! num) {
+      throw ApiError.badRequest('amount must be a number.');
+    }
+
+    final result = await documents.recordPayment(
+      id: id,
+      amount: amount.toDouble(),
+      actorId: caller.user.id,
+    );
+    final lines = (await documents.invoice(id)).lines;
+    return jsonResponse({
+      'invoice': invoiceJson(result.invoice, lines),
+      // What was actually taken, which is less than was offered when the
+      // payment covered more than the balance. The till shows the difference
+      // as change.
+      'applied': result.applied,
+    });
+  });
+
   // Cancelled rather than deleted: an invoice that was issued is a thing that
   // happened, and the stock it moved has to come back through a movement
   // rather than by the original quietly disappearing.

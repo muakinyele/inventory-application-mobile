@@ -279,6 +279,27 @@ class InventoryApi {
     return invoiceFromJson(body['invoice'] as Map<String, dynamic>);
   }
 
+  /// Records money taken against an invoice.
+  ///
+  /// The server adds to the running total rather than being told what it is,
+  /// so two tills settling the same invoice accumulate instead of overwriting
+  /// each other. It also caps the amount at the balance — [applied] is what
+  /// was actually taken, and the difference is the customer's change.
+  Future<({Invoice invoice, double applied})> payInvoice(
+    String id,
+    double amount,
+  ) async {
+    final body = await _auth.send(
+      'POST',
+      '/documents/invoices/$id/payments',
+      body: {'amount': amount},
+    );
+    return (
+      invoice: invoiceFromJson(body['invoice'] as Map<String, dynamic>),
+      applied: (body['applied'] as num?)?.toDouble() ?? 0,
+    );
+  }
+
   Future<List<Receipt>> receipts({String? status}) async {
     final body = await _auth.send(
       'GET',
