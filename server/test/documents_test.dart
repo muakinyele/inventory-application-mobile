@@ -338,6 +338,194 @@ void main() {
     });
   });
 
+  group('payments', () {
+    Future<(String, double)> invoiceFor(
+      TestSession s,
+      String itemId, {
+      int quantity = 4,
+      double unitPrice = 25.0,
+      double taxRate = 0,
+      double discount = 0,
+    }) async {
+      final created = await server.post(
+        '/documents/invoices',
+        accessToken: s.accessToken,
+        body: {
+          'customerName': 'A customer',
+          'taxRate': taxRate,
+          'discount': discount,
+          'lines': [
+            {
+              'itemId': itemId,
+              'itemName': 'Widget',
+              'quantity': quantity,
+              'unitPrice': unitPrice,
+            },
+          ],
+        },
+      );
+      return (created.json['invoice']['id'] as String, quantity * unitPrice);
+    }
+
+    Future<double> paidOn(TestSession s, String id) async {
+      final read = await server.get(
+        '/documents/invoices/$id',
+        accessToken: s.accessToken,
+      );
+      return (read.json['invoice']['amountPaid'] as num).toDouble();
+    }
+
+    test('two payments accumulate rather than overwrite', () async {
+      // The reason this is an endpoint at all. While amountPaid was a field
+      // each client wrote, two tills settling the same invoice each sent their
+      // own total and the second silently replaced the first.
+      final s = await admin();
+      final id = await item(s, quantity: 50);
+      final (invoiceId, _) = await invoiceFor(s, id);
+
+      await server.post(
+        '/documents/invoices/$invoiceId/payments',
+        accessToken: s.accessToken,
+        body: {'amount': 30.0},
+      );
+      await server.post(
+        '/documents/invoices/$invoiceId/payments',
+        accessToken: s.accessToken,
+        body: {'amount': 20.0},
+      );
+
+      expect(await paidOn(s, invoiceId), closeTo(50.0, 0.0001));
+    });
+
+    test('paying it off in full settles the invoice', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 50);
+      final (invoiceId, total) = await invoiceFor(s, id);
+
+      final response = await server.post(
+        '/documents/invoices/$invoiceId/payments',
+        accessToken: s.accessToken,
+        body: {'amount': total},
+      );
+
+      expect(response.json['invoice']['status'], 'paid');
+      expect(response.json['invoice']['closedAt'], isNotNull);
+    });
+
+    test('a part payment leaves it part paid', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 50);
+      final (invoiceId, total) = await invoiceFor(s, id);
+
+      final response = await server.post(
+        '/documents/invoices/$invoiceId/payments',
+        accessToken: s.accessToken,
+        body: {'amount': total / 2},
+      );
+
+      expect(response.json['invoice']['status'], 'partPaid');
+    });
+
+    test('a payment never exceeds the balance', () async {
+      // Anything beyond the balance is change, not revenue. An invoice that
+      // reads as more than paid is a figure nobody can reconcile.
+      final s = await admin();
+      final id = await item(s, quantity: 50);
+      final (invoiceId, total) = await invoiceFor(s, id);
+
+      final response = await server.post(
+        '/documents/invoices/$invoiceId/payments',
+        accessToken: s.accessToken,
+        body: {'amount': total + 500},
+      );
+
+      expect(
+        (response.json['applied'] as num).toDouble(),
+        closeTo(total, 0.0001),
+      );
+      expect(await paidOn(s, invoiceId), closeTo(total, 0.0001));
+      expect(response.json['invoice']['status'], 'paid');
+    });
+
+    test('a settled invoice takes no further payment', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 50);
+      final (invoiceId, total) = await invoiceFor(s, id);
+
+      await server.post(
+        '/documents/invoices/$invoiceId/payments',
+        accessToken: s.accessToken,
+        body: {'amount': total},
+      );
+      final again = await server.post(
+        '/documents/invoices/$invoiceId/payments',
+        accessToken: s.accessToken,
+        body: {'amount': 10.0},
+      );
+
+      expect(again.statusCode, 400);
+      expect(await paidOn(s, invoiceId), closeTo(total, 0.0001));
+    });
+
+    test('the balance is computed from tax and discount too', () async {
+      // Duplicated from the client rather than trusted from the request: a
+      // balance the payer supplies is one the payer can be wrong about.
+      final s = await admin();
+      final id = await item(s, quantity: 50);
+      // 4 x 25 = 100, less 20 discount = 80, plus 10% tax = 88.
+      final (invoiceId, _) = await invoiceFor(
+        s,
+        id,
+        taxRate: 0.1,
+        discount: 20.0,
+      );
+
+      final response = await server.post(
+        '/documents/invoices/$invoiceId/payments',
+        accessToken: s.accessToken,
+        body: {'amount': 1000.0},
+      );
+
+      expect((response.json['applied'] as num).toDouble(), closeTo(88.0, 0.01));
+      expect(response.json['invoice']['status'], 'paid');
+    });
+
+    test('a cancelled invoice takes no payment', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 50);
+      final (invoiceId, _) = await invoiceFor(s, id);
+
+      await server.post(
+        '/documents/invoices/$invoiceId/cancel',
+        accessToken: s.accessToken,
+        body: {'reason': 'Ordered in error'},
+      );
+      final response = await server.post(
+        '/documents/invoices/$invoiceId/payments',
+        accessToken: s.accessToken,
+        body: {'amount': 10.0},
+      );
+
+      expect(response.statusCode, 400);
+    });
+
+    test('nothing, or less than nothing, is not a payment', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 50);
+      final (invoiceId, _) = await invoiceFor(s, id);
+
+      for (final amount in [0.0, -25.0]) {
+        final response = await server.post(
+          '/documents/invoices/$invoiceId/payments',
+          accessToken: s.accessToken,
+          body: {'amount': amount},
+        );
+        expect(response.statusCode, 400, reason: 'amount $amount');
+      }
+      expect(await paidOn(s, invoiceId), 0);
+    });
+  });
+
   group('money already taken', () {
     test('an invoice with a payment against it cannot be cancelled', () async {
       // Cancelling returns the stock. If money has been taken against the
