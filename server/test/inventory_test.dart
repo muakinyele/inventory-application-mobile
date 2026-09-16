@@ -307,6 +307,32 @@ void main() {
       }
     });
 
+    test('deleting an item keeps its history', () async {
+      // The movements carry the item's name, so the ledger stays readable
+      // after the row is gone. Deleting them would erase the record of stock
+      // that genuinely moved.
+      final session = await admin();
+      final id = await createItem(session, quantity: 5, location: 'Main');
+      await server.post(
+        '/inventory/stock/adjust',
+        accessToken: session.accessToken,
+        body: {'itemId': id, 'delta': -2, 'note': 'Sold one'},
+      );
+
+      await server.delete(
+        '/inventory/items/$id',
+        accessToken: session.accessToken,
+      );
+
+      final history = await server.get(
+        '/inventory/movements?item=$id',
+        accessToken: session.accessToken,
+      );
+      final movements = history.json['movements'] as List;
+      expect(movements, isNotEmpty, reason: 'the ledger outlives the item');
+      expect(movements.first['itemName'], isNotEmpty);
+    });
+
     test('deleting an item takes its bins with it', () async {
       final session = await admin();
       final id = await createItem(session, quantity: 4, location: 'Main');
