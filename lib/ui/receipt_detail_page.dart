@@ -346,19 +346,6 @@ class _ReceiptDetailPageState extends State<ReceiptDetailPage> {
                       ),
                     ),
                   ),
-                if (voided)
-                  OutlinedButton.icon(
-                    onPressed: () => _delete(controller, receipt),
-                    icon: const Icon(Icons.delete_outline, size: 18),
-                    label: const Text('Delete'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: p.critical,
-                      backgroundColor: p.criticalWash,
-                      side: BorderSide(
-                        color: p.critical.withValues(alpha: 0.4),
-                      ),
-                    ),
-                  ),
               ],
             ),
           ],
@@ -559,36 +546,6 @@ class _ReceiptDetailPageState extends State<ReceiptDetailPage> {
         tone: done ? MessageTone.success : MessageTone.failure,
       );
     }
-  }
-
-  Future<void> _delete(InventoryController controller, Receipt receipt) async {
-    final router = GoRouter.of(context);
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Delete receipt'),
-        content: Text(
-          'Remove ${receipt.reference} from the file for good. It is already '
-          'voided, so no stock or takings change.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            style: TextButton.styleFrom(
-              foregroundColor: Theme.of(dialogContext).colorScheme.error,
-            ),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-    controller.deleteReceipt(receipt.id);
-    router.go('/receipts');
   }
 }
 

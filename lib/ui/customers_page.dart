@@ -65,7 +65,8 @@ class CustomersPage extends StatelessWidget {
                     ('Address', customer.address),
                   ],
                   onEdit: () => _edit(context, controller, customer),
-                  onDelete: () => _confirmDelete(context, controller, customer),
+                  onArchive: () =>
+                      _confirmArchive(context, controller, customer),
                 ),
                 const SizedBox(height: Insets.md),
               ],
@@ -93,7 +94,12 @@ class CustomersPage extends StatelessWidget {
     }
   }
 
-  Future<void> _confirmDelete(
+  /// Archives rather than deletes, and says so.
+  ///
+  /// Invoices and receipts reference customers, and those references have to
+  /// stay resolvable — a document whose customer had been erased could no
+  /// longer say who it was for.
+  Future<void> _confirmArchive(
     BuildContext context,
     InventoryController controller,
     Customer customer,
@@ -101,7 +107,7 @@ class CustomersPage extends StatelessWidget {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Delete customer'),
+        title: const Text('Archive customer'),
         content: Text('Remove ${customer.name}?'),
         actions: [
           TextButton(
@@ -113,12 +119,12 @@ class CustomersPage extends StatelessWidget {
             style: TextButton.styleFrom(
               foregroundColor: Theme.of(dialogContext).colorScheme.error,
             ),
-            child: const Text('Delete'),
+            child: const Text('Archive'),
           ),
         ],
       ),
     );
-    if (confirmed == true) controller.deleteCustomer(customer.id);
+    if (confirmed == true) await controller.archiveCustomer(customer.id);
   }
 }
 

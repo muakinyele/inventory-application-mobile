@@ -622,9 +622,7 @@ void main() {
       expect(find.text('Balance due'), findsOneWidget);
     });
 
-    testWidgets('a voided receipt says so and offers no refund', (
-      tester,
-    ) async {
+    testWidgets('a voided receipt says so, and stays on file', (tester) async {
       tester.view.physicalSize = _tallDesktop;
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
@@ -658,7 +656,10 @@ void main() {
       expect(find.text('Rang up twice'), findsOneWidget);
       expect(find.text('Refund'), findsNothing);
       expect(find.text('Void'), findsNothing);
-      expect(find.text('Delete'), findsOneWidget);
+      // Nor Delete. A voided receipt stays on file: the shared inventory has
+      // no way to erase a document, because the movements it wrote are what
+      // the stock figures are built from.
+      expect(find.text('Delete'), findsNothing);
     });
 
     testWidgets('a sale that has sent stock offers a receipt', (tester) async {

@@ -1120,6 +1120,92 @@ class InventoryController extends ChangeNotifier {
     }
   }
 
+  /// Takes a party out of the pickers without erasing it.
+  ///
+  /// Archived rather than deleted, which is what the shared inventory
+  /// supports and, on reflection, what it always meant. Documents reference
+  /// suppliers and customers, and those references have to stay resolvable —
+  /// an invoice whose customer has been erased is a document that can no
+  /// longer say who it was for.
+  ///
+  /// Items linked to the supplier keep its name as free text, so the
+  /// catalogue still reads properly with nothing left to click through to.
+  Future<void> archiveSupplier(String id) async {
+    final supplier = supplierById(id);
+    if (supplier == null) return;
+
+    final api = _api;
+    if (api == null) {
+      deleteSupplier(id);
+      return;
+    }
+
+    final now = DateTime.now();
+    for (final item in _items.where((i) => i.supplierId == id).toList()) {
+      await _updateItemOnServer(
+        api,
+        item.id,
+        item.copyWith(
+          supplier: supplier.name,
+          clearSupplierId: true,
+          updatedAt: now,
+        ),
+      );
+    }
+
+    await _saveSupplierOnServer(
+      api,
+      Supplier(
+        id: id,
+        name: supplier.name,
+        contactName: supplier.contactName,
+        phone: supplier.phone,
+        email: supplier.email,
+        address: supplier.address,
+        leadTimeDays: supplier.leadTimeDays,
+        paymentTerms: supplier.paymentTerms,
+        notes: supplier.notes,
+        archived: true,
+        createdAt: supplier.createdAt,
+        updatedAt: now,
+      ),
+      id: id,
+    );
+    _suppliers = _suppliers.where((s) => s.id != id).toList();
+    notifyListeners();
+  }
+
+  Future<void> archiveCustomer(String id) async {
+    final customer = customerById(id);
+    if (customer == null) return;
+
+    final api = _api;
+    if (api == null) {
+      deleteCustomer(id);
+      return;
+    }
+
+    await _saveCustomerOnServer(
+      api,
+      Customer(
+        id: id,
+        name: customer.name,
+        contactName: customer.contactName,
+        phone: customer.phone,
+        email: customer.email,
+        address: customer.address,
+        priceTier: customer.priceTier,
+        notes: customer.notes,
+        archived: true,
+        createdAt: customer.createdAt,
+        updatedAt: DateTime.now(),
+      ),
+      id: id,
+    );
+    _customers = _customers.where((c) => c.id != id).toList();
+    notifyListeners();
+  }
+
   /// Re-reads what a document just changed.
   ///
   /// Items and movements only. Per-bin levels are read by the screens that
@@ -1594,12 +1680,26 @@ class InventoryController extends ChangeNotifier {
     return (existingValue + incomingValue) / (item.quantity + quantity);
   }
 
+  /// The purchase-order counterpart of [_replaceSalesOrder], and the same
+  /// reasoning: placing and cancelling both come through here.
   void _replaceOrder(PurchaseOrder order) {
     _purchaseOrders = _purchaseOrders
         .map((o) => o.id == order.id ? order : o)
         .toList();
     notifyListeners();
-    _persist(() => _repo.savePurchaseOrder(order));
+
+    final api = _api;
+    if (api == null) {
+      _persist(() => _repo.savePurchaseOrder(order));
+      return;
+    }
+    _persist(() async {
+      final saved = await api.savePurchaseOrder(order);
+      _purchaseOrders = _purchaseOrders
+          .map((o) => o.id == saved.id ? saved : o)
+          .toList();
+      notifyListeners();
+    });
   }
 
   // --- Sales orders --------------------------------------------------------
@@ -1841,12 +1941,30 @@ class InventoryController extends ChangeNotifier {
     return movements.length;
   }
 
+  /// Writes an order's new state through, wherever it lives.
+  ///
+  /// Every status change goes through here — confirming, cancelling, closing —
+  /// so this one method is what decides whether they reach anybody else. While
+  /// it wrote only to the device, confirming a sale looked right until the
+  /// next load and was never true for anyone but the person who did it.
   void _replaceSalesOrder(SalesOrder order) {
     _salesOrders = _salesOrders
         .map((o) => o.id == order.id ? order : o)
         .toList();
     notifyListeners();
-    _persist(() => _repo.saveSalesOrder(order));
+
+    final api = _api;
+    if (api == null) {
+      _persist(() => _repo.saveSalesOrder(order));
+      return;
+    }
+    _persist(() async {
+      final saved = await api.saveSalesOrder(order);
+      _salesOrders = _salesOrders
+          .map((o) => o.id == saved.id ? saved : o)
+          .toList();
+      notifyListeners();
+    });
   }
 
   // --- Receipts ------------------------------------------------------------
@@ -3050,10 +3168,38 @@ class InventoryController extends ChangeNotifier {
 
   // --- Settings and bulk ---------------------------------------------------
 
-  void updateSettings(AppSettings next) {
+  Future<void> updateSettings(AppSettings next) async {
     _settings = next;
     notifyListeners();
-    _persist(() => _repo.saveSettings(next));
+
+    final api = _api;
+    if (api == null) {
+      _persist(() => _repo.saveSettings(next));
+      return;
+    }
+
+    // These belong to the workspace, not the device — the company name on an
+    // invoice has to be the same one everybody else prints. Written straight
+    // through rather than optimistically: the screen already shows the new
+    // value, and a failure is reported rather than silently reverted.
+    try {
+      await api.savePreferences({
+        'companyName': next.companyName,
+        'currency': next.currency,
+        'companyAddress': next.companyAddress,
+        'companyPhone': next.companyPhone,
+        'companyEmail': next.companyEmail,
+        'taxRate': next.taxRate.toString(),
+        'taxLabel': next.taxLabel,
+        'receiptFooter': next.receiptFooter,
+      });
+      await _persistSettingsTo(api);
+      lastWriteError = null;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not save the settings: $error');
+    }
+    notifyListeners();
   }
 
   void loadSampleData() => _replace(
