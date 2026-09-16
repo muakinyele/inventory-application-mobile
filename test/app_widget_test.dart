@@ -603,10 +603,13 @@ void main() {
 
       final controller = await seededController(
         invoices: [
+          // Part paid, so a balance is still due — that is the row the
+          // receipt links back from.
           seedInvoice(
             id: 'inv1',
             reference: 'INV-0001',
-            amountPaid: 1500,
+            amountPaid: 500,
+            status: InvoiceStatus.partPaid,
             lines: const [
               InvoiceLine(
                 id: 'il1',
@@ -623,7 +626,7 @@ void main() {
             id: 'r1',
             reference: 'RC-0001',
             invoiceId: 'inv1',
-            amountPaid: 1500,
+            amountPaid: 500,
             lines: const [],
           ),
         ],
