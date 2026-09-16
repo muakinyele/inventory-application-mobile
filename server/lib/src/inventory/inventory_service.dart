@@ -259,6 +259,17 @@ class InventoryService {
       }
 
       final after = item.quantity + delta;
+      // Refused, not trimmed, and that is a decision rather than an oversight.
+      //
+      // The on-device app clamped a sale to whatever was on the shelf and sold
+      // that, which kept a till moving when one device was the only writer.
+      // Shared, the count this device is working from may already be wrong —
+      // somebody else may have sold the last of it a second ago — so quietly
+      // selling less than was asked for would hide exactly the disagreement
+      // the operator needs to see. They are told, and decide.
+      //
+      // Confirmed with the owner on 2026-09-16. If it is ever changed back,
+      // change it deliberately.
       if (after < 0) {
         throw ApiError.badRequest(
           'That would leave ${item.name} at $after. Stock cannot go negative.',
