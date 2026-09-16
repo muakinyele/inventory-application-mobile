@@ -391,24 +391,28 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
+      // Seeded part-fulfilled: the screen's job is to show an order at that
+      // point, and despatching is the server's.
       final controller = await seededController(
         items: seedItems(),
         movements: seedMovements(),
-      );
-      final item = controller.items.firstWhere((i) => i.quantity >= 10);
-      final order = await controller.createSalesOrder(
-        lines: [
-          SalesOrderLine(
-            id: 'l1',
-            itemId: item.id,
-            itemName: item.name,
-            quantityOrdered: 10,
-            unitPrice: 900,
+        salesOrders: [
+          seedSalesOrder(
+            id: 'so1',
+            status: SalesStatus.partial,
+            lines: const [
+              SalesOrderLine(
+                id: 'l1',
+                itemId: 'seed-1',
+                itemName: 'Bolt',
+                quantityOrdered: 10,
+                quantityFulfilled: 4,
+                unitPrice: 900,
+              ),
+            ],
           ),
         ],
       );
-      controller.confirmSalesOrder(order.id);
-      await controller.fulfilSalesOrder(order.id, {'l1': 4});
 
       await tester.pumpWidget(
         ChangeNotifierProvider.value(
@@ -1063,19 +1067,38 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      final controller = await newController();
-      final item = await controller.createItem(
-        draft(name: 'Bolt', quantity: 10).copyWith(location: 'Warehouse'),
-      );
-      controller.recordTransfer(
-        fromLocation: 'Warehouse',
-        toLocation: 'Store Front',
-        lines: [
-          TransferLine(
-            id: 't1',
-            itemId: item.id,
-            itemName: 'Bolt',
-            quantity: 4,
+      final controller = await seededController(
+        items: [
+          Item(
+            id: 'i1',
+            name: 'Bolt',
+            location: 'Warehouse',
+            quantity: 10,
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+          ),
+        ],
+        // The page shows where stock is, so the bins have to be seeded too:
+        // four of the ten moved.
+        levels: const {
+          'i1': {'Warehouse': 6, 'Store Front': 4},
+        },
+        transfers: [
+          Transfer(
+            id: 'tr1',
+            reference: 'TR-0001',
+            fromLocation: 'Warehouse',
+            toLocation: 'Store Front',
+            lines: const [
+              TransferLine(
+                id: 't1',
+                itemId: 'i1',
+                itemName: 'Bolt',
+                quantity: 4,
+              ),
+            ],
+            movedAt: DateTime.now(),
+            createdAt: DateTime.now(),
           ),
         ],
       );
@@ -1106,27 +1129,26 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      final controller = await newController();
-      final item = await controller.createItem(
-        draft(name: 'Bolt', quantity: 10).copyWith(location: 'Warehouse'),
-      );
-      controller.recordTransfer(
-        fromLocation: 'Warehouse',
-        toLocation: 'Van',
-        lines: [
-          TransferLine(
-            id: 't1',
-            itemId: item.id,
-            itemName: 'Bolt',
-            quantity: 4,
+      final controller = await seededController(
+        items: [
+          Item(
+            id: 'i1',
+            name: 'Bolt',
+            location: 'Warehouse',
+            quantity: 10,
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
           ),
         ],
+        levels: const {
+          'i1': {'Warehouse': 6, 'Van': 4},
+        },
       );
 
       await tester.pumpWidget(
         ChangeNotifierProvider.value(
           value: controller,
-          child: StockpileApp(initialLocation: '/items/${item.id}'),
+          child: StockpileApp(initialLocation: '/items/i1'),
         ),
       );
       await tester.pumpAndSettle();
