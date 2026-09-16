@@ -1,7 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:stockpile/data/receipt_document.dart';
 import 'package:stockpile/models/app_settings.dart';
-import 'package:stockpile/models/movement.dart';
 import 'package:stockpile/models/receipt.dart';
 import 'package:stockpile/models/sales_order.dart';
 import 'package:stockpile/state/inventory_controller.dart';

@@ -1,5 +1,4 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:stockpile/models/movement.dart';
 import 'package:stockpile/models/party.dart';
 import 'package:stockpile/models/purchase_order.dart';
 import 'package:stockpile/state/inventory_controller.dart';

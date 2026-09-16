@@ -5,8 +5,6 @@ import 'package:stockpile/core/theme.dart';
 import 'package:stockpile/state/inventory_controller.dart';
 import 'package:stockpile/ui/widgets/inventory_status_banner.dart';
 
-import 'package:stockpile/data/seed_data.dart';
-
 import 'support.dart';
 
 Future<InventoryController> _shared() async {

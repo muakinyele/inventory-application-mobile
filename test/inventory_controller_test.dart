@@ -1,8 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:stockpile/data/csv_codec.dart';
 import 'package:stockpile/models/item.dart';
-import 'package:stockpile/models/movement.dart';
-import 'package:stockpile/state/inventory_controller.dart';
 
 import 'support.dart';
 
