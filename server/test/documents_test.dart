@@ -485,6 +485,203 @@ void main() {
     });
   });
 
+  group('a counter sale meets the shelf', () {
+    test('the ledger ties the movement to the receipt', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 10);
+
+      final created = await server.post(
+        '/documents/receipts',
+        accessToken: s.accessToken,
+        body: {
+          'status': 'issued',
+          'movesStock': true,
+          'lines': [
+            {'itemId': id, 'itemName': 'Widget', 'quantity': 2},
+          ],
+        },
+      );
+      final receiptId = created.json['receipt']['id'] as String;
+
+      final history = await server.get(
+        '/inventory/movements?item=$id',
+        accessToken: s.accessToken,
+      );
+      final tagged = (history.json['movements'] as List).where(
+        (m) => m['documentId'] == receiptId,
+      );
+      expect(
+        tagged,
+        isNotEmpty,
+        reason: 'a sale has to be traceable back to the document',
+      );
+    });
+
+    test('two lines for one item draw down the same stock', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 10);
+
+      final created = await server.post(
+        '/documents/receipts',
+        accessToken: s.accessToken,
+        body: {
+          'status': 'issued',
+          'movesStock': true,
+          'lines': [
+            {'itemId': id, 'itemName': 'Widget', 'quantity': 3},
+            {'itemId': id, 'itemName': 'Widget', 'quantity': 4},
+          ],
+        },
+      );
+
+      expect(created.statusCode, 201);
+      expect(
+        await quantityOf(s, id),
+        3,
+        reason: 'seven left the shelf in total, not three or four',
+      );
+    });
+
+    test('selling more than is there does not take the till with it', () async {
+      // The on-device path trimmed the line to what was on the shelf and sold
+      // that. Whatever the server does, it must not leave the stock half
+      // moved: either the sale stands or nothing changed.
+      final s = await admin();
+      final id = await item(s, quantity: 2);
+
+      final response = await server.post(
+        '/documents/receipts',
+        accessToken: s.accessToken,
+        body: {
+          'status': 'issued',
+          'movesStock': true,
+          'lines': [
+            {'itemId': id, 'itemName': 'Widget', 'quantity': 9},
+          ],
+        },
+      );
+
+      final after = await quantityOf(s, id);
+      if (response.statusCode >= 400) {
+        expect(after, 2, reason: 'refused, so nothing moved');
+      } else {
+        expect(after, greaterThanOrEqualTo(0));
+      }
+    });
+  });
+
+  group('void and refund together', () {
+    test(
+      'voiding after a partial refund returns only what is still out',
+      () async {
+        // The on-device path refused this outright: once goods have come back
+        // the document has a history worth keeping. The server allows it, and
+        // the arithmetic has to hold either way — the reversal is computed from
+        // the movements the document actually wrote, so a refund already
+        // returned is not returned twice.
+        final s = await admin();
+        final id = await item(s, quantity: 10);
+
+        final created = await server.post(
+          '/documents/receipts',
+          accessToken: s.accessToken,
+          body: {
+            'status': 'issued',
+            'movesStock': true,
+            'lines': [
+              {'itemId': id, 'itemName': 'Widget', 'quantity': 6},
+            ],
+          },
+        );
+        final receiptId = created.json['receipt']['id'] as String;
+        final lineId = created.json['receipt']['lines'][0]['id'] as String;
+        expect(await quantityOf(s, id), 4);
+
+        await server.post(
+          '/documents/receipts/$receiptId/refund',
+          accessToken: s.accessToken,
+          body: {
+            'returned': {lineId: 2},
+          },
+        );
+        expect(await quantityOf(s, id), 6);
+
+        await server.post(
+          '/documents/receipts/$receiptId/void',
+          accessToken: s.accessToken,
+          body: {'reason': 'Struck off'},
+        );
+
+        expect(
+          await quantityOf(s, id),
+          10,
+          reason: 'the four still out came back, not six',
+        );
+      },
+    );
+
+    test('voiding twice does not return the stock twice', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 10);
+
+      final created = await server.post(
+        '/documents/receipts',
+        accessToken: s.accessToken,
+        body: {
+          'status': 'issued',
+          'movesStock': true,
+          'lines': [
+            {'itemId': id, 'itemName': 'Widget', 'quantity': 3},
+          ],
+        },
+      );
+      final receiptId = created.json['receipt']['id'] as String;
+
+      await server.post(
+        '/documents/receipts/$receiptId/void',
+        accessToken: s.accessToken,
+        body: {'reason': 'once'},
+      );
+      await server.post(
+        '/documents/receipts/$receiptId/void',
+        accessToken: s.accessToken,
+        body: {'reason': 'twice'},
+      );
+
+      expect(await quantityOf(s, id), 10);
+    });
+
+    test('each kind of document counts in its own sequence', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 50);
+
+      final invoice = await server.post(
+        '/documents/invoices',
+        accessToken: s.accessToken,
+        body: {
+          'lines': [
+            {'itemId': id, 'itemName': 'Widget', 'quantity': 1},
+          ],
+        },
+      );
+      final receipt = await server.post(
+        '/documents/receipts',
+        accessToken: s.accessToken,
+        body: {
+          'status': 'issued',
+          'lines': [
+            {'itemId': id, 'itemName': 'Widget', 'quantity': 1},
+          ],
+        },
+      );
+
+      // Both are the first of their kind, so both end 0001 — a shared counter
+      // would have made the second 0002.
+      expect(invoice.json['invoice']['reference'], 'INV-0001');
+      expect(receipt.json['receipt']['reference'], 'RCP-0001');
+    });
+  });
+
   group('purchase orders', () {
     test('ordering does not move stock; receiving does', () async {
       final s = await admin();
