@@ -122,6 +122,7 @@ Invoice seedInvoice({
   double discount = 0,
   double taxRate = 0,
   InvoiceStatus status = InvoiceStatus.open,
+  String notes = '',
   DateTime? issuedAt,
 }) {
   final at = issuedAt ?? DateTime.now();
@@ -134,6 +135,7 @@ Invoice seedInvoice({
     discount: discount,
     taxRate: taxRate,
     amountPaid: amountPaid,
+    notes: notes,
     issuedAt: at,
     createdAt: at,
     updatedAt: at,

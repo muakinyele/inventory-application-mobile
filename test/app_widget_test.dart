@@ -693,42 +693,48 @@ void main() {
       expect(find.text('Delete'), findsNothing);
     });
 
-    testWidgets('a sale that has sent stock offers a receipt', (tester) async {
+    testWidgets('a sale offers a receipt only once stock has gone', (
+      tester,
+    ) async {
       tester.view.physicalSize = _tallDesktop;
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      final controller = await newController();
-      final item = await controller.createItem(
-        draft(name: 'Bolt', quantity: 20),
-      );
-      final order = await controller.createSalesOrder(
-        lines: [
-          SalesOrderLine(
-            id: 'l1',
-            itemId: item.id,
-            itemName: 'Bolt',
-            quantityOrdered: 10,
-            unitPrice: 900,
+      // Two states, seeded rather than reached by despatching: the screen's
+      // job is to offer the receipt when something has shipped, and the
+      // shipping itself is the server's.
+      Future<void> pumpWith(SalesStatus status, int fulfilled) async {
+        final controller = await seededController(
+          salesOrders: [
+            seedSalesOrder(
+              id: 'so1',
+              status: status,
+              lines: [
+                SalesOrderLine(
+                  id: 'l1',
+                  itemId: 'i1',
+                  itemName: 'Bolt',
+                  quantityOrdered: 10,
+                  quantityFulfilled: fulfilled,
+                  unitPrice: 500,
+                ),
+              ],
+            ),
+          ],
+        );
+        await tester.pumpWidget(
+          ChangeNotifierProvider.value(
+            value: controller,
+            child: const StockpileApp(initialLocation: '/sales-orders/so1'),
           ),
-        ],
-      );
-      controller.confirmSalesOrder(order.id);
+        );
+        await tester.pumpAndSettle();
+      }
 
-      await tester.pumpWidget(
-        ChangeNotifierProvider.value(
-          value: controller,
-          child: StockpileApp(initialLocation: '/sales-orders/${order.id}'),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      // Nothing has gone out, so there is nothing to receipt yet.
+      await pumpWith(SalesStatus.confirmed, 0);
       expect(find.text('Issue receipt'), findsNothing);
 
-      await controller.fulfilSalesOrder(order.id, {'l1': 4});
-      await tester.pumpAndSettle();
-
+      await pumpWith(SalesStatus.partial, 4);
       expect(find.text('Issue receipt'), findsOneWidget);
     });
 
@@ -814,41 +820,47 @@ void main() {
       expect(invoice.balanceDue, 2000);
     });
 
-    testWidgets('paying an invoice lists the receipt it issued', (
+    testWidgets('an invoice lists the receipts raised against it', (
       tester,
     ) async {
       tester.view.physicalSize = _tallDesktop;
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      final controller = await newController();
-      final item = await controller.createItem(
-        draft(name: 'Bolt', quantity: 50, unitCost: 100),
-      );
-      final invoice = (await controller.issueInvoice(
-        lines: [
-          InvoiceLine(
-            id: 'a',
-            itemId: item.id,
-            itemName: 'Bolt',
-            quantity: 4,
-            unitPrice: 500,
+      final controller = await seededController(
+        invoices: [
+          seedInvoice(
+            id: 'inv1',
+            reference: 'INV-0001',
+            amountPaid: 500,
+            status: InvoiceStatus.partPaid,
+            lines: const [
+              InvoiceLine(
+                id: 'il1',
+                itemId: 'i1',
+                itemName: 'Bolt',
+                quantity: 10,
+                unitPrice: 500,
+              ),
+            ],
           ),
         ],
-      ))!;
+        receipts: [
+          seedReceipt(
+            id: 'r1',
+            reference: 'RC-0001',
+            invoiceId: 'inv1',
+            amountPaid: 500,
+            lines: const [],
+          ),
+        ],
+      );
 
       await tester.pumpWidget(
         ChangeNotifierProvider.value(
           value: controller,
-          child: StockpileApp(initialLocation: '/invoices/${invoice.id}'),
+          child: const StockpileApp(initialLocation: '/invoices/inv1'),
         ),
-      );
-      await tester.pumpAndSettle();
-
-      await controller.payInvoice(
-        invoice.id,
-        800,
-        method: PaymentMethod.transfer,
       );
       await tester.pumpAndSettle();
 
@@ -1009,18 +1021,34 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      final controller = await newController();
-      final item = await controller.createItem(
-        draft(name: 'Bolt', quantity: 50, unitCost: 100),
-      );
-      await controller.issueReceipt(
-        lines: [
-          ReceiptLine(
-            id: 'a',
-            itemId: item.id,
-            itemName: 'Bolt',
+      // 10 at 500 sold against 100 cost: 5000 revenue, 1000 cost, 80% margin.
+      // Seeded because the figures are what the screen renders, and producing
+      // them by selling is the server's part.
+      final controller = await seededController(
+        items: [
+          Item(
+            id: 'i1',
+            name: 'Bolt',
             quantity: 10,
-            unitPrice: 500,
+            unitCost: 100,
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+          ),
+        ],
+        receipts: [
+          seedReceipt(
+            id: 'r1',
+            amountPaid: 5000,
+            lines: const [
+              ReceiptLine(
+                id: 'rl1',
+                itemId: 'i1',
+                itemName: 'Bolt',
+                quantity: 10,
+                unitPrice: 500,
+                costOfGoods: 1000,
+              ),
+            ],
           ),
         ],
       );
