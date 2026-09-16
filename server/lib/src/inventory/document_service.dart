@@ -816,6 +816,13 @@ class DocumentService {
       )..where((t) => t.id.equals(orderId))).getSingleOrNull();
       if (order == null) throw ApiError.notFound;
 
+      if (order.status == 'cancelled') {
+        throw ApiError.badRequest(
+          'Order ${order.reference} was cancelled; nothing can be sent '
+          'against it.',
+        );
+      }
+
       final lines = await _salesOrderLines(orderId);
       final byId = {for (final line in lines) line.id: line};
 

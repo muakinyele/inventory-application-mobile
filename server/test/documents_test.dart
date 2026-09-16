@@ -1140,6 +1140,57 @@ void main() {
     });
   });
 
+  group('a cancelled sale sends nothing', () {
+    test('despatch is refused once the order is cancelled', () async {
+      // The mirror of the cancelled purchase order. Both were unguarded; the
+      // delivery side was found first only because its test was ported first.
+      final s = await admin();
+      final id = await item(s, quantity: 10);
+
+      final created = await server.post(
+        '/documents/sales-orders',
+        accessToken: s.accessToken,
+        body: {
+          'status': 'confirmed',
+          'lines': [
+            {'itemId': id, 'itemName': 'Widget', 'quantityOrdered': 4},
+          ],
+        },
+      );
+      final orderId = created.json['salesOrder']['id'] as String;
+
+      await server.patch(
+        '/documents/sales-orders/$orderId',
+        accessToken: s.accessToken,
+        body: {
+          'status': 'cancelled',
+          'lines': [
+            {'itemId': id, 'itemName': 'Widget', 'quantityOrdered': 4},
+          ],
+        },
+      );
+
+      // Re-read the line id: saving replaces the lines, so the old one is gone
+      // and a 400 for that reason would prove nothing about cancellation.
+      final reread = await server.get(
+        '/documents/sales-orders/$orderId',
+        accessToken: s.accessToken,
+      );
+      final lineId = reread.json['salesOrder']['lines'][0]['id'] as String;
+
+      final response = await server.post(
+        '/documents/sales-orders/$orderId/despatch',
+        accessToken: s.accessToken,
+        body: {
+          'sent': {lineId: 4},
+        },
+      );
+
+      expect(response.statusCode, 400);
+      expect(await quantityOf(s, id), 10, reason: 'nothing left the shelf');
+    });
+  });
+
   group('shared and guarded', () {
     test('a document raised by one user is visible to another', () async {
       final owner = await admin();
