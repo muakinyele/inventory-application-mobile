@@ -27,6 +27,24 @@ void main() {
     return response.json['item']['id'] as String;
   }
 
+  Future<String> createItemWithCost(
+    TestSession s, {
+    required int quantity,
+    required double unitCost,
+  }) async {
+    final response = await server.post(
+      '/inventory/items',
+      accessToken: s.accessToken,
+      body: {
+        'name': 'Widget',
+        'quantity': quantity,
+        'unitCost': unitCost,
+        'location': 'Main',
+      },
+    );
+    return response.json['item']['id'] as String;
+  }
+
   Future<int> quantityOf(TestSession s, String id) async {
     final response = await server.get(
       '/inventory/items/$id',
@@ -776,6 +794,142 @@ void main() {
 
       expect(response.statusCode, 400);
       expect(await quantityOf(s, id), 0, reason: 'nothing applied');
+    });
+  });
+
+  group('what a delivery does to cost', () {
+    Future<double> costOf(TestSession s, String id) async {
+      final response = await server.get(
+        '/inventory/items/$id',
+        accessToken: s.accessToken,
+      );
+      return (response.json['item']['unitCost'] as num).toDouble();
+    }
+
+    Future<(String, String)> order(
+      TestSession s,
+      String itemId, {
+      required int quantity,
+      required double unitCost,
+    }) async {
+      final created = await server.post(
+        '/documents/purchase-orders',
+        accessToken: s.accessToken,
+        body: {
+          'status': 'ordered',
+          'lines': [
+            {
+              'itemId': itemId,
+              'itemName': 'Widget',
+              'quantityOrdered': quantity,
+              'unitCost': unitCost,
+            },
+          ],
+        },
+      );
+      return (
+        created.json['purchaseOrder']['id'] as String,
+        created.json['purchaseOrder']['lines'][0]['id'] as String,
+      );
+    }
+
+    test('cost is rolled forward as a weighted average', () async {
+      // Ten on hand at 1.00, ten more arriving at 2.00, so the shelf is now
+      // worth 30 across twenty units. Leaving the cost at 1.00 would overstate
+      // every margin reported from then on.
+      final s = await admin();
+      final id = await createItemWithCost(s, quantity: 10, unitCost: 1.0);
+
+      final (orderId, lineId) = await order(s, id, quantity: 10, unitCost: 2.0);
+      await server.post(
+        '/documents/purchase-orders/$orderId/receive',
+        accessToken: s.accessToken,
+        body: {
+          'received': {lineId: 10},
+        },
+      );
+
+      expect(await quantityOf(s, id), 20);
+      expect(await costOf(s, id), closeTo(1.5, 0.0001));
+    });
+
+    test('cost is taken as-is when there was nothing to average', () async {
+      final s = await admin();
+      final id = await createItemWithCost(s, quantity: 0, unitCost: 0);
+
+      final (orderId, lineId) = await order(s, id, quantity: 4, unitCost: 3.25);
+      await server.post(
+        '/documents/purchase-orders/$orderId/receive',
+        accessToken: s.accessToken,
+        body: {
+          'received': {lineId: 4},
+        },
+      );
+
+      expect(await costOf(s, id), closeTo(3.25, 0.0001));
+    });
+
+    test('a zero-cost line leaves the existing cost alone', () async {
+      // A line with no price on it is missing information, not a statement
+      // that the goods were free.
+      final s = await admin();
+      final id = await createItemWithCost(s, quantity: 5, unitCost: 4.0);
+
+      final (orderId, lineId) = await order(s, id, quantity: 5, unitCost: 0);
+      await server.post(
+        '/documents/purchase-orders/$orderId/receive',
+        accessToken: s.accessToken,
+        body: {
+          'received': {lineId: 5},
+        },
+      );
+
+      expect(await costOf(s, id), closeTo(4.0, 0.0001));
+      expect(await quantityOf(s, id), 10);
+    });
+
+    test('a cancelled order takes no delivery', () async {
+      final s = await admin();
+      final id = await createItemWithCost(s, quantity: 0, unitCost: 1);
+      final (orderId, lineId) = await order(s, id, quantity: 5, unitCost: 1);
+
+      await server.patch(
+        '/documents/purchase-orders/$orderId',
+        accessToken: s.accessToken,
+        body: {
+          'status': 'cancelled',
+          'lines': [
+            {
+              'itemId': id,
+              'itemName': 'Widget',
+              'quantityOrdered': 5,
+              'unitCost': 1.0,
+            },
+          ],
+        },
+      );
+
+      // Re-read the line id: saving replaces the lines wholesale, so the one
+      // from before the edit no longer exists — and a 400 for *that* reason
+      // would pass this test without proving anything about cancellation.
+      final reread = await server.get(
+        '/documents/purchase-orders/$orderId',
+        accessToken: s.accessToken,
+      );
+      final currentLineId =
+          reread.json['purchaseOrder']['lines'][0]['id'] as String;
+      expect(currentLineId, isNot(lineId));
+
+      final response = await server.post(
+        '/documents/purchase-orders/$orderId/receive',
+        accessToken: s.accessToken,
+        body: {
+          'received': {currentLineId: 5},
+        },
+      );
+
+      expect(response.statusCode, 400);
+      expect(await quantityOf(s, id), 0);
     });
   });
 
