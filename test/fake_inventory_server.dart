@@ -71,6 +71,38 @@ class FakeInventoryServer {
 
     if (request.method == 'DELETE') return http.Response('', 204);
 
+    // A well-formed answer, not a computed one: the count that comes back is
+    // whatever was sent. A test asserting on the resulting quantity is
+    // asserting the server's arithmetic and belongs in the server suite; what
+    // is left here is that the screen made the call and responded to it.
+    if (path == '/api/inventory/stock/adjust') {
+      final itemId = body['itemId'] as String? ?? 'i1';
+      final delta = (body['delta'] as num?)?.toInt() ?? 0;
+      final before = (body['expectedQuantity'] as num?)?.toInt() ?? 0;
+      return _ok({
+        'item': {
+          'id': itemId,
+          'name': 'Item',
+          'quantity': before + delta,
+          'unit': 'pcs',
+          'createdAt': '2026-09-16T10:00:00.000Z',
+          'updatedAt': '2026-09-16T10:00:00.000Z',
+        },
+        'movement': {
+          'id': 'm-fake',
+          'itemId': itemId,
+          'itemName': 'Item',
+          'kind': body['kind'] ?? 'adjustment',
+          'before': before,
+          'after': before + delta,
+          'note': body['note'] ?? '',
+          'actor': 'test',
+          'documentId': null,
+          'at': '2026-09-16T10:00:00.000Z',
+        },
+      });
+    }
+
     if (path == '/api/inventory/items') return _ok(echo('item', 'item-'));
     if (path.startsWith('/api/inventory/items/')) {
       return _ok({

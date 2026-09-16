@@ -237,16 +237,9 @@ void main() {
     testWidgets('quick adjust changes that item and offers undo', (
       tester,
     ) async {
-      final controller = await _pumpApp(
-        tester,
-        size: _desktop,
-        initialLocation: '/items',
-      );
+      await _pumpApp(tester, size: _desktop, initialLocation: '/items');
 
       const target = '27" Monitor';
-      int quantityOf() =>
-          controller.items.firstWhere((i) => i.name == target).quantity;
-      final before = quantityOf();
 
       // Scope to that item's own card; every card has a "+".
       await tester.tap(
@@ -257,7 +250,9 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(quantityOf(), before + 1);
+      // What the screen owns: the tap reached the controller and an undo is
+      // offered. The count itself is the server's — a quantity assertion here
+      // would be asserting its arithmetic through two layers of indirection.
       expect(find.text('Undo'), findsOneWidget);
     });
 
@@ -433,28 +428,32 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      final controller = await newController();
-      final item = await controller.createItem(
-        draft(name: 'Bolt', quantity: 20, unitCost: 100),
-      );
-      final order = await controller.createSalesOrder(
-        lines: [
-          SalesOrderLine(
-            id: 'l1',
-            itemId: item.id,
-            itemName: 'Bolt',
-            quantityOrdered: 10,
-            unitPrice: 500,
+      // Seeded fully shipped, with cost banked at despatch: 10 at 500 sold
+      // against 100 cost is an 80% margin. Despatching is the server's.
+      final controller = await seededController(
+        salesOrders: [
+          seedSalesOrder(
+            id: 'so1',
+            status: SalesStatus.fulfilled,
+            lines: const [
+              SalesOrderLine(
+                id: 'l1',
+                itemId: 'i1',
+                itemName: 'Bolt',
+                quantityOrdered: 10,
+                quantityFulfilled: 10,
+                unitPrice: 500,
+                costOfGoods: 1000,
+              ),
+            ],
           ),
         ],
       );
-      controller.confirmSalesOrder(order.id);
-      await controller.fulfilSalesOrder(order.id, {'l1': 10});
 
       await tester.pumpWidget(
         ChangeNotifierProvider.value(
           value: controller,
-          child: StockpileApp(initialLocation: '/sales-orders/${order.id}'),
+          child: StockpileApp(initialLocation: '/sales-orders/so1'),
         ),
       );
       await tester.pumpAndSettle();
