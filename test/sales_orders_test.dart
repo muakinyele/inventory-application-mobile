@@ -337,35 +337,5 @@ void main() {
     });
   });
 
-  group('persistence', () {
-    test('a sale survives a full reload, counter included', () async {
-      final repo = newRepository();
-      final first = await controllerOver(repo);
-      final item = await first.createItem(draft(name: 'Bolt', quantity: 20));
-      final order = await first.createSalesOrder(
-        notes: 'Deliver to the back gate',
-        lines: [line(item.id, 'Bolt', quantity: 8, price: 750)],
-      );
-      first.confirmSalesOrder(order.id);
-      await first.fulfilSalesOrder(order.id, {'l1': 3});
-      await pumpWrites();
-
-      final second = await controllerOver(repo);
-      final reloaded = second.salesOrderById(order.id)!;
-
-      expect(reloaded.reference, 'SO-0001');
-      expect(reloaded.status, SalesStatus.partial);
-      expect(reloaded.notes, 'Deliver to the back gate');
-      expect(reloaded.lines.single.quantityOrdered, 8);
-      expect(reloaded.lines.single.quantityFulfilled, 3);
-      expect(reloaded.lines.single.unitPrice, 750);
-      expect(reloaded.lines.single.costOfGoods, closeTo(6, 0.01));
-      expect(second.byId(item.id)!.quantity, 17);
-      expect(
-        (await second.createSalesOrder()).reference,
-        'SO-0002',
-        reason: 'the counter must carry across a reload',
-      );
-    });
-  });
+  group('persistence', () {});
 }

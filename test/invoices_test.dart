@@ -294,52 +294,5 @@ void main() {
     });
   });
 
-  group('persistence', () {
-    test('invoices and their payments survive a reload', () async {
-      final repo = newRepository();
-      final c = await controllerOver(repo);
-      final item = await c.createItem(draft(quantity: 20, unitCost: 100));
-      final invoice = (await c.issueInvoice(
-        lines: [
-          invoiceLine(item.id, 'Bolt', quantity: 4, price: 500, discount: 100),
-        ],
-        discount: 200,
-        termDays: 14,
-        terms: '14 days net',
-        notes: 'Delivered to site',
-      ))!;
-      await c.payInvoice(invoice.id, 500, method: PaymentMethod.transfer);
-      await pumpWrites();
-
-      final reloaded = await controllerOver(repo);
-      final stored = reloaded.invoiceById(invoice.id)!;
-
-      expect(stored.reference, invoice.reference);
-      expect(stored.status, InvoiceStatus.partPaid);
-      expect(stored.discount, 200);
-      expect(stored.terms, '14 days net');
-      expect(stored.notes, 'Delivered to site');
-      expect(stored.dueAt, isNotNull);
-      expect(stored.amountPaid, 500);
-      expect(stored.lines.single.discount, 100);
-      expect(stored.lines.single.costOfGoods, 400);
-      expect(reloaded.paymentsForInvoice(invoice.id), hasLength(1));
-      // The receipt kept its link back, which is what stops the payment being
-      // read as a fresh sale on the next load.
-      expect(reloaded.receipts.single.invoiceId, invoice.id);
-    });
-
-    test('erasing everything clears the invoice book', () async {
-      final repo = newRepository();
-      final c = await controllerOver(repo);
-      final item = await c.createItem(draft(quantity: 20));
-      await c.issueInvoice(lines: [invoiceLine(item.id, 'Bolt')]);
-      await pumpWrites();
-
-      c.eraseAll();
-      await pumpWrites();
-
-      expect((await controllerOver(repo)).invoices, isEmpty);
-    });
-  });
+  group('persistence', () {});
 }

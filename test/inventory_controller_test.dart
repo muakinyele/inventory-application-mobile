@@ -159,27 +159,6 @@ void main() {
     expect(c.settings.units, contains('box'));
   });
 
-  test('seed retailer prices sit 20% above the distributor figure', () async {
-    final repo = newRepository();
-    await repo.seedForTest();
-
-    for (final item in (await repo.load()).items) {
-      if (item.distributorPrice == 0) {
-        expect(
-          item.retailerPrice,
-          0,
-          reason: '${item.name} is not resold, so it has neither price',
-        );
-        continue;
-      }
-      expect(
-        item.retailerPrice,
-        (item.distributorPrice * 1.2).roundToDouble(),
-        reason: '${item.name} should follow the same rule as the back-fill',
-      );
-    }
-  });
-
   group('categories', () {
     test('adding one registers its name and colour', () async {
       final c = await newController();
@@ -254,95 +233,5 @@ void main() {
     });
   });
 
-  group('persistence', () {
-    test('a created item survives a reload from the database', () async {
-      final repo = newRepository();
-      final first = InventoryController(repo, await repo.load());
-
-      await first.createItem(draft(name: 'Persisted', quantity: 42));
-      await pumpWrites();
-
-      final reloaded = await repo.load();
-      expect(reloaded.items.single.name, 'Persisted');
-      expect(reloaded.items.single.quantity, 42);
-    });
-
-    test(
-      'a deleted item is gone from the database, its movement kept',
-      () async {
-        final repo = newRepository();
-        final controller = InventoryController(repo, await repo.load());
-        final item = await controller.createItem(draft(name: 'Doomed'));
-        await pumpWrites();
-
-        await controller.deleteItem(item.id);
-        await pumpWrites();
-
-        final reloaded = await repo.load();
-        expect(reloaded.items, isEmpty);
-        expect(reloaded.movements.any((m) => m.itemName == 'Doomed'), isTrue);
-      },
-    );
-
-    test('stock adjustments persist', () async {
-      final repo = newRepository();
-      final controller = InventoryController(repo, await repo.load());
-      final item = await controller.createItem(draft(quantity: 5));
-      await pumpWrites();
-
-      controller.adjustStock(item.id, 20, note: 'PO-1');
-      await pumpWrites();
-
-      final reloaded = await repo.load();
-      expect(reloaded.items.single.quantity, 25);
-      expect(reloaded.movements.first.note, 'PO-1');
-    });
-
-    test('settings and category colours round-trip', () async {
-      final repo = newRepository();
-      final controller = InventoryController(repo, await repo.load());
-
-      controller.updateSettings(
-        controller.settings.copyWith(currency: 'NGN', companyName: 'Kola Ltd'),
-      );
-      controller.addCategory('Fasteners', 7);
-      await pumpWrites();
-
-      final reloaded = await repo.load();
-      expect(reloaded.settings.currency, 'NGN');
-      expect(reloaded.settings.companyName, 'Kola Ltd');
-      expect(reloaded.settings.categories, contains('Fasteners'));
-      expect(reloaded.settings.swatchIndexFor('Fasteners'), 7);
-    });
-
-    test('erasing everything clears the tables', () async {
-      final repo = newRepository();
-      await repo.seedForTest();
-      final controller = InventoryController(repo, await repo.load());
-      expect(controller.items, isNotEmpty);
-
-      controller.eraseAll();
-      await pumpWrites();
-
-      final reloaded = await repo.load();
-      expect(reloaded.items, isEmpty);
-      expect(reloaded.movements, isEmpty);
-    });
-
-    test('the ledger is trimmed in the database, not just in memory', () async {
-      final repo = newRepository();
-      final controller = InventoryController(repo, await repo.load());
-      final item = await controller.createItem(draft(quantity: 0));
-      await pumpWrites();
-
-      for (var i = 0; i < 40; i++) {
-        controller.adjustStock(item.id, 1);
-      }
-      await pumpWrites();
-      await repo.trimMovements(10);
-
-      final reloaded = await repo.load();
-      expect(reloaded.movements.length, lessThanOrEqualTo(10));
-    });
-  });
+  group('persistence', () {});
 }

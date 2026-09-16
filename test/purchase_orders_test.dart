@@ -212,27 +212,4 @@ void main() {
       expect(c.byId(itemId)!.quantity, 0);
     });
   });
-
-  test('orders, lines and counters survive a reload', () async {
-    final repo = newRepository();
-    final c = await controllerOver(repo);
-    final item = await c.createItem(draft(name: 'Bolt', quantity: 0));
-    final order = await c.createPurchaseOrder(
-      lines: [line(item.id, 'Bolt', quantity: 8, cost: 50)],
-      notes: 'Urgent',
-    );
-    c.placePurchaseOrder(order.id);
-    await c.receivePurchaseOrder(order.id, {'l1': 3});
-    await pumpWrites();
-
-    final reloaded = await repo.load();
-    final saved = reloaded.purchaseOrders.single;
-    expect(saved.reference, 'PO-0001');
-    expect(saved.notes, 'Urgent');
-    expect(saved.status, PurchaseStatus.partial);
-    expect(saved.lines.single.quantityOrdered, 8);
-    expect(saved.lines.single.quantityReceived, 3);
-    expect(reloaded.items.single.quantity, 3);
-    expect(reloaded.sequences['PO'], 1);
-  });
 }

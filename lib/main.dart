@@ -20,14 +20,9 @@ Future<void> main() async {
     // and again after signing in on a device that was signed out.
     final auth = buildAuthController();
 
-    // Still opened, and still the thing the controller writes through on a
-    // build with no server configured. It holds no inventory in the shared
-    // case; it is the seam the on-device path used and has not been removed.
-    final repository = await InventoryRepository.open();
     final inventory = InventoryController(
-      repository,
+      InventoryApi(auth.api),
       Snapshot.empty,
-      api: InventoryApi(auth.api),
     );
 
     // The catalogue follows the session: fetched when one appears, dropped

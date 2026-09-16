@@ -11,6 +11,8 @@ import 'package:stockpile/models/transfer.dart';
 import 'package:stockpile/state/inventory_controller.dart';
 import 'package:stockpile/ui/document_view_page.dart';
 
+import 'package:stockpile/data/seed_data.dart';
+
 import 'support.dart';
 import 'package:stockpile/ui/widgets/app_sidebar.dart';
 import 'package:stockpile/ui/widgets/charts.dart';
@@ -25,7 +27,8 @@ const _desktop = Size(1280, 900);
 /// only builds what fits, so off-screen cards are otherwise never found.
 const _tallDesktop = Size(1280, 2600);
 
-Future<InventoryController> _seededController() => newController(seeded: true);
+Future<InventoryController> _seededController() =>
+    seededController(items: seedItems(), movements: seedMovements());
 
 Future<InventoryController> _pumpApp(
   WidgetTester tester, {
@@ -327,7 +330,10 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      final controller = await newController(seeded: true);
+      final controller = await seededController(
+        items: seedItems(),
+        movements: seedMovements(),
+      );
       final item = controller.items.first;
       final order = await controller.createPurchaseOrder(
         lines: [
@@ -380,7 +386,10 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      final controller = await newController(seeded: true);
+      final controller = await seededController(
+        items: seedItems(),
+        movements: seedMovements(),
+      );
       final item = controller.items.firstWhere((i) => i.quantity >= 10);
       final order = await controller.createSalesOrder(
         lines: [

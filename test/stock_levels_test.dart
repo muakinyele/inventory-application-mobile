@@ -5,6 +5,8 @@ import 'package:stockpile/models/sales_order.dart';
 import 'package:stockpile/models/transfer.dart';
 import 'package:stockpile/state/inventory_controller.dart';
 
+import 'package:stockpile/data/seed_data.dart';
+
 import 'support.dart';
 
 /// The rule the whole feature rests on: an item's bins always add up to the
@@ -378,112 +380,11 @@ void main() {
   });
 
   group('persistence', () {
-    test('the breakdown survives a reload', () async {
-      final repo = newRepository();
-      final first = await controllerOver(repo);
-      final item = await first.createItem(
-        draft(name: 'Bolt', quantity: 10).copyWith(location: 'Warehouse'),
-      );
-      first.recordTransfer(
-        fromLocation: 'Warehouse',
-        toLocation: 'Van',
-        lines: [
-          TransferLine(
-            id: 't1',
-            itemId: item.id,
-            itemName: 'Bolt',
-            quantity: 4,
-          ),
-        ],
-        notes: 'Loaded for the Monday round',
-      );
-      await pumpWrites();
-
-      final second = await controllerOver(repo);
-
-      expect(second.stockByLocation(item.id), {'Warehouse': 6, 'Van': 4});
-      expectBalanced(second);
-      final transfer = second.transfers.single;
-      expect(transfer.reference, 'TR-0001');
-      expect(transfer.fromLocation, 'Warehouse');
-      expect(transfer.toLocation, 'Van');
-      expect(transfer.notes, 'Loaded for the Monday round');
-      expect(transfer.lines.single.quantity, 4);
-
-      final ledger = second.movements
-          .where((m) => m.kind == MovementKind.transfer)
-          .toList();
-      expect(
-        ledger,
-        hasLength(1),
-        reason: 'the move must still be in the ledger after a reload',
-      );
-      expect(ledger.single.documentId, transfer.id);
-      expect(ledger.single.note, 'Moved 4 from Warehouse to Van');
-    });
-
-    test('a failed ledger write takes the stock change with it', () async {
-      final repo = newRepository();
-      final c = await controllerOver(repo);
-      final item = await c.createItem(
-        draft(name: 'Bolt', quantity: 10).copyWith(location: 'Warehouse'),
-      );
-      await pumpWrites();
-
-      // Break the ledger so the movement insert fails partway through the
-      // commit. Levels are written before movements, so without a single
-      // transaction the stock would move with nothing to explain it — which
-      // is exactly what went wrong in the browser.
-      await repo.db.customStatement('DROP TABLE movements');
-
-      final now = DateTime.now();
-      await expectLater(
-        repo.commitStockChange(
-          levels: {
-            item.id: {'Warehouse': 6, 'Van': 4},
-          },
-          movements: [
-            Movement(
-              id: 'm1',
-              itemId: item.id,
-              itemName: 'Bolt',
-              kind: MovementKind.transfer,
-              before: 10,
-              after: 10,
-              at: now,
-            ),
-          ],
-          transfer: Transfer(
-            id: 'tr1',
-            reference: 'TR-0001',
-            fromLocation: 'Warehouse',
-            toLocation: 'Van',
-            lines: const [
-              TransferLine(
-                id: 'l1',
-                itemId: 'x',
-                itemName: 'Bolt',
-                quantity: 4,
-              ),
-            ],
-            movedAt: now,
-            createdAt: now,
-          ),
-        ),
-        throwsA(anything),
-      );
-
-      expect(
-        await repo.loadLevels(),
-        {
-          item.id: {'Warehouse': 10},
-        },
-        reason: 'stock must not move when its ledger row cannot be written',
-      );
-    });
-
     test('the sample catalogue starts balanced', () async {
-      final c = await newController(seeded: true);
+      final c = await seededController(
+        items: seedItems(),
+        movements: seedMovements(),
+      );
 
       expectBalanced(c);
       expect(c.unitsByLocation.values.fold(0, (a, b) => a + b), c.totalUnits);

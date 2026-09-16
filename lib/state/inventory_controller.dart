@@ -41,12 +41,8 @@ enum InventoryLoad {
 /// remember to record. Category edits deliberately append nothing — the ledger
 /// records stock, not metadata.
 class InventoryController extends ChangeNotifier {
-  // `this._api` is what prefer_initializing_formals asks for, but a named
-  // parameter cannot be private: there would be no name a caller could write.
-  InventoryController(this._repo, Snapshot initial, {InventoryApi? api})
-    // ignore: prefer_initializing_formals
-    : _api = api,
-      _items = List.of(initial.items),
+  InventoryController(this._api, Snapshot initial)
+    : _items = List.of(initial.items),
       _movements = List.of(initial.movements),
       _suppliers = List.of(initial.suppliers),
       _customers = List.of(initial.customers),
@@ -61,17 +57,13 @@ class InventoryController extends ChangeNotifier {
 
   static const maxMovements = 500;
 
-  final InventoryRepository _repo;
-
-  /// The shared inventory, when there is one.
+  /// The shared inventory.
   ///
-  /// Null is the on-device path this app has always had, and is still what the
-  /// widget tests build. While both exist the difference is not cosmetic: with
-  /// an API the *server* owns the arithmetic, because it is the only party
-  /// that can see what other devices have already done.
-  final InventoryApi? _api;
-
-  bool get isShared => _api != null;
+  /// Not optional any more. The app kept an on-device path alongside this one
+  /// through the migration, which was useful while both had to work and became
+  /// a liability once only one did: every write had two implementations, and
+  /// the tests exercised the one that no longer ships.
+  final InventoryApi _api;
 
   /// Set when the server refused a stock write because the count had moved
   /// underneath us. Cleared by the next write that succeeds.
@@ -204,109 +196,15 @@ class InventoryController extends ChangeNotifier {
   // --- Item mutations ------------------------------------------------------
 
   Future<Item> createItem(Item draft) async {
-    final api = _api;
-    if (api != null) return _createItemOnServer(api, draft);
-
-    final now = DateTime.now();
-    final item = Item(
-      id: _uid(),
-      name: draft.name,
-      sku: draft.sku,
-      barcode: draft.barcode,
-      category: draft.category,
-      location: draft.location,
-      quantity: draft.quantity,
-      reorderLevel: draft.reorderLevel,
-      unit: draft.unit,
-      unitCost: draft.unitCost,
-      retailerPrice: draft.retailerPrice,
-      distributorPrice: draft.distributorPrice,
-      supplier: draft.supplier,
-      supplierId: draft.supplierId,
-      unitsPerPack: draft.unitsPerPack,
-      notes: draft.notes,
-      photo: draft.photo,
-      createdAt: now,
-      updatedAt: now,
-    );
-
-    _items = [item, ..._items];
-    _bookToBins(item.id, item.quantity, item.location);
-    final movement = _movement(
-      item,
-      MovementKind.create,
-      0,
-      item.quantity,
-      'Item created',
-    );
-    _record(movement);
-    final settingsChanged = _learnOptions(item);
-    notifyListeners();
-
-    _persist(() async {
-      await _repo.upsertItem(item);
-      await _repo.insertMovement(movement);
-      if (settingsChanged) await _repo.saveSettings(_settings);
-    });
-    return item;
+    return _createItemOnServer(_api, draft);
   }
 
   Future<void> updateItem(String id, Item draft) async {
-    final api = _api;
-    if (api != null) return _updateItemOnServer(api, id, draft);
-
-    final existing = byId(id);
-    if (existing == null) return;
-
-    final updated = draft.copyWith(updatedAt: DateTime.now());
-    final quantityChanged = existing.quantity != updated.quantity;
-
-    _items = _items.map((i) => i.id == id ? updated : i).toList();
-    // Home bin first, so a quantity typed on the form lands where the item
-    // now lives rather than where it used to.
-    _relocateHome(id, existing.location, updated.location);
-    _bookToBins(id, updated.quantity - existing.quantity, updated.location);
-    final movement = _movement(
-      updated,
-      quantityChanged ? MovementKind.adjust : MovementKind.edit,
-      existing.quantity,
-      updated.quantity,
-      quantityChanged ? 'Quantity changed while editing' : 'Details updated',
-    );
-    _record(movement);
-    final settingsChanged = _learnOptions(updated);
-    notifyListeners();
-
-    _persist(() async {
-      await _repo.upsertItem(updated);
-      await _repo.insertMovement(movement);
-      if (settingsChanged) await _repo.saveSettings(_settings);
-    });
+    return _updateItemOnServer(_api, id, draft);
   }
 
   Future<void> deleteItem(String id) async {
-    final api = _api;
-    if (api != null) return _deleteItemOnServer(api, id);
-
-    final existing = byId(id);
-    if (existing == null) return;
-
-    _items = _items.where((i) => i.id != id).toList();
-    _dropBins(id);
-    final movement = _movement(
-      existing,
-      MovementKind.delete,
-      existing.quantity,
-      0,
-      'Item deleted',
-    );
-    _record(movement);
-    notifyListeners();
-
-    _persist(() async {
-      await _repo.deleteItem(id);
-      await _repo.insertMovement(movement);
-    });
+    return _deleteItemOnServer(_api, id);
   }
 
   /// Applies a signed change. Stock can never go below zero — a bigger "out"
@@ -352,12 +250,7 @@ class InventoryController extends ChangeNotifier {
     MovementKind kind,
     String note,
   ) async {
-    final api = _api;
-    if (api == null) {
-      _applyQuantity(existing, after, kind, note);
-      return;
-    }
-    await _changeQuantityOnServer(api, existing, after, kind, note);
+    await _changeQuantityOnServer(_api, existing, after, kind, note);
   }
 
   /// Asks the server to move the count, and takes its answer as the truth.
@@ -375,7 +268,7 @@ class InventoryController extends ChangeNotifier {
     String note,
   ) async {
     try {
-      final result = await api.adjustStock(
+      final result = await _api.adjustStock(
         itemId: existing.id,
         delta: after - existing.quantity,
         // What this device believed was current. The server compares it and
@@ -405,7 +298,7 @@ class InventoryController extends ChangeNotifier {
       // is actually there rather than the figure the user was working from —
       // re-applying their change blindly is the overwrite this prevents.
       stockConflict = conflict.message;
-      await _refreshItem(api, existing.id);
+      await _refreshItem(_api, existing.id);
     } catch (error) {
       lastWriteError = error;
       debugPrint('Stockpile: stock write failed: $error');
@@ -486,9 +379,9 @@ class InventoryController extends ChangeNotifier {
     );
 
     try {
-      final saved = await api.saveInvoice(draft);
+      final saved = await _api.saveInvoice(draft);
       _invoices = [saved, ..._invoices.where((i) => i.id != saved.id)];
-      if (saved.movesStock) await _refreshStockView(api);
+      if (saved.movesStock) await _refreshStockView();
       lastWriteError = null;
       notifyListeners();
       return saved;
@@ -568,9 +461,9 @@ class InventoryController extends ChangeNotifier {
     );
 
     try {
-      final saved = await api.saveReceipt(draft);
+      final saved = await _api.saveReceipt(draft);
       _receipts = [saved, ..._receipts.where((r) => r.id != saved.id)];
-      if (saved.movesStock) await _refreshStockView(api);
+      if (saved.movesStock) await _refreshStockView();
       lastWriteError = null;
       notifyListeners();
       return saved;
@@ -604,7 +497,7 @@ class InventoryController extends ChangeNotifier {
       // line into its own item's location instead; that difference is real,
       // and the first configured location is the closest thing to a receiving
       // bay this app knows about.
-      final saved = await api.receiveGoods(
+      final saved = await _api.receiveGoods(
         order.id,
         received,
         location: _settings.locations.isEmpty
@@ -615,7 +508,7 @@ class InventoryController extends ChangeNotifier {
       _purchaseOrders = _purchaseOrders
           .map((o) => o.id == saved.id ? saved : o)
           .toList();
-      await _refreshStockView(api);
+      await _refreshStockView();
       lastWriteError = null;
       notifyListeners();
 
@@ -661,7 +554,7 @@ class InventoryController extends ChangeNotifier {
     );
 
     try {
-      final saved = await api.savePurchaseOrder(draft);
+      final saved = await _api.savePurchaseOrder(draft);
       _purchaseOrders = [
         saved,
         ..._purchaseOrders.where((o) => o.id != saved.id),
@@ -697,7 +590,7 @@ class InventoryController extends ChangeNotifier {
     };
 
     try {
-      final saved = await api.despatchGoods(
+      final saved = await _api.despatchGoods(
         order.id,
         sent,
         location: _settings.locations.isEmpty
@@ -708,7 +601,7 @@ class InventoryController extends ChangeNotifier {
       _salesOrders = _salesOrders
           .map((o) => o.id == saved.id ? saved : o)
           .toList();
-      await _refreshStockView(api);
+      await _refreshStockView();
       lastWriteError = null;
       notifyListeners();
 
@@ -753,7 +646,7 @@ class InventoryController extends ChangeNotifier {
     );
 
     try {
-      final saved = await api.saveSalesOrder(draft);
+      final saved = await _api.saveSalesOrder(draft);
       _salesOrders = [saved, ..._salesOrders.where((o) => o.id != saved.id)];
       lastWriteError = null;
       notifyListeners();
@@ -784,7 +677,7 @@ class InventoryController extends ChangeNotifier {
     };
 
     try {
-      final saved = await api.refundReceipt(
+      final saved = await _api.refundReceipt(
         receipt.id,
         returned,
         restock: restock,
@@ -796,7 +689,7 @@ class InventoryController extends ChangeNotifier {
       _receipts = _receipts.map((r) => r.id == saved.id ? saved : r).toList();
       // Only when the goods went back on: a broken return refunds money and
       // moves no stock, so there is nothing to re-read.
-      if (restock && saved.movesStock) await _refreshStockView(api);
+      if (restock && saved.movesStock) await _refreshStockView();
       lastWriteError = null;
       notifyListeners();
 
@@ -820,9 +713,9 @@ class InventoryController extends ChangeNotifier {
   /// other — rather than appearing from nowhere on the other devices.
   Future<Item> _createItemOnServer(InventoryApi api, Item draft) async {
     try {
-      final saved = await api.createItem(draft);
+      final saved = await _api.createItem(draft);
       _items = [saved, ..._items.where((i) => i.id != saved.id)];
-      if (_learnOptions(saved)) await _persistSettingsTo(api);
+      if (_learnOptions(saved)) await _persistSettingsTo();
       lastWriteError = null;
       notifyListeners();
       return saved;
@@ -845,9 +738,9 @@ class InventoryController extends ChangeNotifier {
     if (existing == null) return;
 
     try {
-      final saved = await api.updateItem(id, draft);
+      final saved = await _api.updateItem(id, draft);
       _items = _items.map((i) => i.id == id ? saved : i).toList();
-      if (_learnOptions(saved)) await _persistSettingsTo(api);
+      if (_learnOptions(saved)) await _persistSettingsTo();
       lastWriteError = null;
     } catch (error) {
       lastWriteError = error;
@@ -858,7 +751,7 @@ class InventoryController extends ChangeNotifier {
 
   Future<void> _deleteItemOnServer(InventoryApi api, String id) async {
     try {
-      await api.deleteItem(id);
+      await _api.deleteItem(id);
       _items = _items.where((i) => i.id != id).toList();
       _levels.remove(id);
       // Movements are left alone. They carry the item's name, so the ledger
@@ -876,14 +769,14 @@ class InventoryController extends ChangeNotifier {
   ///
   /// Shared, these belong to the workspace rather than the device: a category
   /// somebody types on one screen has to appear in everybody else's picker.
-  Future<void> _persistSettingsTo(InventoryApi api) async {
+  Future<void> _persistSettingsTo() async {
     try {
-      await api.saveCategories([
+      await _api.saveCategories([
         for (final name in _settings.categories)
           (name: name, swatchIndex: _settings.categoryColors[name] ?? 0),
       ]);
-      await api.saveLookupValues('location', _settings.locations);
-      await api.saveLookupValues('unit', _settings.units);
+      await _api.saveLookupValues('location', _settings.locations);
+      await _api.saveLookupValues('unit', _settings.units);
     } catch (error) {
       // The item itself saved; the picker will catch up on the next load.
       debugPrint('Stockpile: could not save the picker lists: $error');
@@ -919,7 +812,7 @@ class InventoryController extends ChangeNotifier {
             updatedAt: draft.updatedAt,
           );
     try {
-      final saved = await api.saveSupplier(payload);
+      final saved = await _api.saveSupplier(payload);
       _suppliers = [saved, ..._suppliers.where((s) => s.id != saved.id)]
         ..sort(_supplierOrder);
       lastWriteError = null;
@@ -954,7 +847,7 @@ class InventoryController extends ChangeNotifier {
             updatedAt: draft.updatedAt,
           );
     try {
-      final saved = await api.saveCustomer(payload);
+      final saved = await _api.saveCustomer(payload);
       _customers = [saved, ..._customers.where((c) => c.id != saved.id)]
         ..sort(_customerOrder);
       lastWriteError = null;
@@ -979,15 +872,12 @@ class InventoryController extends ChangeNotifier {
   /// did not work; an empty one looks like a workspace with nothing in it,
   /// which is the one thing this must never be mistaken for.
   Future<void> reload() async {
-    final api = _api;
-    if (api == null) return;
-
     load = InventoryLoad.loading;
     loadError = null;
     notifyListeners();
 
     try {
-      final snapshot = await loadSharedSnapshot(api);
+      final snapshot = await loadSharedSnapshot(_api);
       _items = List.of(snapshot.items);
       _movements = List.of(snapshot.movements);
       _suppliers = List.of(snapshot.suppliers);
@@ -1013,7 +903,6 @@ class InventoryController extends ChangeNotifier {
   /// Signing out on a shared device has to leave nothing of the workspace on
   /// screen for whoever signs in next.
   void forgetSharedData() {
-    if (_api == null) return;
     _items = [];
     _movements = [];
     _suppliers = [];
@@ -1052,7 +941,7 @@ class InventoryController extends ChangeNotifier {
     final Invoice settled;
     final double taken;
     try {
-      final result = await api.payInvoice(invoice.id, amount);
+      final result = await _api.payInvoice(invoice.id, amount);
       settled = result.invoice;
       taken = result.applied;
       _invoices = _invoices
@@ -1106,7 +995,7 @@ class InventoryController extends ChangeNotifier {
     );
 
     try {
-      final saved = await api.saveReceipt(draft);
+      final saved = await _api.saveReceipt(draft);
       _receipts = [saved, ..._receipts.where((r) => r.id != saved.id)];
       notifyListeners();
       return saved;
@@ -1134,16 +1023,10 @@ class InventoryController extends ChangeNotifier {
     final supplier = supplierById(id);
     if (supplier == null) return;
 
-    final api = _api;
-    if (api == null) {
-      deleteSupplier(id);
-      return;
-    }
-
     final now = DateTime.now();
     for (final item in _items.where((i) => i.supplierId == id).toList()) {
       await _updateItemOnServer(
-        api,
+        _api,
         item.id,
         item.copyWith(
           supplier: supplier.name,
@@ -1154,7 +1037,7 @@ class InventoryController extends ChangeNotifier {
     }
 
     await _saveSupplierOnServer(
-      api,
+      _api,
       Supplier(
         id: id,
         name: supplier.name,
@@ -1179,14 +1062,8 @@ class InventoryController extends ChangeNotifier {
     final customer = customerById(id);
     if (customer == null) return;
 
-    final api = _api;
-    if (api == null) {
-      deleteCustomer(id);
-      return;
-    }
-
     await _saveCustomerOnServer(
-      api,
+      _api,
       Customer(
         id: id,
         name: customer.name,
@@ -1211,11 +1088,11 @@ class InventoryController extends ChangeNotifier {
   /// Items and movements only. Per-bin levels are read by the screens that
   /// show them, and fetching every item's breakdown here would be one request
   /// per item to populate something usually off screen.
-  Future<void> _refreshStockView(InventoryApi api) async {
+  Future<void> _refreshStockView() async {
     try {
-      final page = await api.items();
+      final page = await _api.items();
       _items = page.items;
-      _movements = await api.movements(limit: maxMovements);
+      _movements = await _api.movements(limit: maxMovements);
     } catch (error) {
       // The document itself saved. Reporting that is better than failing the
       // whole operation over a stale list the next load will correct.
@@ -1227,35 +1104,13 @@ class InventoryController extends ChangeNotifier {
   /// the server has already disagreed with.
   Future<void> _refreshItem(InventoryApi api, String id) async {
     try {
-      final fresh = await api.item(id);
+      final fresh = await _api.item(id);
       _items = _items.map((i) => i.id == id ? fresh.item : i).toList();
       _putLevels(id, fresh.stock);
     } catch (error) {
       // The conflict message still stands and is the more useful of the two.
       debugPrint('Stockpile: could not re-read $id: $error');
     }
-  }
-
-  void _applyQuantity(
-    Item existing,
-    int after,
-    MovementKind kind,
-    String note,
-  ) {
-    final updated = existing.copyWith(
-      quantity: after,
-      updatedAt: DateTime.now(),
-    );
-    _items = _items.map((i) => i.id == updated.id ? updated : i).toList();
-    _bookToBins(updated.id, after - existing.quantity, updated.location);
-    final movement = _movement(updated, kind, existing.quantity, after, note);
-    _record(movement);
-    notifyListeners();
-
-    _persist(() async {
-      await _repo.upsertItem(updated);
-      await _repo.insertMovement(movement);
-    });
   }
 
   int importDrafts(List<ItemDraft> drafts) {
@@ -1321,59 +1176,23 @@ class InventoryController extends ChangeNotifier {
     );
     notifyListeners();
 
-    _persist(() async {
-      await _repo.upsertItems(imported);
-      for (final entry in importedBins.entries) {
-        await _repo.saveLevels(entry.key, entry.value);
-      }
-      await _repo.insertMovements(movements);
-      await _repo.saveSettings(_settings);
-      await _repo.trimMovements(maxMovements);
-    });
     return imported.length;
   }
 
   // --- Suppliers -----------------------------------------------------------
 
   Future<Supplier> createSupplier(Supplier draft) async {
-    final api = _api;
-    if (api != null) return _saveSupplierOnServer(api, draft);
-
-    final now = DateTime.now();
-    final supplier = draft.copyWith(updatedAt: now);
-    final created = Supplier(
-      id: _uid(),
-      name: supplier.name,
-      contactName: supplier.contactName,
-      phone: supplier.phone,
-      email: supplier.email,
-      address: supplier.address,
-      leadTimeDays: supplier.leadTimeDays,
-      paymentTerms: supplier.paymentTerms,
-      notes: supplier.notes,
-      archived: supplier.archived,
-      createdAt: now,
-      updatedAt: now,
-    );
-    _suppliers = [..._suppliers, created]..sort(_supplierOrder);
-    notifyListeners();
-    _persist(() => _repo.upsertSupplier(created));
-    return created;
+    return _saveSupplierOnServer(_api, draft);
   }
 
   Future<void> updateSupplier(String id, Supplier draft) async {
-    final api = _api;
-    if (api != null) {
-      await _saveSupplierOnServer(api, draft, id: id);
-      return;
-    }
+    await _saveSupplierOnServer(_api, draft, id: id);
 
     if (supplierById(id) == null) return;
     final updated = draft.copyWith(updatedAt: DateTime.now());
     _suppliers = _suppliers.map((s) => s.id == id ? updated : s).toList()
       ..sort(_supplierOrder);
     notifyListeners();
-    _persist(() => _repo.upsertSupplier(updated));
   }
 
   /// Unlinks the supplier from its items before removing it, so no item is
@@ -1397,59 +1216,28 @@ class InventoryController extends ChangeNotifier {
     _applyTouched(touched);
     _suppliers = _suppliers.where((s) => s.id != id).toList();
     notifyListeners();
-
-    _persist(() async {
-      if (touched.isNotEmpty) await _repo.upsertItems(touched);
-      await _repo.deleteSupplier(id);
-    });
   }
 
   // --- Customers -----------------------------------------------------------
 
   Future<Customer> createCustomer(Customer draft) async {
-    final api = _api;
-    if (api != null) return _saveCustomerOnServer(api, draft);
-
-    final now = DateTime.now();
-    final created = Customer(
-      id: _uid(),
-      name: draft.name,
-      contactName: draft.contactName,
-      phone: draft.phone,
-      email: draft.email,
-      address: draft.address,
-      priceTier: draft.priceTier,
-      notes: draft.notes,
-      archived: draft.archived,
-      createdAt: now,
-      updatedAt: now,
-    );
-    _customers = [..._customers, created]..sort(_customerOrder);
-    notifyListeners();
-    _persist(() => _repo.upsertCustomer(created));
-    return created;
+    return _saveCustomerOnServer(_api, draft);
   }
 
   Future<void> updateCustomer(String id, Customer draft) async {
-    final api = _api;
-    if (api != null) {
-      await _saveCustomerOnServer(api, draft, id: id);
-      return;
-    }
+    await _saveCustomerOnServer(_api, draft, id: id);
 
     if (customerById(id) == null) return;
     final updated = draft.copyWith(updatedAt: DateTime.now());
     _customers = _customers.map((c) => c.id == id ? updated : c).toList()
       ..sort(_customerOrder);
     notifyListeners();
-    _persist(() => _repo.upsertCustomer(updated));
   }
 
   void deleteCustomer(String id) {
     if (customerById(id) == null) return;
     _customers = _customers.where((c) => c.id != id).toList();
     notifyListeners();
-    _persist(() => _repo.deleteCustomer(id));
   }
 
   // --- Purchase orders -----------------------------------------------------
@@ -1459,7 +1247,6 @@ class InventoryController extends ChangeNotifier {
   String _nextReference(String prefix) {
     final next = (_sequences[prefix] ?? 0) + 1;
     _sequences = {..._sequences, prefix: next};
-    _persist(() => _repo.saveSequence(prefix, next));
     return '$prefix-${next.toString().padLeft(4, '0')}';
   }
 
@@ -1469,34 +1256,13 @@ class InventoryController extends ChangeNotifier {
     String notes = '',
     List<PurchaseOrderLine> lines = const [],
   }) async {
-    final api = _api;
-    if (api != null) {
-      return _createPurchaseOrderOnServer(
-        api,
-        supplierId: supplierId,
-        expectedAt: expectedAt,
-        notes: notes,
-        lines: lines,
-      );
-    }
-
-    final now = DateTime.now();
-    final supplier = supplierById(supplierId);
-    final order = PurchaseOrder(
-      id: _uid(),
-      reference: _nextReference('PO'),
+    return _createPurchaseOrderOnServer(
+      _api,
       supplierId: supplierId,
-      supplierName: supplier?.name ?? '',
-      expectedAt: expectedAt ?? _expectedFrom(supplier, now),
+      expectedAt: expectedAt,
       notes: notes,
       lines: lines,
-      createdAt: now,
-      updatedAt: now,
     );
-    _purchaseOrders = [order, ..._purchaseOrders];
-    notifyListeners();
-    _persist(() => _repo.savePurchaseOrder(order));
-    return order;
   }
 
   /// Defaults the expected date from the supplier's lead time, which is the
@@ -1573,7 +1339,6 @@ class InventoryController extends ChangeNotifier {
     if (existing == null || existing.unitsReceived > 0) return;
     _purchaseOrders = _purchaseOrders.where((o) => o.id != id).toList();
     notifyListeners();
-    _persist(() => _repo.deletePurchaseOrder(id));
   }
 
   /// Books stock in against an order.
@@ -1592,92 +1357,7 @@ class InventoryController extends ChangeNotifier {
     final order = purchaseOrderById(id);
     if (order == null || !order.status.isOpen) return 0;
 
-    final api = _api;
-    if (api != null) {
-      return _receiveOnServer(api, order, received);
-    }
-
-    final now = DateTime.now();
-    final updatedLines = <PurchaseOrderLine>[];
-    final touchedItems = <Item>[];
-    final movements = <Movement>[];
-    final binWrites = <String, Map<String, int>>{};
-
-    for (final line in order.lines) {
-      final wanted = received[line.id] ?? 0;
-      final quantity = wanted.clamp(0, line.outstanding);
-      if (quantity <= 0) {
-        updatedLines.add(line);
-        continue;
-      }
-
-      updatedLines.add(
-        line.copyWith(quantityReceived: line.quantityReceived + quantity),
-      );
-
-      final item = byId(line.itemId);
-      if (item == null) continue;
-
-      final after = item.quantity + quantity;
-      final updatedItem = item.copyWith(
-        quantity: after,
-        unitCost: _rollForwardCost(item, quantity, line.unitCost),
-        updatedAt: now,
-      );
-      touchedItems.add(updatedItem);
-      _putLevels(item.id, _settled(item.id, quantity, item.location));
-      binWrites[item.id] = _levels[item.id] ?? const <String, int>{};
-      movements.add(
-        _movement(
-          updatedItem,
-          MovementKind.stockIn,
-          item.quantity,
-          after,
-          note.isEmpty ? 'Received on ${order.reference}' : note,
-          documentId: order.id,
-        ),
-      );
-    }
-
-    if (movements.isEmpty) return 0;
-
-    _applyTouched(touchedItems);
-    for (final movement in movements) {
-      _record(movement);
-    }
-
-    final settled = updatedLines.every((l) => l.isComplete);
-    final updatedOrder = order.copyWith(
-      lines: updatedLines,
-      status: settled ? PurchaseStatus.received : PurchaseStatus.partial,
-      closedAt: settled ? now : null,
-      updatedAt: now,
-    );
-    _purchaseOrders = _purchaseOrders
-        .map((o) => o.id == updatedOrder.id ? updatedOrder : o)
-        .toList();
-    notifyListeners();
-
-    _persist(() async {
-      await _repo.commitStockChange(
-        items: touchedItems,
-        levels: binWrites,
-        movements: movements,
-        purchaseOrder: updatedOrder,
-      );
-      await _repo.trimMovements(maxMovements);
-    });
-    return movements.length;
-  }
-
-  /// Weighted average of stock already held and stock arriving. Falls back to
-  /// the incoming cost when there was nothing on hand to average against.
-  double _rollForwardCost(Item item, int quantity, double incomingCost) {
-    if (incomingCost <= 0) return item.unitCost;
-    if (item.quantity <= 0) return incomingCost;
-    final existingValue = item.quantity * item.unitCost;
-    final incomingValue = quantity * incomingCost;
-    return (existingValue + incomingValue) / (item.quantity + quantity);
+    return _receiveOnServer(_api, order, received);
   }
 
   /// The purchase-order counterpart of [_replaceSalesOrder], and the same
@@ -1688,13 +1368,8 @@ class InventoryController extends ChangeNotifier {
         .toList();
     notifyListeners();
 
-    final api = _api;
-    if (api == null) {
-      _persist(() => _repo.savePurchaseOrder(order));
-      return;
-    }
     _persist(() async {
-      final saved = await api.savePurchaseOrder(order);
+      final saved = await _api.savePurchaseOrder(order);
       _purchaseOrders = _purchaseOrders
           .map((o) => o.id == saved.id ? saved : o)
           .toList();
@@ -1736,35 +1411,13 @@ class InventoryController extends ChangeNotifier {
     String notes = '',
     List<SalesOrderLine> lines = const [],
   }) async {
-    final api = _api;
-    if (api != null) {
-      return _createSalesOrderOnServer(
-        api,
-        customerId: customerId,
-        dueAt: dueAt,
-        notes: notes,
-        lines: lines,
-      );
-    }
-
-    final now = DateTime.now();
-    final customer = customerById(customerId);
-    final order = SalesOrder(
-      id: _uid(),
-      reference: _nextReference('SO'),
+    return _createSalesOrderOnServer(
+      _api,
       customerId: customerId,
-      customerName: customer?.name ?? '',
-      priceTier: customer?.priceTier ?? PriceTier.retailer,
       dueAt: dueAt,
       notes: notes,
       lines: lines,
-      createdAt: now,
-      updatedAt: now,
     );
-    _salesOrders = [order, ..._salesOrders];
-    notifyListeners();
-    _persist(() => _repo.saveSalesOrder(order));
-    return order;
   }
 
   /// Edits are only accepted while the sale is still a draft; once confirmed,
@@ -1836,7 +1489,6 @@ class InventoryController extends ChangeNotifier {
     if (existing == null || existing.unitsFulfilled > 0) return;
     _salesOrders = _salesOrders.where((o) => o.id != id).toList();
     notifyListeners();
-    _persist(() => _repo.deleteSalesOrder(id));
   }
 
   /// The most that can be sent on a line right now: what is still outstanding,
@@ -1865,80 +1517,7 @@ class InventoryController extends ChangeNotifier {
     final order = salesOrderById(id);
     if (order == null || !order.status.isOpen) return 0;
 
-    final api = _api;
-    if (api != null) {
-      return _despatchOnServer(api, order, sent);
-    }
-
-    final now = DateTime.now();
-    final updatedLines = <SalesOrderLine>[];
-    final touchedItems = <Item>[];
-    final movements = <Movement>[];
-    final binWrites = <String, Map<String, int>>{};
-
-    for (final line in order.lines) {
-      final item = byId(line.itemId);
-      final onHand = item?.quantity ?? 0;
-      final wanted = sent[line.id] ?? 0;
-      final quantity = wanted.clamp(0, line.outstanding).clamp(0, onHand);
-      if (quantity <= 0 || item == null) {
-        updatedLines.add(line);
-        continue;
-      }
-
-      updatedLines.add(
-        line.copyWith(
-          quantityFulfilled: line.quantityFulfilled + quantity,
-          costOfGoods: line.costOfGoods + quantity * item.unitCost,
-        ),
-      );
-
-      final after = item.quantity - quantity;
-      final updatedItem = item.copyWith(quantity: after, updatedAt: now);
-      touchedItems.add(updatedItem);
-      _putLevels(item.id, _settled(item.id, -quantity, item.location));
-      binWrites[item.id] = _levels[item.id] ?? const <String, int>{};
-      movements.add(
-        _movement(
-          updatedItem,
-          MovementKind.stockOut,
-          item.quantity,
-          after,
-          note.isEmpty ? 'Sold on ${order.reference}' : note,
-          documentId: order.id,
-        ),
-      );
-    }
-
-    if (movements.isEmpty) return 0;
-
-    _applyTouched(touchedItems);
-    for (final movement in movements) {
-      _record(movement);
-    }
-
-    final settled = updatedLines.every((l) => l.isComplete);
-    final updatedOrder = order.copyWith(
-      lines: updatedLines,
-      status: settled ? SalesStatus.fulfilled : SalesStatus.partial,
-      closedAt: settled ? now : null,
-      updatedAt: now,
-    );
-    _salesOrders = _salesOrders
-        .map((o) => o.id == updatedOrder.id ? updatedOrder : o)
-        .toList();
-    notifyListeners();
-
-    _persist(() async {
-      await _repo.commitStockChange(
-        items: touchedItems,
-        levels: binWrites,
-        movements: movements,
-        salesOrder: updatedOrder,
-      );
-      await _repo.trimMovements(maxMovements);
-    });
-    return movements.length;
+    return _despatchOnServer(_api, order, sent);
   }
 
   /// Writes an order's new state through, wherever it lives.
@@ -1953,13 +1532,8 @@ class InventoryController extends ChangeNotifier {
         .toList();
     notifyListeners();
 
-    final api = _api;
-    if (api == null) {
-      _persist(() => _repo.saveSalesOrder(order));
-      return;
-    }
     _persist(() async {
-      final saved = await api.saveSalesOrder(order);
+      final saved = await _api.saveSalesOrder(order);
       _salesOrders = _salesOrders
           .map((o) => o.id == saved.id ? saved : o)
           .toList();
@@ -2077,128 +1651,19 @@ class InventoryController extends ChangeNotifier {
   }) async {
     if (lines.isEmpty) return null;
 
-    final api = _api;
-    if (api != null) {
-      return _issueReceiptOnServer(
-        api,
-        salesOrderId: salesOrderId,
-        customerId: customerId,
-        method: method,
-        lines: lines,
-        discount: discount,
-        taxRate: taxRate,
-        amountPaid: amountPaid,
-        notes: notes,
-        cashier: cashier,
-        issuedAt: issuedAt,
-      );
-    }
-
-    final now = DateTime.now();
-    final order = salesOrderId == null ? null : salesOrderById(salesOrderId);
-    final movesStock = order == null;
-    final customer = customerById(customerId ?? order?.customerId);
-
-    // Minted up front so every ledger row can carry the document it came from,
-    // the same way a transfer does.
-    final receiptId = _uid();
-    final reference = _nextReference('RC');
-
-    final priced = <ReceiptLine>[];
-    final touchedItems = <Item>[];
-    final movements = <Movement>[];
-    final binWrites = <String, Map<String, int>>{};
-    // Two lines can name the same item, so the running total is tracked here
-    // rather than read back off `_items` — which has not been written yet.
-    final remaining = <String, int>{};
-
-    for (final line in lines) {
-      if (line.quantity <= 0) continue;
-      final item = byId(line.itemId);
-
-      if (!movesStock || item == null) {
-        // Nothing to take off the shelf: either the sale already despatched,
-        // or the item has since been deleted and only its name survives.
-        priced.add(line);
-        continue;
-      }
-
-      final onHand = remaining[item.id] ?? item.quantity;
-      final quantity = line.quantity.clamp(0, onHand < 0 ? 0 : onHand);
-      if (quantity <= 0) continue;
-
-      final after = onHand - quantity;
-      remaining[item.id] = after;
-
-      priced.add(
-        ReceiptLine(
-          id: line.id,
-          itemId: line.itemId,
-          itemName: line.itemName.isEmpty ? item.name : line.itemName,
-          sku: line.sku.isEmpty ? item.sku : line.sku,
-          unit: line.unit,
-          quantity: quantity,
-          unitPrice: line.unitPrice,
-          discount: line.discount,
-          costOfGoods: quantity * item.unitCost,
-        ),
-      );
-
-      final updatedItem = item.copyWith(quantity: after, updatedAt: now);
-      touchedItems.add(updatedItem);
-      _putLevels(item.id, _settled(item.id, -quantity, item.location));
-      binWrites[item.id] = _levels[item.id] ?? const <String, int>{};
-      movements.add(
-        _movement(
-          updatedItem,
-          MovementKind.stockOut,
-          onHand,
-          after,
-          'Sold at the counter on $reference',
-          documentId: receiptId,
-        ),
-      );
-    }
-
-    if (priced.isEmpty) return null;
-
-    final receipt = Receipt(
-      id: receiptId,
-      reference: reference,
-      salesOrderId: order?.id,
-      customerId: customer?.id ?? customerId,
-      customerName: customer?.name ?? order?.customerName ?? '',
+    return _issueReceiptOnServer(
+      _api,
+      salesOrderId: salesOrderId,
+      customerId: customerId,
       method: method,
-      lines: priced,
-      discount: discount < 0 ? 0 : discount,
-      taxRate: (taxRate ?? _settings.taxRate).clamp(0, 1).toDouble(),
-      taxLabel: _settings.taxLabel,
-      amountPaid: amountPaid < 0 ? 0 : amountPaid,
+      lines: lines,
+      discount: discount,
+      taxRate: taxRate,
+      amountPaid: amountPaid,
       notes: notes,
       cashier: cashier,
-      movesStock: movesStock,
-      issuedAt: issuedAt ?? now,
-      createdAt: now,
-      updatedAt: now,
+      issuedAt: issuedAt,
     );
-
-    _applyTouched(touchedItems);
-    for (final movement in movements) {
-      _record(movement);
-    }
-    _receipts = [receipt, ..._receipts];
-    notifyListeners();
-
-    _persist(() async {
-      await _repo.commitStockChange(
-        items: touchedItems,
-        levels: binWrites,
-        movements: movements,
-        receipt: receipt,
-      );
-      if (movements.isNotEmpty) await _repo.trimMovements(maxMovements);
-    });
-    return receipt;
   }
 
   /// Books goods back in against a receipt.
@@ -2219,78 +1684,7 @@ class InventoryController extends ChangeNotifier {
     final receipt = receiptById(id);
     if (receipt == null || !receipt.status.isRefundable) return 0;
 
-    final api = _api;
-    if (api != null) {
-      return _refundOnServer(api, receipt, returned, restock: restock);
-    }
-
-    final now = DateTime.now();
-    final updatedLines = <ReceiptLine>[];
-    final touchedItems = <Item>[];
-    final movements = <Movement>[];
-    final binWrites = <String, Map<String, int>>{};
-    var refunded = 0;
-
-    for (final line in receipt.lines) {
-      final wanted = returned[line.id] ?? 0;
-      final quantity = wanted.clamp(0, line.quantityKept);
-      if (quantity <= 0) {
-        updatedLines.add(line);
-        continue;
-      }
-
-      refunded++;
-      updatedLines.add(
-        line.copyWith(quantityRefunded: line.quantityRefunded + quantity),
-      );
-
-      final item = byId(line.itemId);
-      if (!restock || item == null) continue;
-
-      final after = item.quantity + quantity;
-      final updatedItem = item.copyWith(quantity: after, updatedAt: now);
-      touchedItems.add(updatedItem);
-      _putLevels(item.id, _settled(item.id, quantity, item.location));
-      binWrites[item.id] = _levels[item.id] ?? const <String, int>{};
-      movements.add(
-        _movement(
-          updatedItem,
-          MovementKind.stockIn,
-          item.quantity,
-          after,
-          note.isEmpty ? 'Returned on ${receipt.reference}' : note,
-          documentId: receipt.id,
-        ),
-      );
-    }
-
-    if (refunded == 0) return 0;
-
-    final settled = updatedLines.every((l) => l.isFullyRefunded);
-    final updated = receipt.copyWith(
-      lines: updatedLines,
-      status: settled ? ReceiptStatus.refunded : ReceiptStatus.partRefunded,
-      refundedAt: now,
-      updatedAt: now,
-    );
-
-    _applyTouched(touchedItems);
-    for (final movement in movements) {
-      _record(movement);
-    }
-    _receipts = _receipts.map((r) => r.id == id ? updated : r).toList();
-    notifyListeners();
-
-    _persist(() async {
-      await _repo.commitStockChange(
-        items: touchedItems,
-        levels: binWrites,
-        movements: movements,
-        receipt: updated,
-      );
-      if (movements.isNotEmpty) await _repo.trimMovements(maxMovements);
-    });
-    return refunded;
+    return _refundOnServer(_api, receipt, returned, restock: restock);
   }
 
   /// Strikes a receipt off in full — the counter equivalent of tearing it up.
@@ -2307,86 +1701,21 @@ class InventoryController extends ChangeNotifier {
       return false;
     }
 
-    final api = _api;
-    if (api != null) {
-      try {
-        final voided = await api.voidReceipt(id, reason: reason);
-        _receipts = _receipts
-            .map((r) => r.id == voided.id ? voided : r)
-            .toList();
-        // The server put the stock back and wrote the movement for it, so
-        // the counts here are stale until re-read.
-        if (voided.movesStock) await _refreshStockView(api);
-        lastWriteError = null;
-        notifyListeners();
-        return true;
-      } catch (error) {
-        lastWriteError = error;
-        debugPrint('Stockpile: could not void the receipt: $error');
-        notifyListeners();
-        return false;
-      }
+    try {
+      final voided = await _api.voidReceipt(id, reason: reason);
+      _receipts = _receipts.map((r) => r.id == voided.id ? voided : r).toList();
+      // The server put the stock back and wrote the movement for it, so
+      // the counts here are stale until re-read.
+      if (voided.movesStock) await _refreshStockView();
+      lastWriteError = null;
+      notifyListeners();
+      return true;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not void the receipt: $error');
+      notifyListeners();
+      return false;
     }
-
-    final now = DateTime.now();
-    final touchedItems = <Item>[];
-    final movements = <Movement>[];
-    final binWrites = <String, Map<String, int>>{};
-
-    if (receipt.movesStock) {
-      // Summed by item first: a receipt may name the same item on two lines,
-      // and each has to be put back against the running total, not the one
-      // the item started with.
-      final byItem = <String, int>{};
-      for (final line in receipt.lines) {
-        if (line.quantity <= 0) continue;
-        byItem[line.itemId] = (byItem[line.itemId] ?? 0) + line.quantity;
-      }
-      for (final entry in byItem.entries) {
-        final item = byId(entry.key);
-        if (item == null) continue;
-        final after = item.quantity + entry.value;
-        final updatedItem = item.copyWith(quantity: after, updatedAt: now);
-        touchedItems.add(updatedItem);
-        _putLevels(item.id, _settled(item.id, entry.value, item.location));
-        binWrites[item.id] = _levels[item.id] ?? const <String, int>{};
-        movements.add(
-          _movement(
-            updatedItem,
-            MovementKind.stockIn,
-            item.quantity,
-            after,
-            'Voided ${receipt.reference}',
-            documentId: receipt.id,
-          ),
-        );
-      }
-    }
-
-    final updated = receipt.copyWith(
-      status: ReceiptStatus.voided,
-      voidedAt: now,
-      voidReason: reason,
-      updatedAt: now,
-    );
-
-    _applyTouched(touchedItems);
-    for (final movement in movements) {
-      _record(movement);
-    }
-    _receipts = _receipts.map((r) => r.id == id ? updated : r).toList();
-    notifyListeners();
-
-    _persist(() async {
-      await _repo.commitStockChange(
-        items: touchedItems,
-        levels: binWrites,
-        movements: movements,
-        receipt: updated,
-      );
-      if (movements.isNotEmpty) await _repo.trimMovements(maxMovements);
-    });
-    return true;
   }
 
   /// Records money received against a receipt that was left owing — settling
@@ -2403,7 +1732,6 @@ class InventoryController extends ChangeNotifier {
     );
     _receipts = _receipts.map((r) => r.id == id ? updated : r).toList();
     notifyListeners();
-    _persist(() => _repo.saveReceipt(updated));
   }
 
   /// Removes a voided receipt from the file. Only a void is ever deletable:
@@ -2414,7 +1742,6 @@ class InventoryController extends ChangeNotifier {
     if (receipt == null || receipt.status != ReceiptStatus.voided) return;
     _receipts = _receipts.where((r) => r.id != id).toList();
     notifyListeners();
-    _persist(() => _repo.deleteReceipt(id));
   }
 
   // --- Invoices ------------------------------------------------------------
@@ -2520,123 +1847,19 @@ class InventoryController extends ChangeNotifier {
   }) async {
     if (lines.isEmpty) return null;
 
-    final api = _api;
-    if (api != null) {
-      return _issueInvoiceOnServer(
-        api,
-        salesOrderId: salesOrderId,
-        customerId: customerId,
-        lines: lines,
-        discount: discount,
-        taxRate: taxRate,
-        dueAt: dueAt,
-        termDays: termDays,
-        terms: terms,
-        notes: notes,
-        issuedAt: issuedAt,
-      );
-    }
-
-    final now = DateTime.now();
-    final order = salesOrderId == null ? null : salesOrderById(salesOrderId);
-    final movesStock = order == null;
-    final customer = customerById(customerId ?? order?.customerId);
-
-    final invoiceId = _uid();
-    final reference = _nextReference('INV');
-
-    final billed = <InvoiceLine>[];
-    final touchedItems = <Item>[];
-    final movements = <Movement>[];
-    final binWrites = <String, Map<String, int>>{};
-    // Two lines can name the same item, so the running total is tracked here
-    // rather than read back off `_items`, which has not been written yet.
-    final remaining = <String, int>{};
-
-    for (final line in lines) {
-      if (line.quantity <= 0) continue;
-      final item = byId(line.itemId);
-
-      if (!movesStock || item == null) {
-        billed.add(line);
-        continue;
-      }
-
-      final onHand = remaining[item.id] ?? item.quantity;
-      final quantity = line.quantity.clamp(0, onHand < 0 ? 0 : onHand);
-      if (quantity <= 0) continue;
-
-      final after = onHand - quantity;
-      remaining[item.id] = after;
-
-      billed.add(
-        InvoiceLine(
-          id: line.id,
-          itemId: line.itemId,
-          itemName: line.itemName.isEmpty ? item.name : line.itemName,
-          sku: line.sku.isEmpty ? item.sku : line.sku,
-          unit: line.unit,
-          quantity: quantity,
-          unitPrice: line.unitPrice,
-          discount: line.discount,
-          costOfGoods: quantity * item.unitCost,
-        ),
-      );
-
-      final updatedItem = item.copyWith(quantity: after, updatedAt: now);
-      touchedItems.add(updatedItem);
-      _putLevels(item.id, _settled(item.id, -quantity, item.location));
-      binWrites[item.id] = _levels[item.id] ?? const <String, int>{};
-      movements.add(
-        _movement(
-          updatedItem,
-          MovementKind.stockOut,
-          onHand,
-          after,
-          'Sold on account on $reference',
-          documentId: invoiceId,
-        ),
-      );
-    }
-
-    if (billed.isEmpty) return null;
-
-    final invoice = Invoice(
-      id: invoiceId,
-      reference: reference,
-      salesOrderId: order?.id,
-      customerId: customer?.id ?? customerId,
-      customerName: customer?.name ?? order?.customerName ?? '',
-      lines: billed,
-      discount: discount < 0 ? 0 : discount,
-      taxRate: (taxRate ?? _settings.taxRate).clamp(0, 1).toDouble(),
-      taxLabel: _settings.taxLabel,
+    return _issueInvoiceOnServer(
+      _api,
+      salesOrderId: salesOrderId,
+      customerId: customerId,
+      lines: lines,
+      discount: discount,
+      taxRate: taxRate,
+      dueAt: dueAt,
+      termDays: termDays,
       terms: terms,
       notes: notes,
-      movesStock: movesStock,
-      issuedAt: issuedAt ?? now,
-      dueAt: dueAt ?? _dueFrom(issuedAt ?? now, termDays),
-      createdAt: now,
-      updatedAt: now,
+      issuedAt: issuedAt,
     );
-
-    _applyTouched(touchedItems);
-    for (final movement in movements) {
-      _record(movement);
-    }
-    _invoices = [invoice, ..._invoices];
-    notifyListeners();
-
-    _persist(() async {
-      await _repo.commitStockChange(
-        items: touchedItems,
-        levels: binWrites,
-        movements: movements,
-        invoice: invoice,
-      );
-      if (movements.isNotEmpty) await _repo.trimMovements(maxMovements);
-    });
-    return invoice;
   }
 
   DateTime? _dueFrom(DateTime from, int? termDays) {
@@ -2667,76 +1890,15 @@ class InventoryController extends ChangeNotifier {
     if (invoice == null || !invoice.status.isCollectable) return null;
     if (amount <= 0 || invoice.balanceDue <= 0) return null;
 
-    final api = _api;
-    if (api != null) {
-      return _payInvoiceOnServer(
-        api,
-        invoice,
-        amount,
-        method: method,
-        notes: notes,
-        cashier: cashier,
-        paidAt: paidAt,
-      );
-    }
-
-    final now = DateTime.now();
-    final taken = amount.clamp(0, invoice.balanceDue).toDouble();
-
-    // The receipt carries the invoice's own lines so it prints as a proper
-    // document rather than a bare figure, but at zero cost of goods: the cost
-    // was banked when the invoice moved the stock, and counting it again here
-    // would double the cost of the sale.
-    final receipt = Receipt(
-      id: _uid(),
-      reference: _nextReference('RC'),
-      invoiceId: invoice.id,
-      salesOrderId: invoice.salesOrderId,
-      customerId: invoice.customerId,
-      customerName: invoice.customerName,
+    return _payInvoiceOnServer(
+      _api,
+      invoice,
+      amount,
       method: method,
-      lines: [
-        for (final line in invoice.lines)
-          ReceiptLine(
-            id: _uid(),
-            itemId: line.itemId,
-            itemName: line.itemName,
-            sku: line.sku,
-            unit: line.unit,
-            quantity: line.quantity,
-            unitPrice: line.unitPrice,
-            discount: line.discount,
-          ),
-      ],
-      discount: invoice.discount,
-      taxRate: invoice.taxRate,
-      taxLabel: invoice.taxLabel,
-      amountPaid: taken,
-      notes: notes.isEmpty ? 'Payment against ${invoice.reference}' : notes,
+      notes: notes,
       cashier: cashier,
-      movesStock: false,
-      issuedAt: paidAt ?? now,
-      createdAt: now,
-      updatedAt: now,
+      paidAt: paidAt,
     );
-
-    final paid = invoice.amountPaid + taken;
-    final settled = invoice.total - paid < 0.005;
-    final updated = invoice.copyWith(
-      amountPaid: paid,
-      status: settled ? InvoiceStatus.paid : InvoiceStatus.partPaid,
-      closedAt: settled ? now : null,
-      updatedAt: now,
-    );
-
-    _receipts = [receipt, ..._receipts];
-    _invoices = _invoices.map((i) => i.id == id ? updated : i).toList();
-    notifyListeners();
-
-    _persist(() async {
-      await _repo.commitStockChange(receipt: receipt, invoice: updated);
-    });
-    return receipt;
   }
 
   /// Strikes an invoice off in full.
@@ -2801,15 +1963,6 @@ class InventoryController extends ChangeNotifier {
     _invoices = _invoices.map((i) => i.id == id ? updated : i).toList();
     notifyListeners();
 
-    _persist(() async {
-      await _repo.commitStockChange(
-        items: touchedItems,
-        levels: binWrites,
-        movements: movements,
-        invoice: updated,
-      );
-      if (movements.isNotEmpty) await _repo.trimMovements(maxMovements);
-    });
     return true;
   }
 
@@ -2821,7 +1974,6 @@ class InventoryController extends ChangeNotifier {
     if (invoice == null || invoice.status != InvoiceStatus.cancelled) return;
     _invoices = _invoices.where((i) => i.id != id).toList();
     notifyListeners();
-    _persist(() => _repo.deleteInvoice(id));
   }
 
   // --- Stock by location ---------------------------------------------------
@@ -2931,37 +2083,6 @@ class InventoryController extends ChangeNotifier {
     _levels = next;
   }
 
-  /// Applies a change in an item's total to its bins, in memory and on disk.
-  void _bookToBins(String itemId, int delta, String into) {
-    if (delta == 0) return;
-    _putLevels(itemId, _settled(itemId, delta, into));
-    final bins = _levels[itemId] ?? const <String, int>{};
-    _persist(() => _repo.saveLevels(itemId, bins));
-  }
-
-  /// Moves whatever sits in an item's old home bin to its new one, used when
-  /// the item's location is edited. Stock parked in other bins stays put —
-  /// renaming where something lives should not silently relocate the rest.
-  void _relocateHome(String itemId, String from, String to) {
-    final fromBin = stockBin(from);
-    final toBin = stockBin(to);
-    if (fromBin == toBin) return;
-    final bins = {...?_levels[itemId]};
-    final moving = bins[fromBin] ?? 0;
-    if (moving <= 0) return;
-    bins.remove(fromBin);
-    bins[toBin] = (bins[toBin] ?? 0) + moving;
-    _putLevels(itemId, bins);
-    final saved = _levels[itemId] ?? const <String, int>{};
-    _persist(() => _repo.saveLevels(itemId, saved));
-  }
-
-  void _dropBins(String itemId) {
-    final next = {..._levels}..remove(itemId);
-    _levels = next;
-    _persist(() => _repo.deleteLevels(itemId));
-  }
-
   /// Rebuilds every breakdown from the items themselves. Used for a reset, a
   /// restore or a CSV import, where the incoming data carries one location.
   void _rebuildBins(List<Item> items) {
@@ -3060,14 +2181,6 @@ class InventoryController extends ChangeNotifier {
     _learnLocations([from, to]);
     notifyListeners();
 
-    _persist(() async {
-      await _repo.commitStockChange(
-        levels: writes,
-        movements: movements,
-        transfer: transfer,
-      );
-      await _repo.trimMovements(maxMovements);
-    });
     return transfer;
   }
 
@@ -3081,7 +2194,6 @@ class InventoryController extends ChangeNotifier {
     }
     if (identical(next, _settings)) return;
     _settings = next;
-    _persist(() => _repo.saveSettings(_settings));
   }
 
   // --- Categories ----------------------------------------------------------
@@ -3099,7 +2211,6 @@ class InventoryController extends ChangeNotifier {
       categoryColors: {..._settings.categoryColors, trimmed: swatchIndex},
     );
     notifyListeners();
-    _persist(() => _repo.saveSettings(_settings));
   }
 
   void renameCategory(String from, String to, int swatchIndex) {
@@ -3125,11 +2236,6 @@ class InventoryController extends ChangeNotifier {
               .toList();
     _applyTouched(touched);
     notifyListeners();
-
-    _persist(() async {
-      if (touched.isNotEmpty) await _repo.upsertItems(touched);
-      await _repo.saveSettings(_settings);
-    });
   }
 
   /// Removes the category and clears it from the items that used it, which
@@ -3147,11 +2253,6 @@ class InventoryController extends ChangeNotifier {
         .toList();
     _applyTouched(touched);
     notifyListeners();
-
-    _persist(() async {
-      if (touched.isNotEmpty) await _repo.upsertItems(touched);
-      await _repo.saveSettings(_settings);
-    });
   }
 
   int _supplierOrder(Supplier a, Supplier b) =>
@@ -3172,18 +2273,12 @@ class InventoryController extends ChangeNotifier {
     _settings = next;
     notifyListeners();
 
-    final api = _api;
-    if (api == null) {
-      _persist(() => _repo.saveSettings(next));
-      return;
-    }
-
     // These belong to the workspace, not the device — the company name on an
     // invoice has to be the same one everybody else prints. Written straight
     // through rather than optimistically: the screen already shows the new
     // value, and a failure is reported rather than silently reverted.
     try {
-      await api.savePreferences({
+      await _api.savePreferences({
         'companyName': next.companyName,
         'currency': next.currency,
         'companyAddress': next.companyAddress,
@@ -3193,7 +2288,7 @@ class InventoryController extends ChangeNotifier {
         'taxLabel': next.taxLabel,
         'receiptFooter': next.receiptFooter,
       });
-      await _persistSettingsTo(api);
+      await _persistSettingsTo();
       lastWriteError = null;
     } catch (error) {
       lastWriteError = error;
@@ -3214,18 +2309,8 @@ class InventoryController extends ChangeNotifier {
   /// else: the rows come back on the next load, and they never left anybody
   /// else's. That is what it did until now.
   Future<void> eraseAll() async {
-    final api = _api;
-    if (api == null) {
-      _replace(
-        items: const [],
-        movements: const [],
-        settings: const AppSettings(),
-      );
-      return;
-    }
-
     try {
-      await api.eraseEverything();
+      await _api.eraseEverything();
       lastWriteError = null;
     } catch (error) {
       // Nothing is cleared locally on a failure. Showing an empty catalogue
@@ -3267,13 +2352,6 @@ class InventoryController extends ChangeNotifier {
     _rebuildBins(_items);
     _settings = settings;
     notifyListeners();
-    _persist(
-      () => _repo.replaceAll(
-        items: items,
-        movements: movements,
-        settings: settings,
-      ),
-    );
   }
 
   // --- Internals -----------------------------------------------------------

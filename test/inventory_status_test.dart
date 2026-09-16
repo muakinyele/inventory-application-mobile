@@ -5,6 +5,8 @@ import 'package:stockpile/core/theme.dart';
 import 'package:stockpile/state/inventory_controller.dart';
 import 'package:stockpile/ui/widgets/inventory_status_banner.dart';
 
+import 'package:stockpile/data/seed_data.dart';
+
 import 'support.dart';
 
 Future<InventoryController> _shared() async {
@@ -36,7 +38,6 @@ void main() {
 
     expect(find.byType(Material), findsWidgets);
     expect(find.textContaining('inventory'), findsNothing);
-    expect(controller.isShared, isFalse);
   });
 
   group('state the banner has to make visible', () {
@@ -58,7 +59,10 @@ void main() {
     test('forgetting is a no-op on device', () async {
       // The local catalogue belongs to the device, not the session: signing
       // out must not empty it.
-      final controller = await newController(seeded: true);
+      final controller = await seededController(
+        items: seedItems(),
+        movements: seedMovements(),
+      );
       final before = controller.items.length;
       expect(before, greaterThan(0));
 

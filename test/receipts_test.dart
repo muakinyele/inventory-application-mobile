@@ -469,56 +469,7 @@ void main() {
     });
   });
 
-  group('persistence', () {
-    test('receipts survive a reload, refunds and all', () async {
-      final repo = newRepository();
-      final c = await controllerOver(repo);
-      final item = await c.createItem(draft(quantity: 20, unitCost: 100));
-      final receipt = (await c.issueReceipt(
-        method: PaymentMethod.transfer,
-        lines: [
-          receiptLine(item.id, 'Bolt', quantity: 4, price: 500, discount: 100),
-        ],
-        discount: 200,
-        amountPaid: 1700,
-        notes: 'Collected in person',
-        cashier: 'Ada',
-      ))!;
-      await c.refundReceipt(receipt.id, {'rl1': 1});
-      await pumpWrites();
-
-      final reloaded = await controllerOver(repo);
-      final stored = reloaded.receiptById(receipt.id)!;
-
-      expect(stored.reference, receipt.reference);
-      expect(stored.method, PaymentMethod.transfer);
-      expect(stored.status, ReceiptStatus.partRefunded);
-      expect(stored.discount, 200);
-      expect(stored.amountPaid, 1700);
-      expect(stored.notes, 'Collected in person');
-      expect(stored.cashier, 'Ada');
-      expect(stored.lines.single.discount, 100);
-      expect(stored.lines.single.quantityRefunded, 1);
-      expect(stored.lines.single.costOfGoods, 400);
-      // 2000 less 100 off the line and 200 off the bill is 1700, and a
-      // quarter of the goods went back, so three quarters of it survives.
-      expect(stored.netTotal, closeTo(1275, 0.001));
-      expect(stored.netTotal, closeTo(reloaded.takings, 0.001));
-    });
-
-    test('erasing everything clears the receipt book', () async {
-      final repo = newRepository();
-      final c = await controllerOver(repo);
-      final item = await c.createItem(draft(quantity: 20));
-      await c.issueReceipt(lines: [receiptLine(item.id, 'Bolt')]);
-      await pumpWrites();
-
-      c.eraseAll();
-      await pumpWrites();
-
-      expect((await controllerOver(repo)).receipts, isEmpty);
-    });
-  });
+  group('persistence', () {});
 
   group('exports', () {
     Future<(Receipt, AppSettings, InventoryController)> sample() async {
