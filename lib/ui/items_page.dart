@@ -513,7 +513,14 @@ class _Grid extends StatelessWidget {
                         item: item,
                         currency: settings.currency,
                         categoryColor: settings.colorFor(item.category),
-                        onTap: () => context.go('/items/${item.id}'),
+                        // A row whose id is blank cannot be opened — the URL would be
+                        // /items/ and matches no route — so it is not offered as
+                        // if it could be. Rows like that predate the fix that
+                        // stopped the server accepting an empty id, and erasing
+                        // is what clears them.
+                        onTap: item.id.isEmpty
+                            ? null
+                            : () => context.go('/items/${item.id}'),
                         onAdjust: (delta) => onAdjust(item, delta),
                       ),
                     ),

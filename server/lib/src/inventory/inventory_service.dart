@@ -35,6 +35,47 @@ class InventoryService {
   static const unassigned = 'Unassigned';
 
   // ------------------------------------------------------------------
+  // Erasing
+  // ------------------------------------------------------------------
+
+  /// Empties the inventory, leaving accounts and the audit trail alone.
+  ///
+  /// Everything in one transaction: a half-erased inventory — documents whose
+  /// lines are gone, movements pointing at items that are not there — is worse
+  /// than either keeping it or clearing it.
+  ///
+  /// Deliberately does not touch users, roles, sessions or audit logs. Those
+  /// are not inventory, and somebody clearing the stock has not asked to be
+  /// signed out or to lose the record of who did what.
+  Future<void> eraseEverything() => db.transaction(() async {
+    // Children before parents, so nothing is briefly orphaned even inside the
+    // transaction.
+    await db.delete(db.receiptLines).go();
+    await db.delete(db.receipts).go();
+    await db.delete(db.invoiceLines).go();
+    await db.delete(db.invoices).go();
+    await db.delete(db.transferLines).go();
+    await db.delete(db.transfers).go();
+    await db.delete(db.salesOrderLines).go();
+    await db.delete(db.salesOrders).go();
+    await db.delete(db.purchaseOrderLines).go();
+    await db.delete(db.purchaseOrders).go();
+    await db.delete(db.movements).go();
+    await db.delete(db.stockLevels).go();
+    await db.delete(db.items).go();
+    await db.delete(db.customers).go();
+    await db.delete(db.suppliers).go();
+    await db.delete(db.categories).go();
+    await db.delete(db.lookups).go();
+
+    // Document counters go too, so the next invoice is 0001 again rather than
+    // carrying on from a numbering nothing refers to any more.
+    await (db.delete(
+      db.preferences,
+    )..where((t) => t.key.like('sequence.%'))).go();
+  });
+
+  // ------------------------------------------------------------------
   // Items
   // ------------------------------------------------------------------
 
