@@ -142,29 +142,41 @@ void main() {
     test(
       'a credit sale is revenue in full, with the balance outstanding',
       () async {
-        final c = await newController();
-        final item = await c.createItem(draft(quantity: 50, unitCost: 100));
-        final invoice = (await c.issueInvoice(
-          lines: [
-            InvoiceLine(
-              id: 'a',
-              itemId: item.id,
-              itemName: 'Bolt',
-              quantity: 10,
-              unitPrice: 500,
-            ),
-          ],
-        ))!;
+        // Seeded rather than issued. Raising an invoice is the server's job
+        // now; what this test is about is what the report makes of one.
+        const lines = [
+          InvoiceLine(
+            id: 'a',
+            itemId: 'i1',
+            itemName: 'Bolt',
+            quantity: 10,
+            unitPrice: 500,
+          ),
+        ];
 
-        var report = thisMonth(c);
+        final unpaid = await seededController(
+          invoices: [seedInvoice(id: 'inv1', lines: lines)],
+        );
+
+        var report = thisMonth(unpaid);
         expect(report.revenue, 5000);
         expect(report.outstanding, 5000);
         expect(report.creditSales, 1);
         expect(report.revenueBySource[SaleSource.credit], 5000);
 
         // Collecting the money does not change what was earned.
-        await c.payInvoice(invoice.id, 5000);
-        report = thisMonth(c);
+        final settled = await seededController(
+          invoices: [
+            seedInvoice(
+              id: 'inv1',
+              lines: lines,
+              amountPaid: 5000,
+              status: InvoiceStatus.paid,
+            ),
+          ],
+        );
+
+        report = thisMonth(settled);
         expect(report.revenue, 5000);
         expect(report.outstanding, 0);
       },
