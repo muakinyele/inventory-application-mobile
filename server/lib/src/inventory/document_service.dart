@@ -164,6 +164,18 @@ class DocumentService {
       if (current == null) throw ApiError.notFound;
       if (current.status == 'cancelled') return current;
 
+      // Cancelling returns the stock. With money already taken against the
+      // invoice that would put the goods back on the shelf and leave the
+      // payment banked — the books and the shelf disagreeing, with nothing on
+      // either side recording why. A paid invoice is refunded or credited,
+      // not struck off.
+      if (current.amountPaid > 0) {
+        throw ApiError.badRequest(
+          'Invoice ${current.reference} has been paid against and cannot be '
+          'cancelled. Refund the payment first.',
+        );
+      }
+
       if (current.movesStock) {
         await _reverseDocumentStock(
           documentId: id,
@@ -570,6 +582,12 @@ class DocumentService {
       )..where((t) => t.id.equals(orderId))).getSingleOrNull();
       if (order == null) throw ApiError.notFound;
 
+      if (order.status == 'cancelled') {
+        throw ApiError.badRequest(
+          'Order ${order.reference} was cancelled; it cannot take a delivery.',
+        );
+      }
+
       final lines = await _purchaseOrderLines(orderId);
       final byId = {for (final line in lines) line.id: line};
 
@@ -587,6 +605,11 @@ class DocumentService {
             '${line.itemName} has $outstanding outstanding, not $quantity.',
           );
         }
+
+        // Cost first, while the old count is still readable: the average is
+        // weighted by what was already on the shelf, and adjustStock is about
+        // to change that.
+        await _rollForwardCost(line.itemId, quantity, line.unitCost);
 
         await inventory.adjustStock(
           itemId: line.itemId,
@@ -630,6 +653,39 @@ class DocumentService {
         lines: updated,
       );
     });
+  }
+
+  /// Moves an item's unit cost to the weighted average of what it held and
+  /// what has just arrived.
+  ///
+  /// Ten on hand at 1.00 and ten arriving at 2.00 makes the shelf worth 30
+  /// across twenty units, so the cost becomes 1.50. Leaving it at 1.00 would
+  /// overstate every margin reported from then on, and the error compounds
+  /// with each delivery rather than washing out.
+  ///
+  /// A zero on the line is missing information, not a statement that the goods
+  /// were free, so it leaves the existing cost alone. With nothing on the
+  /// shelf to average against, the new price is simply the price.
+  Future<void> _rollForwardCost(
+    String itemId,
+    int arriving,
+    double unitCost,
+  ) async {
+    if (arriving <= 0 || unitCost <= 0) return;
+
+    final item = await inventory.requireItem(itemId);
+    final held = item.quantity;
+
+    final next = held <= 0
+        ? unitCost
+        : ((held * item.unitCost) + (arriving * unitCost)) / (held + arriving);
+
+    await (db.update(db.items)..where((t) => t.id.equals(itemId))).write(
+      ItemsCompanion(
+        unitCost: Value(next),
+        updatedAt: Value(DateTime.now().toUtc()),
+      ),
+    );
   }
 
   // ------------------------------------------------------------------
