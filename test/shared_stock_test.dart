@@ -323,6 +323,31 @@ class _Server {
       });
     }
 
+    if (route.startsWith('PATCH /api/documents/sales-orders/')) {
+      final body = jsonDecode(request.body) as Map<String, dynamic>;
+      return _ok({
+        'salesOrder': {
+          ...body,
+          'id': 'so-server-1',
+          'reference': 'SO-0021',
+          'lines': body['lines'] ?? <Object?>[],
+        },
+      });
+    }
+
+    if (route == 'PATCH /api/inventory/preferences') {
+      final body = jsonDecode(request.body) as Map<String, dynamic>;
+      return _ok({'preferences': body['preferences']});
+    }
+
+    if (route == 'PUT /api/inventory/categories') {
+      return _ok({'categories': <Object?>[]});
+    }
+
+    if (route.startsWith('PUT /api/inventory/lookups/')) {
+      return _ok({'lookups': <Object?>[]});
+    }
+
     if (route == 'GET /api/inventory/items') {
       return _ok({
         'items': [_item(quantity: quantity)],
@@ -1060,6 +1085,57 @@ void main() {
         reason: 'the rest is change, not revenue',
       );
       expect(controller.invoiceById(invoice.id)!.status, InvoiceStatus.paid);
+    });
+
+    test('a status change reaches the server', () async {
+      // Confirming, cancelling and closing all go through one helper. While it
+      // wrote only to the device, the change looked right until the next load
+      // and was never true for anybody else.
+      //
+      // Cancelling is the one used here because it has no precondition on the
+      // current status, so the test is about the write-through rather than
+      // about which transitions are legal.
+      final server = _Server();
+      final controller = await _controller(server);
+
+      final order = await controller.createSalesOrder(
+        lines: const [
+          SalesOrderLine(
+            id: '',
+            itemId: 'i1',
+            itemName: 'Widget',
+            quantityOrdered: 2,
+            unitPrice: 4,
+          ),
+        ],
+      );
+      server.calls.clear();
+
+      controller.cancelSalesOrder(order.id);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(
+        server.calls.any(
+          (c) => c.startsWith('PATCH /api/documents/sales-orders/'),
+        ),
+        isTrue,
+        reason: 'the status change was never sent',
+      );
+    });
+
+    test('settings are saved to the workspace, not the device', () async {
+      // The company name on an invoice has to be the one everybody prints.
+      final server = _Server();
+      final controller = await _controller(server);
+
+      await controller.updateSettings(
+        controller.settings.copyWith(companyName: 'Chedra Olympas'),
+      );
+
+      final sent =
+          server.lastBodyFor['PATCH /api/inventory/preferences']!['preferences']
+              as Map<String, dynamic>;
+      expect(sent['companyName'], 'Chedra Olympas');
     });
 
     test('nothing is shown before the server has agreed to it', () async {

@@ -1594,12 +1594,26 @@ class InventoryController extends ChangeNotifier {
     return (existingValue + incomingValue) / (item.quantity + quantity);
   }
 
+  /// The purchase-order counterpart of [_replaceSalesOrder], and the same
+  /// reasoning: placing and cancelling both come through here.
   void _replaceOrder(PurchaseOrder order) {
     _purchaseOrders = _purchaseOrders
         .map((o) => o.id == order.id ? order : o)
         .toList();
     notifyListeners();
-    _persist(() => _repo.savePurchaseOrder(order));
+
+    final api = _api;
+    if (api == null) {
+      _persist(() => _repo.savePurchaseOrder(order));
+      return;
+    }
+    _persist(() async {
+      final saved = await api.savePurchaseOrder(order);
+      _purchaseOrders = _purchaseOrders
+          .map((o) => o.id == saved.id ? saved : o)
+          .toList();
+      notifyListeners();
+    });
   }
 
   // --- Sales orders --------------------------------------------------------
@@ -1841,12 +1855,30 @@ class InventoryController extends ChangeNotifier {
     return movements.length;
   }
 
+  /// Writes an order's new state through, wherever it lives.
+  ///
+  /// Every status change goes through here — confirming, cancelling, closing —
+  /// so this one method is what decides whether they reach anybody else. While
+  /// it wrote only to the device, confirming a sale looked right until the
+  /// next load and was never true for anyone but the person who did it.
   void _replaceSalesOrder(SalesOrder order) {
     _salesOrders = _salesOrders
         .map((o) => o.id == order.id ? order : o)
         .toList();
     notifyListeners();
-    _persist(() => _repo.saveSalesOrder(order));
+
+    final api = _api;
+    if (api == null) {
+      _persist(() => _repo.saveSalesOrder(order));
+      return;
+    }
+    _persist(() async {
+      final saved = await api.saveSalesOrder(order);
+      _salesOrders = _salesOrders
+          .map((o) => o.id == saved.id ? saved : o)
+          .toList();
+      notifyListeners();
+    });
   }
 
   // --- Receipts ------------------------------------------------------------
@@ -3050,10 +3082,38 @@ class InventoryController extends ChangeNotifier {
 
   // --- Settings and bulk ---------------------------------------------------
 
-  void updateSettings(AppSettings next) {
+  Future<void> updateSettings(AppSettings next) async {
     _settings = next;
     notifyListeners();
-    _persist(() => _repo.saveSettings(next));
+
+    final api = _api;
+    if (api == null) {
+      _persist(() => _repo.saveSettings(next));
+      return;
+    }
+
+    // These belong to the workspace, not the device — the company name on an
+    // invoice has to be the same one everybody else prints. Written straight
+    // through rather than optimistically: the screen already shows the new
+    // value, and a failure is reported rather than silently reverted.
+    try {
+      await api.savePreferences({
+        'companyName': next.companyName,
+        'currency': next.currency,
+        'companyAddress': next.companyAddress,
+        'companyPhone': next.companyPhone,
+        'companyEmail': next.companyEmail,
+        'taxRate': next.taxRate.toString(),
+        'taxLabel': next.taxLabel,
+        'receiptFooter': next.receiptFooter,
+      });
+      await _persistSettingsTo(api);
+      lastWriteError = null;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not save the settings: $error');
+    }
+    notifyListeners();
   }
 
   void loadSampleData() => _replace(
