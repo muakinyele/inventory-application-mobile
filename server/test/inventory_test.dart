@@ -365,6 +365,116 @@ void main() {
     });
   });
 
+  group('a blank id means "mint one", not "use this one"', () {
+    // The editors build a draft with id: '' for anything new, and toJson always
+    // includes the key — so the field arrives present and empty. Treating that
+    // as an id gives every new row the same one, and the second collides on the
+    // primary key.
+
+    test('a second supplier can be added', () async {
+      final session = await admin();
+
+      final first = await server.post(
+        '/inventory/suppliers',
+        accessToken: session.accessToken,
+        body: {'id': '', 'name': 'Acme'},
+      );
+      expect(first.statusCode, 200);
+
+      final second = await server.post(
+        '/inventory/suppliers',
+        accessToken: session.accessToken,
+        body: {'id': '', 'name': 'Globex'},
+      );
+      expect(second.statusCode, 200);
+
+      expect(
+        second.json['supplier']['id'],
+        isNot(first.json['supplier']['id']),
+        reason: 'two suppliers cannot share an id',
+      );
+
+      final list = await server.get(
+        '/inventory/suppliers',
+        accessToken: session.accessToken,
+      );
+      expect((list.json['suppliers'] as List).length, 2);
+    });
+
+    test('a second customer can be added', () async {
+      final session = await admin();
+
+      await server.post(
+        '/inventory/customers',
+        accessToken: session.accessToken,
+        body: {'id': '', 'name': 'First'},
+      );
+      final second = await server.post(
+        '/inventory/customers',
+        accessToken: session.accessToken,
+        body: {'id': '', 'name': 'Second'},
+      );
+
+      expect(second.statusCode, 200);
+      final list = await server.get(
+        '/inventory/customers',
+        accessToken: session.accessToken,
+      );
+      expect((list.json['customers'] as List).length, 2);
+    });
+
+    test('a second item can be added', () async {
+      final session = await admin();
+
+      await server.post(
+        '/inventory/items',
+        accessToken: session.accessToken,
+        body: {'id': '', 'name': 'First'},
+      );
+      final second = await server.post(
+        '/inventory/items',
+        accessToken: session.accessToken,
+        body: {'id': '', 'name': 'Second'},
+      );
+
+      expect(second.statusCode, 201);
+      final list = await server.get(
+        '/inventory/items',
+        accessToken: session.accessToken,
+      );
+      expect(list.json['total'], 2);
+    });
+
+    test('an id that was sent is still honoured', () async {
+      // Only blank means "mint one". A real id has to keep working, or an edit
+      // would create a duplicate instead of updating the row.
+      final session = await admin();
+
+      await server.post(
+        '/inventory/suppliers',
+        accessToken: session.accessToken,
+        body: {'id': 'sup-fixed', 'name': 'Original'},
+      );
+      final again = await server.post(
+        '/inventory/suppliers',
+        accessToken: session.accessToken,
+        body: {'id': 'sup-fixed', 'name': 'Renamed'},
+      );
+
+      expect(again.json['supplier']['id'], 'sup-fixed');
+      final list = await server.get(
+        '/inventory/suppliers',
+        accessToken: session.accessToken,
+      );
+      expect(
+        (list.json['suppliers'] as List).length,
+        1,
+        reason: 'an edit, not a second row',
+      );
+      expect(list.json['suppliers'][0]['name'], 'Renamed');
+    });
+  });
+
   group('workspace settings', () {
     test('preferences are shared, and merged rather than replaced', () async {
       final session = await admin();

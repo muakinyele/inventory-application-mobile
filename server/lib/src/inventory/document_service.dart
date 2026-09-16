@@ -67,7 +67,7 @@ class DocumentService {
   }) async {
     return db.transaction(() async {
       final now = DateTime.now().toUtc();
-      final id = header.id.present ? header.id.value : newId();
+      final id = idOrNew(header.id);
 
       final existing = await (db.select(
         db.invoices,
@@ -228,7 +228,7 @@ class DocumentService {
   }) async {
     return db.transaction(() async {
       final now = DateTime.now().toUtc();
-      final id = header.id.present ? header.id.value : newId();
+      final id = idOrNew(header.id);
 
       final existing = await (db.select(
         db.receipts,
@@ -486,7 +486,7 @@ class DocumentService {
   }) async {
     return db.transaction(() async {
       final now = DateTime.now().toUtc();
-      final id = header.id.present ? header.id.value : newId();
+      final id = idOrNew(header.id);
 
       final existing = await (db.select(
         db.purchaseOrders,
@@ -674,7 +674,7 @@ class DocumentService {
   }) async {
     return db.transaction(() async {
       final now = DateTime.now().toUtc();
-      final id = header.id.present ? header.id.value : newId();
+      final id = idOrNew(header.id);
 
       final existing = await (db.select(
         db.salesOrders,
