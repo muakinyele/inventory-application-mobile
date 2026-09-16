@@ -460,7 +460,11 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
     final (amount, chosen) = result;
     if (amount <= 0) return;
 
-    final receipt = controller.payInvoice(invoice.id, amount, method: chosen);
+    final receipt = await controller.payInvoice(
+      invoice.id,
+      amount,
+      method: chosen,
+    );
     if (!mounted) return;
     if (receipt == null) {
       _notify('That payment could not be recorded.', tone: MessageTone.failure);

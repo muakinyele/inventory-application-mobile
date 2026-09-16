@@ -35,6 +35,9 @@ class _Server {
   /// second device having moved it.
   int quantity = 10;
 
+  /// What the fake server has recorded against the one invoice it knows about.
+  double invoicePaid = 0;
+
   bool conflictNext = false;
   bool failNext = false;
 
@@ -294,6 +297,29 @@ class _Server {
               ? body['id']
               : 'sup-server-1',
         },
+      });
+    }
+
+    if (route.startsWith('POST /api/documents/invoices/') &&
+        route.endsWith('/payments')) {
+      final body = jsonDecode(request.body) as Map<String, dynamic>;
+      // A 40.00 invoice. The server caps at the balance and says what it took.
+      final balance = 40.0 - invoicePaid;
+      final asked = (body['amount'] as num).toDouble();
+      final applied = asked > balance ? balance : asked;
+      invoicePaid += applied;
+      return _ok({
+        'invoice': {
+          'id': 'inv-server-1',
+          'reference': 'INV-0042',
+          'status': (40.0 - invoicePaid) < 0.005 ? 'paid' : 'partPaid',
+          'amountPaid': invoicePaid,
+          'lines': <Object?>[],
+          'issuedAt': '2026-09-16T10:00:00.000Z',
+          'createdAt': '2026-09-16T10:00:00.000Z',
+          'updatedAt': '2026-09-16T10:05:00.000Z',
+        },
+        'applied': applied,
       });
     }
 
@@ -970,6 +996,70 @@ void main() {
 
       expect(controller.items, isEmpty);
       expect(controller.load, InventoryLoad.idle);
+    });
+
+    test('a payment is added by the server, not computed here', () async {
+      // Another till may have paid against the same invoice since this screen
+      // was opened, so the balance on it is already stale. What was taken is
+      // the server's answer.
+      final server = _Server();
+      final controller = await _controller(server);
+
+      final invoice = (await controller.issueInvoice(
+        lines: const [
+          InvoiceLine(
+            id: 'l1',
+            itemId: 'i1',
+            itemName: 'Widget',
+            quantity: 4,
+            unitPrice: 10,
+          ),
+        ],
+      ))!;
+
+      final receipt = await controller.payInvoice(invoice.id, 25);
+
+      expect(
+        server
+            .lastBodyFor['POST /api/documents/invoices/${invoice.id}/payments']!['amount'],
+        25,
+      );
+      expect(controller.invoiceById(invoice.id)!.amountPaid, 25);
+      expect(
+        controller.invoiceById(invoice.id)!.status,
+        InvoiceStatus.partPaid,
+      );
+      // The receipt documents the payment and moves no stock: the goods left
+      // when the invoice was raised.
+      expect(receipt, isNotNull);
+      expect(receipt!.movesStock, isFalse);
+      expect(receipt.amountPaid, 25);
+    });
+
+    test('overpaying takes only the balance', () async {
+      final server = _Server();
+      final controller = await _controller(server);
+
+      final invoice = (await controller.issueInvoice(
+        lines: const [
+          InvoiceLine(
+            id: 'l1',
+            itemId: 'i1',
+            itemName: 'Widget',
+            quantity: 4,
+            unitPrice: 10,
+          ),
+        ],
+      ))!;
+
+      final receipt = await controller.payInvoice(invoice.id, 100);
+
+      expect(
+        receipt!.amountPaid,
+        40,
+        reason: 'the rest is change, not revenue',
+      );
+      expect(controller.invoiceById(invoice.id)!.status, InvoiceStatus.paid);
     });
 
     test('nothing is shown before the server has agreed to it', () async {

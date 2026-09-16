@@ -126,7 +126,7 @@ void main() {
         lines: [invoiceLine(item.id, 'Bolt', quantity: 4, price: 500)],
       ))!;
 
-      final receipt = c.payInvoice(
+      final receipt = await c.payInvoice(
         invoice.id,
         800,
         method: PaymentMethod.transfer,
@@ -157,8 +157,8 @@ void main() {
         lines: [invoiceLine(item.id, 'Bolt', quantity: 4, price: 500)],
       ))!;
 
-      c.payInvoice(invoice.id, 1200);
-      c.payInvoice(invoice.id, 800);
+      await c.payInvoice(invoice.id, 1200);
+      await c.payInvoice(invoice.id, 800);
 
       final after = c.invoiceById(invoice.id)!;
       expect(after.status, InvoiceStatus.paid);
@@ -176,7 +176,7 @@ void main() {
         lines: [invoiceLine(item.id, 'Bolt', quantity: 4, price: 500)],
       ))!;
 
-      final receipt = c.payInvoice(invoice.id, 999999)!;
+      final receipt = (await c.payInvoice(invoice.id, 999999))!;
 
       expect(receipt.amountPaid, 2000);
       expect(c.invoiceById(invoice.id)!.balanceDue, 0);
@@ -190,9 +190,9 @@ void main() {
       final invoice = (await c.issueInvoice(
         lines: [invoiceLine(item.id, 'Bolt', quantity: 4, price: 500)],
       ))!;
-      c.payInvoice(invoice.id, 2000);
+      await c.payInvoice(invoice.id, 2000);
 
-      expect(c.payInvoice(invoice.id, 500), isNull);
+      expect(await c.payInvoice(invoice.id, 500), isNull);
       expect(c.receipts, hasLength(1));
     });
 
@@ -203,7 +203,7 @@ void main() {
         lines: [invoiceLine(item.id, 'Bolt', quantity: 4, price: 500)],
       ))!;
 
-      c.payInvoice(invoice.id, 750, method: PaymentMethod.cash);
+      await c.payInvoice(invoice.id, 750, method: PaymentMethod.cash);
 
       // The receipt reprints the whole 2000 invoice, but only 750 arrived.
       expect(c.takings, 750);
@@ -236,7 +236,7 @@ void main() {
         dueAt: DateTime.now().subtract(const Duration(days: 3)),
       ))!;
 
-      c.payInvoice(invoice.id, 2000);
+      await c.payInvoice(invoice.id, 2000);
 
       expect(c.invoiceById(invoice.id)!.isOverdue, isFalse);
       expect(c.overdueInvoices, isEmpty);
@@ -272,7 +272,7 @@ void main() {
       final invoice = (await c.issueInvoice(
         lines: [invoiceLine(item.id, 'Bolt', quantity: 4, price: 500)],
       ))!;
-      c.payInvoice(invoice.id, 100);
+      await c.payInvoice(invoice.id, 100);
 
       expect(c.cancelInvoice(invoice.id), isFalse);
       expect(c.invoiceById(invoice.id)!.status, InvoiceStatus.partPaid);
@@ -308,7 +308,7 @@ void main() {
         terms: '14 days net',
         notes: 'Delivered to site',
       ))!;
-      c.payInvoice(invoice.id, 500, method: PaymentMethod.transfer);
+      await c.payInvoice(invoice.id, 500, method: PaymentMethod.transfer);
       await pumpWrites();
 
       final reloaded = await controllerOver(repo);

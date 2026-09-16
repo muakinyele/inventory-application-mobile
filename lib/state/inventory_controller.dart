@@ -1029,6 +1029,97 @@ class InventoryController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Records a payment on the server and writes the receipt for it.
+  ///
+  /// The money goes first, deliberately. If the receipt then fails to save,
+  /// the payment is still recorded and the document can be raised again; the
+  /// other order would leave a receipt for money nothing has taken.
+  ///
+  /// How much was actually taken is the server's answer, not this device's
+  /// arithmetic: another till may have paid against the same invoice since
+  /// this screen was opened, and the balance shown here is already stale.
+  Future<Receipt?> _payInvoiceOnServer(
+    InventoryApi api,
+    Invoice invoice,
+    double amount, {
+    PaymentMethod method = PaymentMethod.cash,
+    String notes = '',
+    String cashier = '',
+    DateTime? paidAt,
+  }) async {
+    final now = DateTime.now();
+
+    final Invoice settled;
+    final double taken;
+    try {
+      final result = await api.payInvoice(invoice.id, amount);
+      settled = result.invoice;
+      taken = result.applied;
+      _invoices = _invoices
+          .map((i) => i.id == settled.id ? settled : i)
+          .toList();
+      lastWriteError = null;
+      notifyListeners();
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not record the payment: $error');
+      notifyListeners();
+      return null;
+    }
+
+    // The receipt carries the invoice's own lines so it prints as a proper
+    // document rather than a bare figure, at zero cost of goods: the cost was
+    // banked when the invoice moved the stock, and counting it again here
+    // would double the cost of the sale.
+    final draft = Receipt(
+      id: '',
+      reference: '',
+      invoiceId: invoice.id,
+      salesOrderId: invoice.salesOrderId,
+      customerId: invoice.customerId,
+      customerName: invoice.customerName,
+      method: method,
+      lines: [
+        for (final line in invoice.lines)
+          ReceiptLine(
+            id: '',
+            itemId: line.itemId,
+            itemName: line.itemName,
+            sku: line.sku,
+            unit: line.unit,
+            quantity: line.quantity,
+            unitPrice: line.unitPrice,
+            discount: line.discount,
+          ),
+      ],
+      discount: invoice.discount,
+      taxRate: invoice.taxRate,
+      taxLabel: invoice.taxLabel,
+      amountPaid: taken,
+      notes: notes.isEmpty ? 'Payment against ${invoice.reference}' : notes,
+      cashier: cashier,
+      // Never: the stock left when the invoice was raised.
+      movesStock: false,
+      issuedAt: paidAt ?? now,
+      createdAt: now,
+      updatedAt: now,
+    );
+
+    try {
+      final saved = await api.saveReceipt(draft);
+      _receipts = [saved, ..._receipts.where((r) => r.id != saved.id)];
+      notifyListeners();
+      return saved;
+    } catch (error) {
+      // The payment stands. Saying the receipt failed is better than implying
+      // the money was not taken.
+      lastWriteError = error;
+      debugPrint('Stockpile: payment recorded, receipt failed: $error');
+      notifyListeners();
+      return null;
+    }
+  }
+
   /// Re-reads what a document just changed.
   ///
   /// Items and movements only. Per-bin levels are read by the screens that
@@ -2446,17 +2537,30 @@ class InventoryController extends ChangeNotifier {
   /// A payment is never taken past the balance, so an invoice cannot end up
   /// showing change it did not give. Returns the receipt, or null when there
   /// was nothing to collect.
-  Receipt? payInvoice(
+  Future<Receipt?> payInvoice(
     String id,
     double amount, {
     PaymentMethod method = PaymentMethod.cash,
     String notes = '',
     String cashier = '',
     DateTime? paidAt,
-  }) {
+  }) async {
     final invoice = invoiceById(id);
     if (invoice == null || !invoice.status.isCollectable) return null;
     if (amount <= 0 || invoice.balanceDue <= 0) return null;
+
+    final api = _api;
+    if (api != null) {
+      return _payInvoiceOnServer(
+        api,
+        invoice,
+        amount,
+        method: method,
+        notes: notes,
+        cashier: cashier,
+        paidAt: paidAt,
+      );
+    }
 
     final now = DateTime.now();
     final taken = amount.clamp(0, invoice.balanceDue).toDouble();

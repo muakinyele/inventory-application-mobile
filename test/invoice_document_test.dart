@@ -45,7 +45,7 @@ void main() {
 
     // A part-paid invoice lists each receipt against the balance, so the
     // payments path has to render too.
-    c.payInvoice(unpaid.id, 500);
+    await c.payInvoice(unpaid.id, 500);
     final partPaid = c.invoiceById(unpaid.id)!;
     bytes = await InvoiceDocument(
       partPaid,
@@ -83,7 +83,7 @@ void main() {
         lines: [line(item.id, name: 'Bolt, 10mm')],
         notes: 'Said "invoice it"',
       ))!;
-      c.payInvoice(invoice.id, 500);
+      await c.payInvoice(invoice.id, 500);
 
       final csv = invoicesToCsv([c.invoiceById(invoice.id)!]);
       final rows = csv.trim().split('\n');

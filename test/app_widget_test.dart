@@ -598,11 +598,11 @@ void main() {
           ),
         ],
       ))!;
-      final receipt = controller.payInvoice(
+      final receipt = (await controller.payInvoice(
         invoice.id,
         800,
         method: PaymentMethod.transfer,
-      )!;
+      ))!;
 
       await tester.pumpWidget(
         ChangeNotifierProvider.value(
@@ -813,7 +813,11 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      controller.payInvoice(invoice.id, 800, method: PaymentMethod.transfer);
+      await controller.payInvoice(
+        invoice.id,
+        800,
+        method: PaymentMethod.transfer,
+      );
       await tester.pumpAndSettle();
 
       expect(find.text('Receipts issued'), findsOneWidget);

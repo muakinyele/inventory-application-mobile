@@ -163,7 +163,7 @@ void main() {
         expect(report.revenueBySource[SaleSource.credit], 5000);
 
         // Collecting the money does not change what was earned.
-        c.payInvoice(invoice.id, 5000);
+        await c.payInvoice(invoice.id, 5000);
         report = thisMonth(c);
         expect(report.revenue, 5000);
         expect(report.outstanding, 0);
@@ -184,8 +184,8 @@ void main() {
           ),
         ],
       ))!;
-      c.payInvoice(invoice.id, 2000);
-      c.payInvoice(invoice.id, 3000);
+      await c.payInvoice(invoice.id, 2000);
+      await c.payInvoice(invoice.id, 3000);
 
       final report = thisMonth(c);
 
