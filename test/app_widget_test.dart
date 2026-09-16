@@ -330,24 +330,29 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
+      // Seeded already part-received: the subject is how an order at that
+      // point renders, not how it got there. Receiving is the server's, and
+      // is tested there.
       final controller = await seededController(
         items: seedItems(),
         movements: seedMovements(),
-      );
-      final item = controller.items.first;
-      final order = await controller.createPurchaseOrder(
-        lines: [
-          PurchaseOrderLine(
-            id: 'l1',
-            itemId: item.id,
-            itemName: item.name,
-            quantityOrdered: 10,
-            unitCost: 500,
+        purchaseOrders: [
+          seedPurchaseOrder(
+            id: 'po1',
+            status: PurchaseStatus.partial,
+            lines: const [
+              PurchaseOrderLine(
+                id: 'l1',
+                itemId: 'seed-1',
+                itemName: 'Bolt',
+                quantityOrdered: 10,
+                quantityReceived: 4,
+                unitCost: 500,
+              ),
+            ],
           ),
         ],
       );
-      controller.placePurchaseOrder(order.id);
-      await controller.receivePurchaseOrder(order.id, {'l1': 4});
 
       await tester.pumpWidget(
         ChangeNotifierProvider.value(

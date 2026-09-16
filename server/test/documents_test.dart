@@ -960,7 +960,7 @@ void main() {
       // Both are the first of their kind, so both end 0001 — a shared counter
       // would have made the second 0002.
       expect(invoice.json['invoice']['reference'], 'INV-0001');
-      expect(receipt.json['receipt']['reference'], 'RCP-0001');
+      expect(receipt.json['receipt']['reference'], 'RC-0001');
     });
   });
 

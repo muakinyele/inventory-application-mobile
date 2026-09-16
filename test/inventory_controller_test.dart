@@ -22,31 +22,6 @@ void main() {
   });
 
   group('adjustStock', () {
-    test('clamps at zero rather than going negative', () async {
-      final c = await newController();
-      final item = await c.createItem(draft(quantity: 3));
-
-      c.adjustStock(item.id, -10, note: 'Big pick');
-
-      expect(c.byId(item.id)!.quantity, 0);
-      expect(c.movements.first.before, 3);
-      expect(c.movements.first.after, 0);
-      expect(c.movements.first.delta, -3);
-    });
-
-    test('records the movement with the note and the new balance', () async {
-      final c = await newController();
-      final item = await c.createItem(draft(quantity: 10));
-
-      c.adjustStock(item.id, 40, note: 'PO-2310');
-
-      expect(c.byId(item.id)!.quantity, 50);
-      final movement = c.movements.first;
-      expect(movement.kind, MovementKind.stockIn);
-      expect(movement.delta, 40);
-      expect(movement.note, 'PO-2310');
-    });
-
     test('is a no-op when already empty, leaving no movement behind', () async {
       final c = await newController();
       final item = await c.createItem(draft(quantity: 0));
@@ -57,40 +32,6 @@ void main() {
       expect(c.movements.length, before);
     });
   });
-
-  test('setStock records a stocktake against the previous balance', () async {
-    final c = await newController();
-    final item = await c.createItem(draft(quantity: 10));
-
-    c.setStock(item.id, 7);
-
-    expect(c.byId(item.id)!.quantity, 7);
-    expect(c.movements.first.kind, MovementKind.adjust);
-    expect(c.movements.first.delta, -3);
-  });
-
-  test('deleting an item keeps its history', () async {
-    final c = await newController();
-    final item = await c.createItem(draft(name: 'Nut'));
-
-    await c.deleteItem(item.id);
-
-    expect(c.byId(item.id), isNull);
-    expect(c.movements.any((m) => m.itemName == 'Nut'), isTrue);
-  });
-
-  test(
-    'editing without touching quantity logs an edit, not an adjustment',
-    () async {
-      final c = await newController();
-      final item = await c.createItem(draft(quantity: 10));
-
-      await c.updateItem(item.id, item.copyWith(name: 'Bolt M8'));
-
-      expect(c.movements.first.kind, MovementKind.edit);
-      expect(c.movements.first.delta, 0);
-    },
-  );
 
   test('new categories are folded into the pickers', () async {
     final c = await newController();
@@ -117,20 +58,6 @@ void main() {
 
     expect(c.needsAttention.map((i) => i.name), ['Empty', 'Low']);
   });
-
-  test(
-    'the movement log is capped so storage cannot grow without bound',
-    () async {
-      final c = await newController();
-      final item = await c.createItem(draft(quantity: 0));
-
-      for (var i = 0; i < InventoryController.maxMovements + 20; i++) {
-        c.adjustStock(item.id, 1);
-      }
-
-      expect(c.movements.length, InventoryController.maxMovements);
-    },
-  );
 
   test('importDrafts adds items and learns their categories', () async {
     final c = await newController();

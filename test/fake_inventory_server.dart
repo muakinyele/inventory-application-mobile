@@ -87,7 +87,7 @@ class FakeInventoryServer {
       return _ok(echo('invoice', 'inv-', {'reference': 'INV-0001'}));
     }
     if (path == '/api/documents/receipts') {
-      return _ok(echo('receipt', 'rcp-', {'reference': 'RCP-0001'}));
+      return _ok(echo('receipt', 'rcp-', {'reference': 'RC-0001'}));
     }
     if (path == '/api/documents/purchase-orders') {
       return _ok(echo('purchaseOrder', 'po-', {'reference': 'PO-0001'}));

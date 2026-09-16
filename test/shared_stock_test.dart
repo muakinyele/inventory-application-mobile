@@ -123,7 +123,7 @@ class _Server {
         'receipt': {
           ...body,
           'id': 'rcp-server-1',
-          'reference': 'RCP-0007',
+          'reference': 'RC-0007',
           'status': 'issued',
           'lines': lines,
         },
@@ -137,7 +137,7 @@ class _Server {
       return _ok({
         'receipt': {
           'id': 'rcp-server-1',
-          'reference': 'RCP-0007',
+          'reference': 'RC-0007',
           'status': 'voided',
           'movesStock': true,
           'voidReason': 'Wrong item',
@@ -255,7 +255,7 @@ class _Server {
       return _ok({
         'receipt': {
           'id': 'rcp-server-1',
-          'reference': 'RCP-0007',
+          'reference': 'RC-0007',
           'status': back >= 4 ? 'refunded' : 'partRefunded',
           'movesStock': true,
           'lines': [
@@ -646,7 +646,7 @@ void main() {
       );
 
       expect(receipt, isNotNull);
-      expect(receipt!.reference, 'RCP-0007');
+      expect(receipt!.reference, 'RC-0007');
       expect(
         server.bodies.last['reference'],
         '',

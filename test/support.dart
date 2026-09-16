@@ -69,6 +69,46 @@ Future<InventoryController> seededController({
   );
 }
 
+/// A purchase order as it comes back from the server, for seeding.
+PurchaseOrder seedPurchaseOrder({
+  required String id,
+  required List<PurchaseOrderLine> lines,
+  String reference = 'PO-0001',
+  String supplierName = '',
+  PurchaseStatus status = PurchaseStatus.ordered,
+}) {
+  final at = DateTime.now();
+  return PurchaseOrder(
+    id: id,
+    reference: reference,
+    supplierName: supplierName,
+    status: status,
+    lines: lines,
+    createdAt: at,
+    updatedAt: at,
+  );
+}
+
+/// A sales order as it comes back from the server, for seeding.
+SalesOrder seedSalesOrder({
+  required String id,
+  required List<SalesOrderLine> lines,
+  String reference = 'SO-0001',
+  String customerName = '',
+  SalesStatus status = SalesStatus.confirmed,
+}) {
+  final at = DateTime.now();
+  return SalesOrder(
+    id: id,
+    reference: reference,
+    customerName: customerName,
+    status: status,
+    lines: lines,
+    createdAt: at,
+    updatedAt: at,
+  );
+}
+
 /// An invoice as it comes back from the server, for seeding.
 ///
 /// Reference and totals are the server's to decide in real use; here they are
@@ -111,6 +151,7 @@ Receipt seedReceipt({
   double taxRate = 0,
   ReceiptStatus status = ReceiptStatus.issued,
   String? invoiceId,
+  String? salesOrderId,
   DateTime? issuedAt,
 }) {
   final at = issuedAt ?? DateTime.now();
@@ -118,13 +159,15 @@ Receipt seedReceipt({
     id: id,
     reference: reference,
     invoiceId: invoiceId,
+    salesOrderId: salesOrderId,
     customerName: customerName,
     status: status,
     lines: lines,
     discount: discount,
     taxRate: taxRate,
     amountPaid: amountPaid,
-    movesStock: invoiceId == null,
+    // A receipt against a document moves nothing: the document already did.
+    movesStock: invoiceId == null && salesOrderId == null,
     issuedAt: at,
     createdAt: at,
     updatedAt: at,
