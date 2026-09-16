@@ -4,6 +4,20 @@ import '../auth/tokens.dart';
 import '../db/database.dart';
 import '../http/api_error.dart';
 
+/// The id to write for a row, given what the caller sent.
+///
+/// A blank id means "mint one". The editors build a draft with `id: ''` for
+/// anything new and `toJson` always includes the key, so the field arrives
+/// *present and empty* — and `Value('')` is indistinguishable from a real id
+/// unless you look at the string. Treating it as one gave every new row the
+/// same id, so the first save worked and the second collided on the primary
+/// key: "cannot add more than one".
+///
+/// The document lines hit this first and were fixed there; the headers and the
+/// catalogue rows had the same shape and were not.
+String idOrNew(Value<String> id) =>
+    id.present && id.value.isNotEmpty ? id.value : newId();
+
 /// Reads and writes the shared inventory.
 ///
 /// The rule this file exists to enforce: a quantity never changes without a
@@ -119,7 +133,7 @@ class InventoryService {
 
   Future<Item> createItem(ItemsCompanion values) async {
     final now = DateTime.now().toUtc();
-    final id = values.id.present ? values.id.value : newId();
+    final id = idOrNew(values.id);
     final companion = values.copyWith(
       id: Value(id),
       createdAt: Value(now),
@@ -439,7 +453,7 @@ class InventoryService {
 
   Future<Supplier> upsertSupplier(SuppliersCompanion values) async {
     final now = DateTime.now().toUtc();
-    final id = values.id.present ? values.id.value : newId();
+    final id = idOrNew(values.id);
     final existing = await (db.select(
       db.suppliers,
     )..where((t) => t.id.equals(id))).getSingleOrNull();
@@ -475,7 +489,7 @@ class InventoryService {
 
   Future<Customer> upsertCustomer(CustomersCompanion values) async {
     final now = DateTime.now().toUtc();
-    final id = values.id.present ? values.id.value : newId();
+    final id = idOrNew(values.id);
     final existing = await (db.select(
       db.customers,
     )..where((t) => t.id.equals(id))).getSingleOrNull();

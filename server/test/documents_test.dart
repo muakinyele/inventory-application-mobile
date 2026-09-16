@@ -232,6 +232,94 @@ void main() {
     });
   });
 
+  group('a blank document id means "mint one"', () {
+    test('a second invoice can be raised', () async {
+      // The client builds a draft with id: '' and toJson always sends the key,
+      // so this is the shape the app actually posts — not the id-less body the
+      // other tests here use.
+      final s = await admin();
+      final id = await item(s, quantity: 50);
+
+      Future<String> raise(String customer) async {
+        final response = await server.post(
+          '/documents/invoices',
+          accessToken: s.accessToken,
+          body: {
+            'id': '',
+            'reference': '',
+            'customerName': customer,
+            'lines': [
+              {'itemId': id, 'itemName': 'Widget', 'quantity': 1},
+            ],
+          },
+        );
+        expect(response.statusCode, 201);
+        return response.json['invoice']['id'] as String;
+      }
+
+      final first = await raise('One');
+      final second = await raise('Two');
+
+      expect(second, isNot(first));
+      final list = await server.get(
+        '/documents/invoices',
+        accessToken: s.accessToken,
+      );
+      expect((list.json['invoices'] as List).length, 2);
+    });
+
+    test('a second receipt can be issued', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 50);
+
+      Future<String> issue() async {
+        final response = await server.post(
+          '/documents/receipts',
+          accessToken: s.accessToken,
+          body: {
+            'id': '',
+            'reference': '',
+            'status': 'issued',
+            'lines': [
+              {'itemId': id, 'itemName': 'Widget', 'quantity': 1},
+            ],
+          },
+        );
+        expect(response.statusCode, 201);
+        return response.json['receipt']['id'] as String;
+      }
+
+      expect(await issue(), isNot(await issue()));
+    });
+
+    test('a second order of each kind can be raised', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 50);
+
+      for (final path in ['purchase-orders', 'sales-orders']) {
+        final key = path == 'purchase-orders' ? 'purchaseOrder' : 'salesOrder';
+        final quantityKey = 'quantityOrdered';
+        final ids = <String>{};
+        for (var i = 0; i < 2; i++) {
+          final response = await server.post(
+            '/documents/$path',
+            accessToken: s.accessToken,
+            body: {
+              'id': '',
+              'reference': '',
+              'lines': [
+                {'itemId': id, 'itemName': 'Widget', quantityKey: 1},
+              ],
+            },
+          );
+          expect(response.statusCode, 201, reason: path);
+          ids.add(response.json[key]['id'] as String);
+        }
+        expect(ids.length, 2, reason: '$path reused an id');
+      }
+    });
+  });
+
   group('receipts', () {
     test('issuing takes stock and voiding returns it', () async {
       final s = await admin();
