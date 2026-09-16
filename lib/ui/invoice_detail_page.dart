@@ -331,19 +331,6 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
                       ),
                     ),
                   ),
-                if (cancelled)
-                  OutlinedButton.icon(
-                    onPressed: () => _delete(controller, invoice),
-                    icon: const Icon(Icons.delete_outline, size: 18),
-                    label: const Text('Delete'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: p.critical,
-                      backgroundColor: p.criticalWash,
-                      side: BorderSide(
-                        color: p.critical.withValues(alpha: 0.4),
-                      ),
-                    ),
-                  ),
               ],
             ),
           ],
@@ -533,36 +520,6 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
         tone: done ? MessageTone.success : MessageTone.failure,
       );
     }
-  }
-
-  Future<void> _delete(InventoryController controller, Invoice invoice) async {
-    final router = GoRouter.of(context);
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Delete invoice'),
-        content: Text(
-          'Remove ${invoice.reference} from the file for good. It is already '
-          'cancelled, so no stock or figures change.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            style: TextButton.styleFrom(
-              foregroundColor: Theme.of(dialogContext).colorScheme.error,
-            ),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-    controller.deleteInvoice(invoice.id);
-    router.go('/invoices');
   }
 }
 

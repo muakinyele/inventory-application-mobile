@@ -155,23 +155,6 @@ class PurchaseOrderDetailPage extends StatelessWidget {
                       label: const Text('Cancel order'),
                     ),
                   ),
-                if (order.unitsReceived == 0) ...[
-                  const SizedBox(width: Insets.md),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () => _delete(context, controller, order),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: p.critical,
-                        backgroundColor: p.criticalWash,
-                        side: BorderSide(
-                          color: p.critical.withValues(alpha: 0.4),
-                        ),
-                      ),
-                      icon: const Icon(Icons.delete_outline, size: 18),
-                      label: const Text('Delete'),
-                    ),
-                  ),
-                ],
               ],
             ),
           ],
@@ -234,40 +217,6 @@ class PurchaseOrderDetailPage extends StatelessWidget {
       ),
     );
     if (confirmed == true) controller.cancelPurchaseOrder(order.id);
-  }
-
-  Future<void> _delete(
-    BuildContext context,
-    InventoryController controller,
-    PurchaseOrder order,
-  ) async {
-    final router = GoRouter.of(context);
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Delete order'),
-        content: Text(
-          'Remove ${order.reference}? Nothing has been received against it, '
-          'so no stock is affected.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            style: TextButton.styleFrom(
-              foregroundColor: Theme.of(dialogContext).colorScheme.error,
-            ),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-    controller.deletePurchaseOrder(order.id);
-    router.go('/purchase-orders');
   }
 }
 

@@ -1120,6 +1120,92 @@ class InventoryController extends ChangeNotifier {
     }
   }
 
+  /// Takes a party out of the pickers without erasing it.
+  ///
+  /// Archived rather than deleted, which is what the shared inventory
+  /// supports and, on reflection, what it always meant. Documents reference
+  /// suppliers and customers, and those references have to stay resolvable —
+  /// an invoice whose customer has been erased is a document that can no
+  /// longer say who it was for.
+  ///
+  /// Items linked to the supplier keep its name as free text, so the
+  /// catalogue still reads properly with nothing left to click through to.
+  Future<void> archiveSupplier(String id) async {
+    final supplier = supplierById(id);
+    if (supplier == null) return;
+
+    final api = _api;
+    if (api == null) {
+      deleteSupplier(id);
+      return;
+    }
+
+    final now = DateTime.now();
+    for (final item in _items.where((i) => i.supplierId == id).toList()) {
+      await _updateItemOnServer(
+        api,
+        item.id,
+        item.copyWith(
+          supplier: supplier.name,
+          clearSupplierId: true,
+          updatedAt: now,
+        ),
+      );
+    }
+
+    await _saveSupplierOnServer(
+      api,
+      Supplier(
+        id: id,
+        name: supplier.name,
+        contactName: supplier.contactName,
+        phone: supplier.phone,
+        email: supplier.email,
+        address: supplier.address,
+        leadTimeDays: supplier.leadTimeDays,
+        paymentTerms: supplier.paymentTerms,
+        notes: supplier.notes,
+        archived: true,
+        createdAt: supplier.createdAt,
+        updatedAt: now,
+      ),
+      id: id,
+    );
+    _suppliers = _suppliers.where((s) => s.id != id).toList();
+    notifyListeners();
+  }
+
+  Future<void> archiveCustomer(String id) async {
+    final customer = customerById(id);
+    if (customer == null) return;
+
+    final api = _api;
+    if (api == null) {
+      deleteCustomer(id);
+      return;
+    }
+
+    await _saveCustomerOnServer(
+      api,
+      Customer(
+        id: id,
+        name: customer.name,
+        contactName: customer.contactName,
+        phone: customer.phone,
+        email: customer.email,
+        address: customer.address,
+        priceTier: customer.priceTier,
+        notes: customer.notes,
+        archived: true,
+        createdAt: customer.createdAt,
+        updatedAt: DateTime.now(),
+      ),
+      id: id,
+    );
+    _customers = _customers.where((c) => c.id != id).toList();
+    notifyListeners();
+  }
+
   /// Re-reads what a document just changed.
   ///
   /// Items and movements only. Per-bin levels are read by the screens that

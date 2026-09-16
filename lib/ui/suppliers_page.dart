@@ -78,7 +78,8 @@ class SuppliersPage extends StatelessWidget {
                       ? null
                       : () => context.go('/items?supplier=${supplier.id}'),
                   onEdit: () => _edit(context, controller, supplier),
-                  onDelete: () => _confirmDelete(context, controller, supplier),
+                  onArchive: () =>
+                      _confirmArchive(context, controller, supplier),
                 ),
                 const SizedBox(height: Insets.md),
               ],
@@ -106,7 +107,13 @@ class SuppliersPage extends StatelessWidget {
     }
   }
 
-  Future<void> _confirmDelete(
+  /// Archives rather than deletes, and says so.
+  ///
+  /// Purchase orders reference suppliers, and those references have to stay
+  /// resolvable — an order whose supplier had been erased could no longer say
+  /// who it was placed with. Archiving takes them out of the pickers and
+  /// leaves the record intact.
+  Future<void> _confirmArchive(
     BuildContext context,
     InventoryController controller,
     Supplier supplier,
@@ -115,13 +122,15 @@ class SuppliersPage extends StatelessWidget {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Delete supplier'),
+        title: const Text('Archive supplier'),
         content: Text(
           linked == 0
-              ? 'Remove ${supplier.name}?'
-              : 'Remove ${supplier.name}? The '
+              ? 'Take ${supplier.name} out of the pickers? Orders already '
+                    'placed with them keep the record.'
+              : 'Take ${supplier.name} out of the pickers? The '
                     '${linked == 1 ? '1 item' : '$linked items'} supplied by '
-                    'them keep the name on record but lose the link.',
+                    'them keep the name on record but lose the link, and '
+                    'orders already placed keep the record.',
         ),
         actions: [
           TextButton(
@@ -133,12 +142,12 @@ class SuppliersPage extends StatelessWidget {
             style: TextButton.styleFrom(
               foregroundColor: Theme.of(dialogContext).colorScheme.error,
             ),
-            child: const Text('Delete'),
+            child: const Text('Archive'),
           ),
         ],
       ),
     );
-    if (confirmed == true) controller.deleteSupplier(supplier.id);
+    if (confirmed == true) await controller.archiveSupplier(supplier.id);
   }
 }
 

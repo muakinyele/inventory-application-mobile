@@ -14,7 +14,7 @@ class ContactCard extends StatelessWidget {
     required this.subtitle,
     required this.facts,
     required this.onEdit,
-    required this.onDelete,
+    required this.onArchive,
     this.badge,
     this.onTap,
   });
@@ -28,7 +28,10 @@ class ContactCard extends StatelessWidget {
   final Widget? badge;
   final VoidCallback? onTap;
   final VoidCallback onEdit;
-  final VoidCallback onDelete;
+
+  /// Archiving, not deleting: documents reference these, and the
+  /// references have to stay resolvable.
+  final VoidCallback onArchive;
 
   @override
   Widget build(BuildContext context) {
@@ -114,10 +117,12 @@ class ContactCard extends StatelessWidget {
                       tooltip: 'Edit $name',
                     ),
                     IconButton(
-                      onPressed: onDelete,
-                      icon: const Icon(Icons.delete_outline, size: 20),
-                      tooltip: 'Delete $name',
-                      style: IconButton.styleFrom(foregroundColor: p.critical),
+                      onPressed: onArchive,
+                      icon: const Icon(Icons.archive_outlined, size: 20),
+                      tooltip: 'Archive $name',
+                      style: IconButton.styleFrom(
+                        foregroundColor: p.inkSecondary,
+                      ),
                     ),
                   ],
                 ),
