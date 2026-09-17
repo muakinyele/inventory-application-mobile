@@ -677,6 +677,47 @@ void main() {
       expect(after.json['total'], 0);
     });
 
+    test('it clears the categories and pickers too', () async {
+      final session = await admin();
+      await server.put(
+        '/inventory/categories',
+        accessToken: session.accessToken,
+        body: {
+          'categories': [
+            {'name': 'Tools', 'swatchIndex': 2},
+            {'name': 'Fixings', 'swatchIndex': 5},
+          ],
+        },
+      );
+      await server.put(
+        '/inventory/lookups/location',
+        accessToken: session.accessToken,
+        body: {
+          'values': ['Main', 'Van'],
+        },
+      );
+
+      final before = await server.get(
+        '/inventory/categories',
+        accessToken: session.accessToken,
+      );
+      expect((before.json['categories'] as List).length, 2);
+
+      await server.delete('/inventory', accessToken: session.accessToken);
+
+      final after = await server.get(
+        '/inventory/categories',
+        accessToken: session.accessToken,
+      );
+      expect(after.json['categories'], isEmpty);
+
+      final lookups = await server.get(
+        '/inventory/lookups?kind=location',
+        accessToken: session.accessToken,
+      );
+      expect(lookups.json['lookups'], isEmpty);
+    });
+
     test('it leaves the accounts alone', () async {
       // Clearing the stock is not asking to be signed out, and the audit trail
       // is the record of who did what — including this.

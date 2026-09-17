@@ -2321,18 +2321,11 @@ class InventoryController extends ChangeNotifier {
       return;
     }
 
-    _items = const [];
-    _movements = const [];
-    _suppliers = const [];
-    _customers = const [];
-    _purchaseOrders = const [];
-    _salesOrders = const [];
-    _receipts = const [];
-    _invoices = const [];
-    _transfers = const [];
-    _levels = {};
-    _settings = const AppSettings();
-    notifyListeners();
+    // Re-read rather than reset. AppSettings() carries default categories,
+    // locations and units, so assuming it here would leave the pickers showing
+    // a set the server does not have — and the next save would write those
+    // defaults back, undoing part of the erase.
+    await reload();
   }
 
   void _replace({

@@ -54,6 +54,14 @@ class NotificationService {
   /// Always delivered. Password changes, sign-ins, lockouts, account status.
   Future<void> sendSecurity(EmailMessage message) => mailer.send(message);
 
+  /// [sendSecurity], for a caller entitled to know whether it arrived.
+  Future<bool> trySendSecurity(EmailMessage message) async {
+    final inner = mailer;
+    if (inner is FailSafeMailer) return inner.trySend(message);
+    await inner.send(message);
+    return true;
+  }
+
   /// Delivered unless the user has opted out of [channel].
   ///
   /// Absence of a row means enabled: a user who has never touched their

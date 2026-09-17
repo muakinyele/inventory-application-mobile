@@ -177,6 +177,9 @@ class TestServer {
   Future<ApiResponse> patch(String path, {Object? body, String? accessToken}) =>
       request('PATCH', path, body: body, accessToken: accessToken);
 
+  Future<ApiResponse> put(String path, {Object? body, String? accessToken}) =>
+      request('PUT', path, body: body, accessToken: accessToken);
+
   Future<ApiResponse> delete(String path, {String? accessToken}) =>
       request('DELETE', path, accessToken: accessToken);
 

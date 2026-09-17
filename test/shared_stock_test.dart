@@ -357,6 +357,8 @@ class _Server {
     }
 
     if (route == 'GET /api/inventory/items') {
+      // After an erase the server has nothing, and a reload has to see that.
+      if (erased) return _ok({'items': <Object?>[], 'total': 0});
       return _ok({
         'items': [_item(quantity: quantity)],
         'total': 1,
@@ -1137,6 +1139,24 @@ void main() {
           server.lastBodyFor['PATCH /api/inventory/preferences']!['preferences']
               as Map<String, dynamic>;
       expect(sent['companyName'], 'Chedra Olympas');
+    });
+
+    test('erasing leaves the pickers as the server has them', () async {
+      // AppSettings() carries default categories, locations and units. Reset
+      // to that after an erase, the pickers would show a set the server does
+      // not have — and the next save would write those defaults back, undoing
+      // part of what was erased.
+      final server = _Server();
+      final controller = await _controller(server);
+
+      await controller.eraseAll();
+
+      expect(
+        server.calls,
+        contains('GET /api/inventory/categories'),
+        reason: 'the pickers were assumed rather than re-read',
+      );
+      expect(controller.settings.categories, isEmpty);
     });
 
     test('erasing reaches the server, not just the screen', () async {

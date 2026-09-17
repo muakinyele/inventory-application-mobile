@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:stockpile_server/src/audit/audit_actions.dart';
 import 'package:stockpile_server/src/auth/token_store.dart';
 import 'package:stockpile_server/src/rbac/permissions.dart';
@@ -17,6 +19,47 @@ void main() {
     );
   });
   tearDown(() async => server.close());
+
+  group('an invitation says whether it was actually sent', () {
+    test('the audit record notes the delivery', () async {
+      // Mail failures are swallowed on purpose elsewhere: an SMTP outage must
+      // not turn "if an account exists…" into a 500 that says one does. That
+      // reasoning does not reach an administrator inviting somebody — they
+      // typed the address, and an invitation that never arrives leaves them
+      // waiting on a person who was never told.
+      final admin = await server.signedInUser(
+        email: 'inviter@example.com',
+        role: administratorRoleKey,
+      );
+
+      final invited = await server.post(
+        '/users',
+        accessToken: admin.accessToken,
+        body: {'email': 'newcomer@example.com', 'name': 'Newcomer'},
+      );
+      expect(invited.statusCode, 201);
+
+      final audit = await server.get(
+        '/audit-logs?action=user.invited',
+        accessToken: admin.accessToken,
+      );
+      final entries =
+          audit.body['entries'] as List? ??
+          audit.body['auditLogs'] as List? ??
+          const [];
+      expect(entries, isNotEmpty, reason: 'the invitation was not recorded');
+      // Stored as JSON text, so it comes back as a string rather than a map.
+      final raw = (entries.first as Map)['metadata'];
+      final metadata = raw is String
+          ? jsonDecode(raw) as Map<String, dynamic>
+          : (raw as Map).cast<String, dynamic>();
+      expect(
+        metadata['emailDelivered'],
+        isNotNull,
+        reason: 'whether the mail went is not recorded',
+      );
+    });
+  });
 
   group('invitation', () {
     test('creates a pending account and mails a link', () async {
