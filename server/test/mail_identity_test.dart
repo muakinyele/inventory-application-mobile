@@ -105,6 +105,35 @@ void main() {
       expect(from, 'Accounts <billing@example.com>');
     });
 
+    test('EMAIL_FROM set to a name is treated as one', () async {
+      // "Who mail comes from" reads like a name, so this is what gets typed.
+      // Using it as the address is how this failed in production: the mailer
+      // rejects the envelope as an invalid message, naming no field.
+      final from = await MailIdentity(
+        db: server.db,
+        env: envWith({'EMAIL_FROM': 'Chedra Olympas Limited'}),
+      ).resolve();
+
+      expect(from, 'Chedra Olympas Limited <alerts@example.com>');
+    });
+
+    test('a name with no account to send from is not invented', () async {
+      // Nothing usable anywhere: better to fail against the mail server, where
+      // the error names a real cause, than to guess at an address.
+      final from = await MailIdentity(
+        db: server.db,
+        env: Env.load(
+          envFile: '.env.test.absent',
+          overrides: {
+            'DATABASE_URL': 'postgres://localhost:5432/x',
+            'EMAIL_FROM': 'Chedra Olympas Limited',
+          },
+        ),
+      ).resolve();
+
+      expect(from, isNot(contains('<')));
+    });
+
     test('a bare EMAIL_FROM keeps its address and gains the name', () async {
       final admin = await server.signedInUser(
         email: 'admin@example.com',

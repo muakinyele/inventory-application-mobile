@@ -21,13 +21,30 @@ class MailIdentity {
   /// rare and a failed lookup must not stop a password reset — so a miss falls
   /// back rather than throwing.
   Future<String> resolve() async {
-    final configured = env.mailFrom;
+    final configured = env.mailFrom.trim();
 
     // An explicit `Name <address>` is somebody stating exactly what they want.
     if (_hasDisplayName(configured)) return configured;
 
-    final address = _addressOf(configured);
-    final name = await _workspaceName() ?? env.appName;
+    // EMAIL_FROM is typed by a person, and "who mail comes from" reads like a
+    // name — so a value with no `@` in it is one, not an address. Using it as
+    // the address is how this failed before: the mailer rejects the envelope
+    // as an invalid message, which says nothing about which field was wrong.
+    final configuredIsName = configured.isNotEmpty && !configured.contains('@');
+
+    final address = configuredIsName
+        ? (env.smtp?.username ?? configured)
+        : _addressOf(configured);
+
+    final name = configuredIsName
+        ? configured
+        : (await _workspaceName() ?? env.appName);
+
+    if (!address.contains('@')) {
+      // Nothing usable anywhere. Returning the address alone at least fails
+      // against the mail server, where the error names a real cause.
+      return address;
+    }
     return name.isEmpty ? address : '$name <$address>';
   }
 
