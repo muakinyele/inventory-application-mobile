@@ -9,7 +9,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:stockpile/data/auth_api.dart';
 import 'package:stockpile/data/inventory_api.dart';
-import 'package:stockpile/data/inventory_repository.dart' show Snapshot;
+import 'package:stockpile/data/snapshot.dart';
 import 'package:stockpile/data/token_storage.dart';
 import 'package:stockpile/models/app_settings.dart';
 import 'package:stockpile/models/invoice.dart';

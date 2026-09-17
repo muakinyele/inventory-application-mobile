@@ -6,7 +6,7 @@ import 'package:provider/provider.dart';
 import 'app.dart';
 import 'core/theme.dart';
 import 'data/inventory_api.dart';
-import 'data/inventory_repository.dart';
+import 'data/snapshot.dart';
 import 'state/auth_controller.dart';
 import 'state/inventory_controller.dart';
 

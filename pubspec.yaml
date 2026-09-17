@@ -8,8 +8,6 @@ environment:
 
 dependencies:
   archive: ^4.0.9
-  drift: ^2.34.4
-  drift_flutter: ^0.3.1
   file_picker: ^12.2.0
   fl_chart: ^1.2.0
   # Keychain on iOS, EncryptedSharedPreferences on Android, and a
@@ -33,13 +31,10 @@ dependencies:
 
 dev_dependencies:
   # Used by the migration test to build a v1 database by hand.
-  sqlite3: ^3.5.2
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
   flutter_launcher_icons: ^0.14.4
-  drift_dev: ^2.34.6
-  build_runner: ^2.15.1
 
 flutter:
   uses-material-design: true

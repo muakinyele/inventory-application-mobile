@@ -7,7 +7,7 @@ import '../core/ids.dart';
 import '../data/csv_codec.dart';
 import '../data/inventory_api.dart';
 import '../data/inventory_loader.dart';
-import '../data/inventory_repository.dart';
+import '../data/snapshot.dart';
 import '../data/seed_data.dart';
 import '../models/app_settings.dart';
 import '../models/invoice.dart';

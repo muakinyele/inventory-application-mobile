@@ -1,4 +1,4 @@
-import 'package:stockpile/data/inventory_repository.dart';
+import 'package:stockpile/data/snapshot.dart';
 import 'package:stockpile/models/app_settings.dart';
 import 'package:stockpile/models/invoice.dart';
 import 'package:stockpile/models/movement.dart';
