@@ -68,11 +68,22 @@ class FailSafeMailer implements Mailer {
   final void Function(Object error, StackTrace stackTrace) onError;
 
   @override
-  Future<void> send(EmailMessage message) async {
+  Future<void> send(EmailMessage message) => trySend(message);
+
+  /// Sends, and says whether it worked.
+  ///
+  /// Still swallows the failure — an SMTP outage must not turn "if an account
+  /// exists…" into a 500 that says one does. But a caller who is allowed to
+  /// know can ask. An administrator inviting somebody is exactly that: they
+  /// typed the address, the account is theirs to create, and an invitation
+  /// that silently never arrives is worse than an error.
+  Future<bool> trySend(EmailMessage message) async {
     try {
       await _inner.send(message);
+      return true;
     } catch (error, stackTrace) {
       onError(error, stackTrace);
+      return false;
     }
   }
 }

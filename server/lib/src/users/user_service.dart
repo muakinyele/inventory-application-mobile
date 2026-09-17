@@ -303,7 +303,12 @@ class UserService {
       createdBy: actor.id,
     );
 
-    await notifications.sendSecurity(
+    // Recorded rather than swallowed. The administrator typed this
+    // address; an invitation that never arrives leaves them waiting on
+    // somebody who was never told. The account is still created and the
+    // link stays valid, so the answer is to send it again — but the
+    // audit trail has to say which of those happened.
+    final delivered = await notifications.trySendSecurity(
       templates.invitation(
         to: normalised,
         name: name.trim(),
@@ -321,7 +326,10 @@ class UserService {
       targetType: 'user',
       targetId: id,
       targetLabel: normalised,
-      metadata: {'roles': roles.map((r) => r.key).toList()},
+      metadata: {
+        'roles': roles.map((r) => r.key).toList(),
+        'emailDelivered': delivered,
+      },
       ipAddress: ipAddress,
     );
 
@@ -354,7 +362,12 @@ class UserService {
     );
     final roleNames = (await _rolesOf(user.id)).map((r) => r.name).join(', ');
 
-    await notifications.sendSecurity(
+    // Recorded rather than swallowed. The administrator typed this
+    // address; an invitation that never arrives leaves them waiting on
+    // somebody who was never told. The account is still created and the
+    // link stays valid, so the answer is to send it again — but the
+    // audit trail has to say which of those happened.
+    final delivered = await notifications.trySendSecurity(
       templates.invitation(
         to: user.email,
         name: user.name,
@@ -371,7 +384,7 @@ class UserService {
       targetType: 'user',
       targetId: user.id,
       targetLabel: user.email,
-      metadata: const {'resent': true},
+      metadata: {'resent': true, 'emailDelivered': delivered},
       ipAddress: ipAddress,
     );
     return UserMutation.ok(user);
