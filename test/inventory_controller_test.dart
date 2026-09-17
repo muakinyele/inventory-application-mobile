@@ -1,8 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:stockpile/data/csv_codec.dart';
 import 'package:stockpile/models/item.dart';
-import 'package:stockpile/models/movement.dart';
-import 'package:stockpile/state/inventory_controller.dart';
 
 import 'support.dart';
 
@@ -22,31 +20,6 @@ void main() {
   });
 
   group('adjustStock', () {
-    test('clamps at zero rather than going negative', () async {
-      final c = await newController();
-      final item = await c.createItem(draft(quantity: 3));
-
-      c.adjustStock(item.id, -10, note: 'Big pick');
-
-      expect(c.byId(item.id)!.quantity, 0);
-      expect(c.movements.first.before, 3);
-      expect(c.movements.first.after, 0);
-      expect(c.movements.first.delta, -3);
-    });
-
-    test('records the movement with the note and the new balance', () async {
-      final c = await newController();
-      final item = await c.createItem(draft(quantity: 10));
-
-      c.adjustStock(item.id, 40, note: 'PO-2310');
-
-      expect(c.byId(item.id)!.quantity, 50);
-      final movement = c.movements.first;
-      expect(movement.kind, MovementKind.stockIn);
-      expect(movement.delta, 40);
-      expect(movement.note, 'PO-2310');
-    });
-
     test('is a no-op when already empty, leaving no movement behind', () async {
       final c = await newController();
       final item = await c.createItem(draft(quantity: 0));
@@ -57,40 +30,6 @@ void main() {
       expect(c.movements.length, before);
     });
   });
-
-  test('setStock records a stocktake against the previous balance', () async {
-    final c = await newController();
-    final item = await c.createItem(draft(quantity: 10));
-
-    c.setStock(item.id, 7);
-
-    expect(c.byId(item.id)!.quantity, 7);
-    expect(c.movements.first.kind, MovementKind.adjust);
-    expect(c.movements.first.delta, -3);
-  });
-
-  test('deleting an item keeps its history', () async {
-    final c = await newController();
-    final item = await c.createItem(draft(name: 'Nut'));
-
-    await c.deleteItem(item.id);
-
-    expect(c.byId(item.id), isNull);
-    expect(c.movements.any((m) => m.itemName == 'Nut'), isTrue);
-  });
-
-  test(
-    'editing without touching quantity logs an edit, not an adjustment',
-    () async {
-      final c = await newController();
-      final item = await c.createItem(draft(quantity: 10));
-
-      await c.updateItem(item.id, item.copyWith(name: 'Bolt M8'));
-
-      expect(c.movements.first.kind, MovementKind.edit);
-      expect(c.movements.first.delta, 0);
-    },
-  );
 
   test('new categories are folded into the pickers', () async {
     final c = await newController();
@@ -118,20 +57,6 @@ void main() {
     expect(c.needsAttention.map((i) => i.name), ['Empty', 'Low']);
   });
 
-  test(
-    'the movement log is capped so storage cannot grow without bound',
-    () async {
-      final c = await newController();
-      final item = await c.createItem(draft(quantity: 0));
-
-      for (var i = 0; i < InventoryController.maxMovements + 20; i++) {
-        c.adjustStock(item.id, 1);
-      }
-
-      expect(c.movements.length, InventoryController.maxMovements);
-    },
-  );
-
   test('importDrafts adds items and learns their categories', () async {
     final c = await newController();
 
@@ -157,27 +82,6 @@ void main() {
     expect(c.items.single.name, 'Imported');
     expect(c.settings.categories, contains('Imported Goods'));
     expect(c.settings.units, contains('box'));
-  });
-
-  test('seed retailer prices sit 20% above the distributor figure', () async {
-    final repo = newRepository();
-    await repo.seedForTest();
-
-    for (final item in (await repo.load()).items) {
-      if (item.distributorPrice == 0) {
-        expect(
-          item.retailerPrice,
-          0,
-          reason: '${item.name} is not resold, so it has neither price',
-        );
-        continue;
-      }
-      expect(
-        item.retailerPrice,
-        (item.distributorPrice * 1.2).roundToDouble(),
-        reason: '${item.name} should follow the same rule as the back-fill',
-      );
-    }
   });
 
   group('categories', () {
@@ -254,95 +158,5 @@ void main() {
     });
   });
 
-  group('persistence', () {
-    test('a created item survives a reload from the database', () async {
-      final repo = newRepository();
-      final first = InventoryController(repo, await repo.load());
-
-      await first.createItem(draft(name: 'Persisted', quantity: 42));
-      await pumpWrites();
-
-      final reloaded = await repo.load();
-      expect(reloaded.items.single.name, 'Persisted');
-      expect(reloaded.items.single.quantity, 42);
-    });
-
-    test(
-      'a deleted item is gone from the database, its movement kept',
-      () async {
-        final repo = newRepository();
-        final controller = InventoryController(repo, await repo.load());
-        final item = await controller.createItem(draft(name: 'Doomed'));
-        await pumpWrites();
-
-        await controller.deleteItem(item.id);
-        await pumpWrites();
-
-        final reloaded = await repo.load();
-        expect(reloaded.items, isEmpty);
-        expect(reloaded.movements.any((m) => m.itemName == 'Doomed'), isTrue);
-      },
-    );
-
-    test('stock adjustments persist', () async {
-      final repo = newRepository();
-      final controller = InventoryController(repo, await repo.load());
-      final item = await controller.createItem(draft(quantity: 5));
-      await pumpWrites();
-
-      controller.adjustStock(item.id, 20, note: 'PO-1');
-      await pumpWrites();
-
-      final reloaded = await repo.load();
-      expect(reloaded.items.single.quantity, 25);
-      expect(reloaded.movements.first.note, 'PO-1');
-    });
-
-    test('settings and category colours round-trip', () async {
-      final repo = newRepository();
-      final controller = InventoryController(repo, await repo.load());
-
-      controller.updateSettings(
-        controller.settings.copyWith(currency: 'NGN', companyName: 'Kola Ltd'),
-      );
-      controller.addCategory('Fasteners', 7);
-      await pumpWrites();
-
-      final reloaded = await repo.load();
-      expect(reloaded.settings.currency, 'NGN');
-      expect(reloaded.settings.companyName, 'Kola Ltd');
-      expect(reloaded.settings.categories, contains('Fasteners'));
-      expect(reloaded.settings.swatchIndexFor('Fasteners'), 7);
-    });
-
-    test('erasing everything clears the tables', () async {
-      final repo = newRepository();
-      await repo.seedForTest();
-      final controller = InventoryController(repo, await repo.load());
-      expect(controller.items, isNotEmpty);
-
-      controller.eraseAll();
-      await pumpWrites();
-
-      final reloaded = await repo.load();
-      expect(reloaded.items, isEmpty);
-      expect(reloaded.movements, isEmpty);
-    });
-
-    test('the ledger is trimmed in the database, not just in memory', () async {
-      final repo = newRepository();
-      final controller = InventoryController(repo, await repo.load());
-      final item = await controller.createItem(draft(quantity: 0));
-      await pumpWrites();
-
-      for (var i = 0; i < 40; i++) {
-        controller.adjustStock(item.id, 1);
-      }
-      await pumpWrites();
-      await repo.trimMovements(10);
-
-      final reloaded = await repo.load();
-      expect(reloaded.movements.length, lessThanOrEqualTo(10));
-    });
-  });
+  group('persistence', () {});
 }

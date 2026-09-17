@@ -7,6 +7,8 @@ import 'package:stockpile/state/inventory_controller.dart';
 import 'package:stockpile/ui/widgets/app_sidebar.dart';
 
 import 'auth_support.dart';
+import 'package:stockpile/data/seed_data.dart';
+
 import 'support.dart';
 
 /// Tall enough that the whole sidebar list is built.
@@ -30,7 +32,10 @@ Future<AuthController> _pumpApp(
     ..devicePixelRatio = 1;
   addTearDown(tester.view.reset);
 
-  final inventory = await newController(seeded: true);
+  final inventory = await seededController(
+    items: seedItems(),
+    movements: seedMovements(),
+  );
   final (:auth, storage: _) = newAuth(server);
 
   if (signedIn) {

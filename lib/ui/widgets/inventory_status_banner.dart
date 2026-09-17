@@ -22,7 +22,6 @@ class InventoryStatusBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final controller = context.watch<InventoryController>();
-    if (!controller.isShared) return const SizedBox.shrink();
 
     final conflict = controller.stockConflict;
     if (conflict != null) {

@@ -52,18 +52,6 @@ jobs:
         # the cheapest moment to keep it that way is before the warning lands.
         run: flutter analyze --fatal-infos --fatal-warnings
 
-      - name: Verify generated database code is up to date
-        # database.g.dart is committed, so a schema change with a stale
-        # regeneration would otherwise only surface at runtime — as a missing
-        # column on someone's device.
-        run: |
-          dart run build_runner build
-          if ! git diff --quiet -- lib/data/database.g.dart; then
-            echo "::error file=lib/data/database.g.dart::Generated code is stale. Run 'dart run build_runner build' and commit the result."
-            git diff --stat -- lib/data/database.g.dart
-            exit 1
-          fi
-
       - name: Test
         run: flutter test
 
@@ -73,10 +61,11 @@ jobs:
         # doubles in the browser, which once shipped a real bug that every VM
         # test passed straight through — so it has to run somewhere.
         #
-        # Scoped to that one file deliberately: the rest of the suite reaches
-        # sqlite3 through drift/native.dart, which is dart:ffi and cannot be
-        # compiled for the web at all. Widening this to the whole suite fails
-        # to compile rather than skipping.
+        # Scoped to that one file. It used to be forced — the rest of the
+        # suite reached sqlite3 through dart:ffi, which cannot compile for
+        # the web at all — and since the on-device database went it is a
+        # choice: this is the only test that is about the browser, and
+        # running the rest there costs minutes to learn nothing.
         run: flutter test --platform chrome test/web_safety_test.dart
 
       - name: Build web

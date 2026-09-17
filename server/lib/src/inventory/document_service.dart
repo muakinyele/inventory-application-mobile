@@ -345,7 +345,7 @@ class DocumentService {
                 reference: Value(
                   header.reference.present && header.reference.value.isNotEmpty
                       ? header.reference.value
-                      : await _nextReference('receipt', 'RCP-'),
+                      : await _nextReference('receipt', 'RC-'),
                 ),
                 createdAt: Value(now),
                 updatedAt: Value(now),

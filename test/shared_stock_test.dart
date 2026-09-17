@@ -1,6 +1,5 @@
 import 'dart:convert';
 
-import 'package:drift/native.dart';
 import 'package:flutter/material.dart' hide Durations;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
@@ -9,10 +8,10 @@ import 'package:stockpile/ui/widgets/inventory_status_banner.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:stockpile/data/auth_api.dart';
-import 'package:stockpile/data/database.dart';
 import 'package:stockpile/data/inventory_api.dart';
-import 'package:stockpile/data/inventory_repository.dart';
+import 'package:stockpile/data/snapshot.dart';
 import 'package:stockpile/data/token_storage.dart';
+import 'package:stockpile/models/app_settings.dart';
 import 'package:stockpile/models/invoice.dart';
 import 'package:stockpile/models/item.dart';
 import 'package:stockpile/models/party.dart';
@@ -124,7 +123,7 @@ class _Server {
         'receipt': {
           ...body,
           'id': 'rcp-server-1',
-          'reference': 'RCP-0007',
+          'reference': 'RC-0007',
           'status': 'issued',
           'lines': lines,
         },
@@ -138,7 +137,7 @@ class _Server {
       return _ok({
         'receipt': {
           'id': 'rcp-server-1',
-          'reference': 'RCP-0007',
+          'reference': 'RC-0007',
           'status': 'voided',
           'movesStock': true,
           'voidReason': 'Wrong item',
@@ -256,7 +255,7 @@ class _Server {
       return _ok({
         'receipt': {
           'id': 'rcp-server-1',
-          'reference': 'RCP-0007',
+          'reference': 'RC-0007',
           'status': back >= 4 ? 'refunded' : 'partRefunded',
           'movesStock': true,
           'lines': [
@@ -426,7 +425,6 @@ Future<InventoryController> _controller(_Server server) async {
   );
   await auth.restore();
 
-  final repo = InventoryRepository(AppDatabase(NativeDatabase.memory()));
   final snapshot = Snapshot(
     items: [
       Item(
@@ -439,9 +437,9 @@ Future<InventoryController> _controller(_Server server) async {
       ),
     ],
     movements: const [],
-    settings: (await repo.load()).settings,
+    settings: const AppSettings(),
   );
-  return InventoryController(repo, snapshot, api: InventoryApi(auth));
+  return InventoryController(InventoryApi(auth), snapshot);
 }
 
 Future<void> _pumpBanner(
@@ -461,12 +459,6 @@ Future<void> _pumpBanner(
 }
 
 void main() {
-  test('a controller without an API keeps the on-device behaviour', () async {
-    final repo = InventoryRepository(AppDatabase(NativeDatabase.memory()));
-    final controller = InventoryController(repo, await repo.load());
-    expect(controller.isShared, isFalse);
-  });
-
   group('against a shared inventory', () {
     test('the server owns the arithmetic', () async {
       final server = _Server();
@@ -654,7 +646,7 @@ void main() {
       );
 
       expect(receipt, isNotNull);
-      expect(receipt!.reference, 'RCP-0007');
+      expect(receipt!.reference, 'RC-0007');
       expect(
         server.bodies.last['reference'],
         '',

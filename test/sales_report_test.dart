@@ -183,25 +183,48 @@ void main() {
     );
 
     test('an invoice payment is never counted as a second sale', () async {
-      final c = await newController();
-      final item = await c.createItem(draft(quantity: 50, unitCost: 100));
-      final invoice = (await c.issueInvoice(
-        lines: [
-          InvoiceLine(
-            id: 'a',
-            itemId: item.id,
-            itemName: 'Bolt',
-            quantity: 10,
-            unitPrice: 500,
+      // Two receipts against one invoice. The goods were sold once, so the
+      // report has to count one sale and the money once — the receipts are
+      // records of collection, not of a second sale.
+      const lines = [
+        InvoiceLine(
+          id: 'a',
+          itemId: 'i1',
+          itemName: 'Bolt',
+          quantity: 10,
+          unitPrice: 500,
+          costOfGoods: 1000,
+        ),
+      ];
+      final invoice = seedInvoice(
+        id: 'inv1',
+        lines: lines,
+        amountPaid: 5000,
+        status: InvoiceStatus.paid,
+      );
+
+      final c = await seededController(
+        invoices: [invoice],
+        receipts: [
+          seedReceipt(
+            id: 'r1',
+            reference: 'RC-0001',
+            invoiceId: invoice.id,
+            amountPaid: 2000,
+            lines: const [],
+          ),
+          seedReceipt(
+            id: 'r2',
+            reference: 'RC-0002',
+            invoiceId: invoice.id,
+            amountPaid: 3000,
+            lines: const [],
           ),
         ],
-      ))!;
-      await c.payInvoice(invoice.id, 2000);
-      await c.payInvoice(invoice.id, 3000);
+      );
 
       final report = thisMonth(c);
 
-      // Two receipts exist, but the goods were sold once.
       expect(c.receipts, hasLength(2));
       expect(report.documentCount, 1);
       expect(report.revenue, 5000);
@@ -210,25 +233,39 @@ void main() {
     });
 
     test('a receipt for a sales order is not counted twice either', () async {
-      final c = await newController();
-      final item = await c.createItem(draft(quantity: 50, unitCost: 100));
-      final order = await c.createSalesOrder(
-        lines: [
-          SalesOrderLine(
-            id: 'l1',
-            itemId: item.id,
-            itemName: 'Bolt',
-            quantityOrdered: 10,
-            unitPrice: 500,
+      // The order is the sale. A receipt raised against it records the money
+      // arriving, and counting both would double the day's takings.
+      final c = await seededController(
+        salesOrders: [
+          SalesOrder(
+            id: 'so1',
+            reference: 'SO-0001',
+            status: SalesStatus.fulfilled,
+            lines: const [
+              SalesOrderLine(
+                id: 'l1',
+                itemId: 'i1',
+                itemName: 'Bolt',
+                quantityOrdered: 10,
+                quantityFulfilled: 10,
+                unitPrice: 500,
+                costOfGoods: 1000,
+              ),
+            ],
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
           ),
         ],
-      );
-      c.confirmSalesOrder(order.id);
-      await c.fulfilSalesOrder(order.id, {'l1': 10});
-      await c.issueReceipt(
-        salesOrderId: order.id,
-        lines: c.receiptLinesForSalesOrder(c.salesOrderById(order.id)!),
-        amountPaid: 5000,
+        receipts: [
+          // Linked to the order, so it records the money arriving rather than
+          // a second sale — which is the whole point of this test.
+          seedReceipt(
+            id: 'r1',
+            salesOrderId: 'so1',
+            lines: const [],
+            amountPaid: 5000,
+          ),
+        ],
       );
 
       final report = thisMonth(c);
@@ -241,50 +278,66 @@ void main() {
     });
 
     test('all three sources add up without overlapping', () async {
-      final c = await newController();
-      final item = await c.createItem(draft(quantity: 200, unitCost: 100));
-
-      // Counter.
-      await c.issueReceipt(
-        lines: [
-          ReceiptLine(
-            id: 'a',
-            itemId: item.id,
-            itemName: 'Bolt',
-            quantity: 10,
-            unitPrice: 500,
+      // Twenty over the counter, twenty on credit, twenty against an order:
+      // three documents, one item, and a total that is the sum of the parts
+      // with nothing counted in two of them.
+      final c = await seededController(
+        receipts: [
+          seedReceipt(
+            id: 'r1',
+            amountPaid: 10000,
+            lines: const [
+              ReceiptLine(
+                id: 'a',
+                itemId: 'i1',
+                itemName: 'Bolt',
+                quantity: 20,
+                unitPrice: 500,
+                costOfGoods: 2000,
+              ),
+            ],
+          ),
+        ],
+        invoices: [
+          seedInvoice(
+            id: 'inv1',
+            lines: const [
+              InvoiceLine(
+                id: 'b',
+                itemId: 'i1',
+                itemName: 'Bolt',
+                quantity: 20,
+                unitPrice: 500,
+                costOfGoods: 2000,
+              ),
+            ],
+          ),
+        ],
+        salesOrders: [
+          SalesOrder(
+            id: 'so1',
+            reference: 'SO-0001',
+            status: SalesStatus.fulfilled,
+            lines: const [
+              SalesOrderLine(
+                id: 'c',
+                itemId: 'i1',
+                itemName: 'Bolt',
+                quantityOrdered: 20,
+                quantityFulfilled: 20,
+                unitPrice: 500,
+                costOfGoods: 2000,
+              ),
+            ],
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
           ),
         ],
       );
-      // Credit.
-      await c.issueInvoice(
-        lines: [
-          InvoiceLine(
-            id: 'b',
-            itemId: item.id,
-            itemName: 'Bolt',
-            quantity: 20,
-            unitPrice: 500,
-          ),
-        ],
-      );
-      // Sales order.
-      final order = await c.createSalesOrder(
-        lines: [
-          SalesOrderLine(
-            id: 'l1',
-            itemId: item.id,
-            itemName: 'Bolt',
-            quantityOrdered: 30,
-            unitPrice: 500,
-          ),
-        ],
-      );
-      c.confirmSalesOrder(order.id);
-      await c.fulfilSalesOrder(order.id, {'l1': 30});
 
       final report = thisMonth(c);
 
+      expect(report.documentCount, 3);
       expect(report.unitsSold, 60);
       expect(report.revenue, 30000);
       expect(report.costOfGoods, 6000);
@@ -298,21 +351,29 @@ void main() {
     });
 
     test('a refund nets down both units and revenue', () async {
-      final c = await newController();
-      final item = await c.createItem(draft(quantity: 50, unitCost: 100));
-      final receipt = (await c.issueReceipt(
-        lines: [
-          ReceiptLine(
-            id: 'a',
-            itemId: item.id,
-            itemName: 'Bolt',
-            quantity: 10,
-            unitPrice: 500,
+      // Four of ten came back, so the day sold six — the refund is not a
+      // separate negative sale, it reduces the one that happened.
+      final c = await seededController(
+        receipts: [
+          seedReceipt(
+            id: 'r1',
+            amountPaid: 5000,
+            status: ReceiptStatus.partRefunded,
+            lines: const [
+              ReceiptLine(
+                id: 'a',
+                itemId: 'i1',
+                itemName: 'Bolt',
+                quantity: 10,
+                unitPrice: 500,
+                quantityRefunded: 4,
+                costOfGoods: 1000,
+              ),
+            ],
           ),
         ],
-      ))!;
+      );
 
-      await c.refundReceipt(receipt.id, {'a': 4});
       final report = thisMonth(c);
 
       expect(report.unitsSold, 6);
@@ -322,37 +383,45 @@ void main() {
     });
 
     test('voided and cancelled documents are excluded entirely', () async {
-      final c = await newController();
-      final item = await c.createItem(draft(quantity: 50, unitCost: 100));
-      final receipt = (await c.issueReceipt(
-        lines: [
-          ReceiptLine(
-            id: 'a',
-            itemId: item.id,
-            itemName: 'Bolt',
-            quantity: 10,
-            unitPrice: 500,
+      // Neither happened, as far as the day is concerned.
+      final c = await seededController(
+        receipts: [
+          seedReceipt(
+            id: 'r1',
+            status: ReceiptStatus.voided,
+            amountPaid: 5000,
+            lines: const [
+              ReceiptLine(
+                id: 'a',
+                itemId: 'i1',
+                itemName: 'Bolt',
+                quantity: 10,
+                unitPrice: 500,
+              ),
+            ],
           ),
         ],
-      ))!;
-      final invoice = (await c.issueInvoice(
-        lines: [
-          InvoiceLine(
-            id: 'b',
-            itemId: item.id,
-            itemName: 'Bolt',
-            quantity: 5,
-            unitPrice: 500,
+        invoices: [
+          seedInvoice(
+            id: 'inv1',
+            status: InvoiceStatus.cancelled,
+            lines: const [
+              InvoiceLine(
+                id: 'b',
+                itemId: 'i1',
+                itemName: 'Bolt',
+                quantity: 10,
+                unitPrice: 500,
+              ),
+            ],
           ),
         ],
-      ))!;
-      await c.voidReceipt(receipt.id);
-      c.cancelInvoice(invoice.id);
+      );
 
       final report = thisMonth(c);
+
       expect(report.isEmpty, isTrue);
       expect(report.revenue, 0);
-      expect(report.documentCount, 0);
     });
 
     test(

@@ -74,29 +74,37 @@ void main() {
     expect(String.fromCharCodes(bytes.take(5)), '%PDF-');
   });
 
-  test(
-    'the CSV carries the balance and escapes what would break a row',
-    () async {
-      final c = await newController();
-      final item = await c.createItem(draft(name: 'Bolt, 10mm', quantity: 50));
-      final invoice = (await c.issueInvoice(
-        lines: [line(item.id, name: 'Bolt, 10mm')],
-        notes: 'Said "invoice it"',
-      ))!;
-      await c.payInvoice(invoice.id, 500);
+  test('the CSV carries the balance and escapes what would break a row', () {
+    // Seeded: what this is about is the encoding — a comma inside a cell, a
+    // quote inside a quoted cell, and the balance the document works out.
+    // Raising and paying an invoice is the server's.
+    final invoice = seedInvoice(
+      id: 'inv1',
+      notes: 'Said "invoice it"',
+      amountPaid: 500,
+      status: InvoiceStatus.partPaid,
+      lines: const [
+        InvoiceLine(
+          id: 'l1',
+          itemId: 'i1',
+          itemName: 'Bolt, 10mm',
+          quantity: 4,
+          unitPrice: 500,
+        ),
+      ],
+    );
 
-      final csv = invoicesToCsv([c.invoiceById(invoice.id)!]);
-      final rows = csv.trim().split('\n');
+    final csv = invoicesToCsv([invoice]);
+    final rows = csv.trim().split('\n');
 
-      expect(rows, hasLength(2));
-      expect(rows.first.split(','), contains('balanceDue'));
-      expect(csv, contains('"Bolt, 10mm"'));
-      // A quote inside a quoted cell is doubled, per RFC 4180.
-      expect(csv, contains('"Said ""invoice it"""'));
-      // 2000 billed less 500 paid.
-      expect(rows[1], contains('1500'));
-    },
-  );
+    expect(rows, hasLength(2));
+    expect(rows.first.split(','), contains('balanceDue'));
+    expect(csv, contains('"Bolt, 10mm"'));
+    // A quote inside a quoted cell is doubled, per RFC 4180.
+    expect(csv, contains('"Said ""invoice it"""'));
+    // 2000 billed less 500 paid.
+    expect(rows[1], contains('1500'));
+  });
 
   test('the filename names the invoice', () async {
     final c = await newController();

@@ -36,7 +36,6 @@ void main() {
 
     expect(find.byType(Material), findsWidgets);
     expect(find.textContaining('inventory'), findsNothing);
-    expect(controller.isShared, isFalse);
   });
 
   group('state the banner has to make visible', () {
@@ -45,26 +44,6 @@ void main() {
       expect(controller.load, InventoryLoad.idle);
       expect(controller.loadError, isNull);
       expect(controller.stockConflict, isNull);
-    });
-
-    test('reload does nothing without a server to ask', () async {
-      // The on-device path has no load to be in the middle of, so this stays
-      // idle rather than pretending to fetch.
-      final controller = await _shared();
-      await controller.reload();
-      expect(controller.load, InventoryLoad.idle);
-    });
-
-    test('forgetting is a no-op on device', () async {
-      // The local catalogue belongs to the device, not the session: signing
-      // out must not empty it.
-      final controller = await newController(seeded: true);
-      final before = controller.items.length;
-      expect(before, greaterThan(0));
-
-      controller.forgetSharedData();
-
-      expect(controller.items.length, before);
     });
   });
 }

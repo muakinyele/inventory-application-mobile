@@ -5,6 +5,8 @@ import 'package:stockpile/app.dart';
 import 'package:stockpile/core/theme.dart';
 import 'package:stockpile/ui/widgets/custom_period_dialog.dart';
 
+import 'package:stockpile/data/seed_data.dart';
+
 import 'support.dart';
 
 /// Opens the dialog on its own, so the assertions are about the dialog rather
@@ -213,7 +215,10 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      final controller = await newController(seeded: true);
+      final controller = await seededController(
+        items: seedItems(),
+        movements: seedMovements(),
+      );
       await tester.pumpWidget(
         ChangeNotifierProvider.value(
           value: controller,
@@ -234,7 +239,10 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      final controller = await newController(seeded: true);
+      final controller = await seededController(
+        items: seedItems(),
+        movements: seedMovements(),
+      );
       await tester.pumpWidget(
         ChangeNotifierProvider.value(
           value: controller,

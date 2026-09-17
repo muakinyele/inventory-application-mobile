@@ -2,7 +2,7 @@ import 'package:flutter/material.dart' show ThemeMode;
 
 import '../models/app_settings.dart';
 import 'inventory_api.dart';
-import 'inventory_repository.dart';
+import 'snapshot.dart';
 
 /// Builds the opening [Snapshot] from the shared inventory.
 ///

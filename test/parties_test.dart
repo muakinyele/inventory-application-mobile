@@ -73,51 +73,9 @@ void main() {
       );
       expect(c.suppliers, isEmpty);
     });
-
-    test('the unlinking survives a reload', () async {
-      final repo = newRepository();
-      final c = await controllerOver(repo);
-      final supplier = await c.createSupplier(supplierDraft());
-      await c.createItem(draft().copyWith(supplierId: supplier.id));
-      await pumpWrites();
-
-      c.deleteSupplier(supplier.id);
-      await pumpWrites();
-
-      final reloaded = await repo.load();
-      expect(reloaded.suppliers, isEmpty);
-      expect(reloaded.items.single.supplierId, isNull);
-      expect(reloaded.items.single.supplier, 'Nexa Components');
-    });
-
-    test('editing keeps the id and persists', () async {
-      final repo = newRepository();
-      final c = await controllerOver(repo);
-      final supplier = await c.createSupplier(supplierDraft(leadTime: 7));
-
-      await c.updateSupplier(supplier.id, supplier.copyWith(leadTimeDays: 21));
-      await pumpWrites();
-
-      final reloaded = await repo.load();
-      expect(reloaded.suppliers.single.id, supplier.id);
-      expect(reloaded.suppliers.single.leadTimeDays, 21);
-    });
   });
 
   group('customers', () {
-    test('a price tier round-trips through the database', () async {
-      final repo = newRepository();
-      final c = await controllerOver(repo);
-
-      await c.createCustomer(customerDraft(tier: PriceTier.distributor));
-      await pumpWrites();
-
-      expect(
-        (await repo.load()).customers.single.priceTier,
-        PriceTier.distributor,
-      );
-    });
-
     test('an unknown tier in storage falls back to retailer', () {
       expect(priceTierFrom('nonsense'), PriceTier.retailer);
       expect(priceTierFrom(null), PriceTier.retailer);
@@ -132,18 +90,5 @@ void main() {
 
       expect(c.customers, isEmpty);
     });
-  });
-
-  test('units per pack defaults to one and persists', () async {
-    final repo = newRepository();
-    final c = await controllerOver(repo);
-
-    await c.createItem(draft(name: 'Loose'));
-    await c.createItem(draft(name: 'Carton').copyWith(unitsPerPack: 24));
-    await pumpWrites();
-
-    final items = (await repo.load()).items;
-    expect(items.firstWhere((i) => i.name == 'Loose').unitsPerPack, 1);
-    expect(items.firstWhere((i) => i.name == 'Carton').unitsPerPack, 24);
   });
 }
