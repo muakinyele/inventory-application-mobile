@@ -36,9 +36,15 @@ Future<void> main(List<String> arguments) async {
     return;
   }
 
+  // The From address is printed because it is the field most likely to be
+  // wrong and least likely to be noticed: the username authenticates, but
+  // the From is what the message claims to be, and an unroutable one is
+  // rejected as an invalid message with nothing to say why.
   stdout.writeln(
-    'Sending via ${smtp.host}:${smtp.port} '
-    'as ${smtp.username ?? "(no username)"} -> $to',
+    'Sending via ${smtp.host}:${smtp.port}\n'
+    '  authenticating as ${smtp.username ?? "(no username)"}\n'
+    '  from ${env.mailFrom}\n'
+    '  to   $to',
   );
 
   try {
