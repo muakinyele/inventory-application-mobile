@@ -61,10 +61,11 @@ jobs:
         # doubles in the browser, which once shipped a real bug that every VM
         # test passed straight through — so it has to run somewhere.
         #
-        # Scoped to that one file deliberately: the rest of the suite reaches
-        # sqlite3 through drift/native.dart, which is dart:ffi and cannot be
-        # compiled for the web at all. Widening this to the whole suite fails
-        # to compile rather than skipping.
+        # Scoped to that one file. It used to be forced — the rest of the
+        # suite reached sqlite3 through dart:ffi, which cannot compile for
+        # the web at all — and since the on-device database went it is a
+        # choice: this is the only test that is about the browser, and
+        # running the rest there costs minutes to learn nothing.
         run: flutter test --platform chrome test/web_safety_test.dart
 
       - name: Build web
