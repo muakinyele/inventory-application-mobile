@@ -6,6 +6,9 @@ import 'mailer.dart';
 
 /// Delivers over SMTP, configured entirely from the environment (§15).
 class SmtpMailer implements Mailer {
+  /// [from] is a callback, not a string: the display name comes from the
+  /// workspace, which is editable, and resolving it once at startup would send
+  /// mail under the old name until somebody restarted the server.
   SmtpMailer({required SmtpConfig config, required this.from})
     : _server = SmtpServer(
         config.host,
@@ -21,12 +24,12 @@ class SmtpMailer implements Mailer {
       );
 
   final SmtpServer _server;
-  final String from;
+  final Future<String> Function() from;
 
   @override
   Future<void> send(EmailMessage message) async {
     final envelope = mailer.Message()
-      ..from = _parseFrom(from)
+      ..from = _parseFrom(await from())
       ..recipients.add(message.to)
       ..subject = message.subject
       ..text = message.text

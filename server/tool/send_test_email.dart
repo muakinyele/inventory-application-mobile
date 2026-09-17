@@ -48,7 +48,9 @@ Future<void> main(List<String> arguments) async {
   );
 
   try {
-    await SmtpMailer(config: smtp, from: env.mailFrom).send(
+    // No database here, so no workspace name to resolve — this proves the
+    // transport, not the display name.
+    await SmtpMailer(config: smtp, from: () async => env.mailFrom).send(
       EmailMessage(
         to: to,
         subject: '${env.appName}: mail is configured correctly',
