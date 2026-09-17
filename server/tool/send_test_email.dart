@@ -1,6 +1,8 @@
 import 'dart:io';
 
 import 'package:stockpile_server/src/config/env.dart';
+import 'package:stockpile_server/src/db/database.dart';
+import 'package:stockpile_server/src/email/mail_identity.dart';
 import 'package:stockpile_server/src/email/mailer.dart';
 import 'package:stockpile_server/src/email/smtp_mailer.dart';
 
@@ -40,17 +42,25 @@ Future<void> main(List<String> arguments) async {
   // wrong and least likely to be noticed: the username authenticates, but
   // the From is what the message claims to be, and an unroutable one is
   // rejected as an invalid message with nothing to say why.
+  // Resolved through MailIdentity, exactly as the server does. A diagnostic
+  // that composes its own From proves the transport and nothing about the
+  // thing that actually sends — which is how a fix for this looked like it
+  // had not worked.
+  final db = AuthDatabase(
+    openPostgres(env.databaseUrl, requireSsl: env.databaseRequiresSsl),
+  );
+  final identity = MailIdentity(db: db, env: env);
+  final from = await identity.resolve();
+
   stdout.writeln(
     'Sending via ${smtp.host}:${smtp.port}\n'
     '  authenticating as ${smtp.username ?? "(no username)"}\n'
-    '  from ${env.mailFrom}\n'
+    '  from $from\n'
     '  to   $to',
   );
 
   try {
-    // No database here, so no workspace name to resolve — this proves the
-    // transport, not the display name.
-    await SmtpMailer(config: smtp, from: () async => env.mailFrom).send(
+    await SmtpMailer(config: smtp, from: identity.resolve).send(
       EmailMessage(
         to: to,
         subject: '${env.appName}: mail is configured correctly',
@@ -69,5 +79,7 @@ Future<void> main(List<String> arguments) async {
     // Printed rather than swallowed: this tool exists to surface exactly this.
     stderr.writeln('FAILED: $error');
     exitCode = 1;
+  } finally {
+    await db.close();
   }
 }
