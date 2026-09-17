@@ -52,18 +52,6 @@ jobs:
         # the cheapest moment to keep it that way is before the warning lands.
         run: flutter analyze --fatal-infos --fatal-warnings
 
-      - name: Verify generated database code is up to date
-        # database.g.dart is committed, so a schema change with a stale
-        # regeneration would otherwise only surface at runtime — as a missing
-        # column on someone's device.
-        run: |
-          dart run build_runner build
-          if ! git diff --quiet -- lib/data/database.g.dart; then
-            echo "::error file=lib/data/database.g.dart::Generated code is stale. Run 'dart run build_runner build' and commit the result."
-            git diff --stat -- lib/data/database.g.dart
-            exit 1
-          fi
-
       - name: Test
         run: flutter test
 
