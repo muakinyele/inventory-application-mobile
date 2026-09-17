@@ -31,7 +31,8 @@ RUN dart pub get --offline
 # SDK at all — which is what keeps it under 100 MB rather than 600.
 RUN dart build cli -t bin/server.dart -o /app/out/server \
  && dart build cli -t bin/migrate.dart -o /app/out/migrate \
- && dart build cli -t bin/create_admin.dart -o /app/out/create_admin
+ && dart build cli -t bin/create_admin.dart -o /app/out/create_admin \
+ && dart build cli -t tool/send_test_email.dart -o /app/out/send_test_email
 
 # ---------------------------------------------------------------------------
 # Runtime
@@ -53,17 +54,22 @@ RUN groupadd --system --gid 10001 stockpile \
 WORKDIR /app
 RUN mkdir -p /app/bin
 
-# Each bundle keeps its executable beside the `lib/` it loads from, so the
-# three are copied whole rather than cherry-picking binaries.
+# Each bundle keeps its executable beside the `lib/` it loads from, so they are
+# copied whole rather than cherry-picking binaries.
 COPY --from=build /app/out/server/bundle /app/server
 COPY --from=build /app/out/migrate/bundle /app/migrate
 COPY --from=build /app/out/create_admin/bundle /app/create_admin
+# The mail diagnostic. It lives in tool/ rather than bin/ because it is not
+# part of running the service — but a diagnostic that cannot be run where the
+# problem is proves nothing, and the mail path only fails in deployment.
+COPY --from=build /app/out/send_test_email/bundle /app/send_test_email
 
 # Stable paths, so compose files and deploy scripts do not have to know about
 # the bundle layout.
 RUN ln -s /app/server/bin/server /app/bin/server \
  && ln -s /app/migrate/bin/migrate /app/bin/migrate \
- && ln -s /app/create_admin/bin/create_admin /app/bin/create_admin
+ && ln -s /app/create_admin/bin/create_admin /app/bin/create_admin \
+ && ln -s /app/send_test_email/bin/send_test_email /app/bin/send_test_email
 
 USER stockpile
 

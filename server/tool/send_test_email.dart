@@ -8,12 +8,22 @@ import 'package:stockpile_server/src/email/smtp_mailer.dart';
 ///
 ///     dart run tool/send_test_email.dart you@example.com
 ///
+/// and, on a deployment, as /app/bin/send_test_email — which is the only place
+/// it is any use, since the mail path only ever fails there. It is built into
+/// the image for that reason despite living in tool/ rather than bin/.
+///
 /// Exists so a deployment can prove its mail path works *before* someone
 /// discovers it does not by failing to reset a password.
 Future<void> main(List<String> arguments) async {
   final to = arguments.isEmpty ? null : arguments.first;
   if (to == null) {
-    stderr.writeln('Usage: dart run tool/send_test_email.dart <address>');
+    stderr.writeln(
+      'Usage: send_test_email <address>\n'
+      '\n'
+      'Locally:   dart run tool/send_test_email.dart you@example.com\n'
+      'Deployed:  docker compose -f docker-compose.prod.yml run --rm \\\n'
+      '             --entrypoint /app/bin/send_test_email api you@example.com',
+    );
     exitCode = 64;
     return;
   }
