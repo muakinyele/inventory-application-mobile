@@ -191,7 +191,15 @@ class Env {
       // survive a hot restart. Production has already thrown above.
       tokenPepper: pepper ?? 'development-pepper-not-for-production-use',
       smtp: smtp,
-      mailFrom: read('EMAIL_FROM') ?? 'Stockpile <no-reply@localhost>',
+      // Falls back to the SMTP account rather than a placeholder. The old
+      // default was `no-reply@localhost`, which is not a routable address —
+      // the mailer rejects it as an invalid message before anything reaches
+      // the server, and the error says nothing about where it came from.
+      // Whoever we authenticate as can always send as itself.
+      mailFrom:
+          read('EMAIL_FROM') ??
+          smtp?.username ??
+          'Stockpile <no-reply@localhost>',
       corsOrigins: (read('CORS_ORIGINS') ?? appUrl)
           .split(',')
           .map((o) => _stripTrailingSlash(o.trim()))

@@ -191,6 +191,33 @@ void main() {
       expect(env.appUrl, 'https://secure.example');
     });
 
+    test('mail is sent from the account it authenticates as', () async {
+      // The old fallback was no-reply@localhost, which is not a routable
+      // address: the mailer rejects it as an invalid message before anything
+      // reaches the server, and the failure says nothing about where it came
+      // from. Whoever we authenticate as can always send as itself.
+      final env = load({
+        'EMAIL_HOST': 'smtp.example.com',
+        'EMAIL_PORT': '587',
+        'EMAIL_USERNAME': 'alerts@example.com',
+        'EMAIL_PASSWORD': 'secret',
+      });
+
+      expect(env.mailFrom, 'alerts@example.com');
+      expect(env.mailFrom, isNot(contains('localhost')));
+    });
+
+    test('an explicit from address still wins', () {
+      final env = load({
+        'EMAIL_HOST': 'smtp.example.com',
+        'EMAIL_USERNAME': 'alerts@example.com',
+        'EMAIL_PASSWORD': 'secret',
+        'EMAIL_FROM': 'Stockpile <no-reply@example.com>',
+      });
+
+      expect(env.mailFrom, 'Stockpile <no-reply@example.com>');
+    });
+
     test('a missing database URL is fatal', () {
       expect(
         () => Env.load(envFile: '.env.test.absent', overrides: {'PORT': '1'}),

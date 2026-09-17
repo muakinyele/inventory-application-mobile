@@ -7,6 +7,7 @@ import 'package:stockpile_server/src/bootstrap.dart';
 import 'package:stockpile_server/src/config/env.dart';
 import 'package:stockpile_server/src/db/database.dart';
 import 'package:stockpile_server/src/email/mailer.dart';
+import 'package:stockpile_server/src/email/mail_identity.dart';
 import 'package:stockpile_server/src/email/smtp_mailer.dart';
 
 Future<void> main(List<String> arguments) async {
@@ -37,7 +38,12 @@ Future<void> main(List<String> arguments) async {
   final smtp = env.smtp;
   final Mailer mailer;
   if (smtp != null) {
-    mailer = SmtpMailer(config: smtp, from: env.mailFrom);
+    // The workspace name is read per send, so renaming the company changes
+    // what the next email says without a restart.
+    mailer = SmtpMailer(
+      config: smtp,
+      from: MailIdentity(db: db, env: env).resolve,
+    );
   } else {
     // Development without SMTP: mail is recorded and its subject logged, but
     // never its links — those are secrets. The invite endpoint returns the

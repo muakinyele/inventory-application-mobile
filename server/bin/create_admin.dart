@@ -6,6 +6,7 @@ import 'package:stockpile_server/src/bootstrap.dart';
 import 'package:stockpile_server/src/config/env.dart';
 import 'package:stockpile_server/src/db/database.dart';
 import 'package:stockpile_server/src/email/mailer.dart';
+import 'package:stockpile_server/src/email/mail_identity.dart';
 import 'package:stockpile_server/src/email/smtp_mailer.dart';
 import 'package:stockpile_server/src/email/templates.dart';
 import 'package:stockpile_server/src/users/user_service.dart';
@@ -75,7 +76,8 @@ Future<void> main(List<String> arguments) async {
 
   if (smtp != null) {
     final templates = EmailTemplates(appName: env.appName, appUrl: env.appUrl);
-    final mailer = SmtpMailer(config: smtp, from: env.mailFrom);
+    final identity = MailIdentity(db: db, env: env);
+    final mailer = SmtpMailer(config: smtp, from: identity.resolve);
     await FailSafeMailer(
       mailer,
       onError: (error, _) => stderr.writeln('Could not send mail: $error'),
