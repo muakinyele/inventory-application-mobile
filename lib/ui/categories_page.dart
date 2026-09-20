@@ -7,6 +7,7 @@ import '../core/design.dart';
 import '../core/formatters.dart';
 import '../core/palette.dart';
 import '../state/inventory_controller.dart';
+import 'widgets/app_message.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/page_header.dart';
 
@@ -99,11 +100,20 @@ class CategoriesPage extends StatelessWidget {
     );
     if (result == null) return;
 
-    if (existing == null) {
-      controller.addCategory(result.name, result.swatch);
-    } else {
-      controller.renameCategory(existing, result.name, result.swatch);
-    }
+    // AWAITED, AND REPORTED. These reach the server now, so they can fail —
+    // and a save that silently did not happen is the defect this page was
+    // reported for. `context.mounted` because the dialog above suspended us.
+    final saved = existing == null
+        ? await controller.addCategory(result.name, result.swatch)
+        : await controller.renameCategory(existing, result.name, result.swatch);
+
+    if (!context.mounted || saved) return;
+    await showAppMessage(
+      context,
+      'The category could not be saved, so nothing was changed. '
+      'Check your connection and try again.',
+      tone: MessageTone.failure,
+    );
   }
 
   Future<void> _confirmDelete(
@@ -138,7 +148,15 @@ class CategoriesPage extends StatelessWidget {
       ),
     );
     if (confirmed != true) return;
-    controller.deleteCategory(name);
+
+    final deleted = await controller.deleteCategory(name);
+    if (!context.mounted || deleted) return;
+    await showAppMessage(
+      context,
+      '"$name" could not be deleted, so it is still here. '
+      'Check your connection and try again.',
+      tone: MessageTone.failure,
+    );
   }
 }
 

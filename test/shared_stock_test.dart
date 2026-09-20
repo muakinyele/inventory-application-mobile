@@ -1204,5 +1204,162 @@ void main() {
       await pending;
       expect(controller.byId('i1')!.quantity, 7);
     });
+
+    // ------------------------------------------------------------------
+    // Categories
+    //
+    // THE DEFECT THESE EXIST FOR: the three category mutations rebuilt
+    // `_settings` and notified, and never called the server. The list is
+    // loaded from `GET /inventory/categories` at startup, so a delete or a
+    // rename reappeared on the next load — reported as "the category is still
+    // not deleting and not updating". Every test here asserts that the write
+    // LEFT THE DEVICE, because asserting on `controller.settings` alone is
+    // what passed throughout the life of the bug.
+    // ------------------------------------------------------------------
+
+    test('adding a category reaches the server', () async {
+      final server = _Server();
+      final controller = await _controller(server);
+
+      await controller.addCategory('Fasteners', 3);
+
+      expect(
+        server.calls,
+        contains('PUT /api/inventory/categories'),
+        reason: 'the category list was never sent',
+      );
+      final sent = server.lastBodyFor['PUT /api/inventory/categories']!;
+      expect(
+        (sent['categories'] as List).map((c) => (c as Map)['name']),
+        contains('Fasteners'),
+      );
+    });
+
+    test('renaming a category reaches the server', () async {
+      final server = _Server();
+      final controller = await _controller(server);
+      await controller.addCategory('Parts', 1);
+      server.calls.clear();
+
+      await controller.renameCategory('Parts', 'Hardware', 2);
+
+      final sent = server.lastBodyFor['PUT /api/inventory/categories']!;
+      final names = (sent['categories'] as List)
+          .map((c) => (c as Map)['name'])
+          .toList();
+      expect(names, contains('Hardware'));
+      expect(names, isNot(contains('Parts')));
+    });
+
+    test('deleting a category reaches the server', () async {
+      final server = _Server();
+      final controller = await _controller(server);
+      await controller.addCategory('Parts', 1);
+      server.calls.clear();
+
+      await controller.deleteCategory('Parts');
+
+      expect(server.calls, contains('PUT /api/inventory/categories'));
+      final sent = server.lastBodyFor['PUT /api/inventory/categories']!;
+      expect(
+        (sent['categories'] as List).map((c) => (c as Map)['name']),
+        isNot(contains('Parts')),
+      );
+    });
+
+    test(
+      'renaming rewrites the items that referenced it, on the server too',
+      () async {
+        // Items carry their category by NAME and the server's category write
+        // only touches the category table, so an item left saying "Parts" after
+        // the rename is an item filed under a category that no longer exists.
+        final server = _Server();
+        final controller = await _controller(server);
+        await controller.updateItem(
+          'i1',
+          controller.byId('i1')!.copyWith(category: 'Parts'),
+        );
+        server.calls.clear();
+
+        await controller.renameCategory('Parts', 'Hardware', 2);
+
+        expect(
+          server.calls,
+          contains('PATCH /api/inventory/items/i1'),
+          reason: 'the item still says Parts on the server',
+        );
+        expect(controller.byId('i1')!.category, 'Hardware');
+      },
+    );
+
+    test(
+      'deleting clears the category on the server, and keeps the stock',
+      () async {
+        final server = _Server();
+        final controller = await _controller(server);
+        await controller.updateItem(
+          'i1',
+          controller.byId('i1')!.copyWith(category: 'Parts'),
+        );
+        final quantity = controller.byId('i1')!.quantity;
+        server.calls.clear();
+
+        await controller.deleteCategory('Parts');
+
+        expect(server.calls, contains('PATCH /api/inventory/items/i1'));
+        expect(controller.byId('i1')!.category, '');
+        expect(
+          controller.byId('i1')!.quantity,
+          quantity,
+          reason: 'losing a category must not lose the count',
+        );
+      },
+    );
+
+    test('a category the server refused is put back on the screen', () async {
+      // The whole point of reverting. A category that vanishes from the list
+      // and is still on the server is the original defect, one reload later.
+      final server = _Server();
+      final controller = await _controller(server);
+      await controller.addCategory('Parts', 1);
+      server.failNext = true;
+
+      final deleted = await controller.deleteCategory('Parts');
+
+      expect(deleted, isFalse);
+      expect(
+        controller.settings.categories,
+        contains('Parts'),
+        reason: 'the delete failed, so the category is still there',
+      );
+      expect(controller.lastWriteError, isNotNull);
+    });
+
+    test('a rename the server refused leaves the items alone', () async {
+      final server = _Server();
+      final controller = await _controller(server);
+      await controller.updateItem(
+        'i1',
+        controller.byId('i1')!.copyWith(category: 'Parts'),
+      );
+      server.failNext = true;
+
+      final renamed = await controller.renameCategory('Parts', 'Hardware', 2);
+
+      expect(renamed, isFalse);
+      expect(controller.byId('i1')!.category, 'Parts');
+      expect(controller.settings.categories, contains('Parts'));
+      expect(controller.settings.categories, isNot(contains('Hardware')));
+    });
+
+    test('a successful category write reports no error', () async {
+      final server = _Server();
+      final controller = await _controller(server);
+
+      final added = await controller.addCategory('Fasteners', 3);
+
+      expect(added, isTrue);
+      expect(controller.lastWriteError, isNull);
+    });
   });
 }
