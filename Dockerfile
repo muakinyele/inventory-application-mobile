@@ -52,8 +52,16 @@ COPY . .
 # An absolute URL would bake an environment into the image.
 ARG API_BASE_URL=/api
 
+# ICONS ARE TREE-SHAKEN, which this build previously turned off. The flag cost
+# 1.6 MB on every cold visit: the full MaterialIcons face is 1,645,184 bytes and
+# the icons this app actually names come to 24,668 — a 98.5% reduction, and the
+# second largest thing the browser was being asked to download after the engine
+# itself. Nothing here builds an IconData at runtime, which is the one case
+# tree-shaking cannot see through and the only reason to disable it; the
+# analyzer's own check for that is what makes the build fail rather than ship
+# blank squares. CupertinoIcons is warned about and is not a dependency of this
+# project, so those glyphs were never in the bundle with the flag either.
 RUN flutter build web --release \
-      --no-tree-shake-icons \
       --dart-define=STOCKPILE_API_URL="${API_BASE_URL}"
 
 # ---------------------------------------------------------------------------

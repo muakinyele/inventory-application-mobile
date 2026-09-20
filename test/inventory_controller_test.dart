@@ -88,7 +88,7 @@ void main() {
     test('adding one registers its name and colour', () async {
       final c = await newController();
 
-      c.addCategory('Fasteners', 3);
+      await c.addCategory('Fasteners', 3);
 
       expect(c.settings.categories, contains('Fasteners'));
       expect(c.settings.swatchIndexFor('Fasteners'), 3);
@@ -96,9 +96,9 @@ void main() {
 
     test('a duplicate name is ignored, case-insensitively', () async {
       final c = await newController();
-      c.addCategory('Fasteners', 3);
+      await c.addCategory('Fasteners', 3);
 
-      c.addCategory('fasteners', 5);
+      await c.addCategory('fasteners', 5);
 
       expect(
         c.settings.categories.where((x) => x.toLowerCase() == 'fasteners'),
@@ -112,7 +112,7 @@ void main() {
       await c.createItem(draft(name: 'Bolt', category: 'Parts'));
       await c.createItem(draft(name: 'Cable', category: 'Wiring'));
 
-      c.renameCategory('Parts', 'Hardware', 2);
+      await c.renameCategory('Parts', 'Hardware', 2);
 
       expect(c.items.firstWhere((i) => i.name == 'Bolt').category, 'Hardware');
       expect(c.items.firstWhere((i) => i.name == 'Cable').category, 'Wiring');
@@ -128,7 +128,7 @@ void main() {
           draft(name: 'Bolt', category: 'Parts', quantity: 9),
         );
 
-        c.deleteCategory('Parts');
+        await c.deleteCategory('Parts');
 
         expect(c.byId(item.id)!.category, '');
         expect(c.byId(item.id)!.quantity, 9);
@@ -141,8 +141,8 @@ void main() {
       await c.createItem(draft(category: 'Parts'));
       final before = c.movements.length;
 
-      c.renameCategory('Parts', 'Hardware', 1);
-      c.deleteCategory('Hardware');
+      await c.renameCategory('Parts', 'Hardware', 1);
+      await c.deleteCategory('Hardware');
 
       expect(c.movements.length, before);
     });

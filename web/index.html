@@ -18,8 +18,14 @@
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="description" content="Track stock levels, movements and reorder alerts from your phone or browser.">
-  <meta name="theme-color" content="#2a78d6">
+
+  <!-- Matched to the palette the app actually paints (Palette.light.plane and
+       Palette.dark.plane), so the browser chrome on a phone agrees with the
+       screen under it instead of flashing an unrelated blue. -->
+  <meta name="theme-color" content="#F3F7FA" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0A0F1A" media="(prefers-color-scheme: dark)">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
@@ -27,13 +33,188 @@
   <meta name="apple-mobile-web-app-title" content="Stockpile">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
+  <!--
+    THE ENGINE COMES FROM gstatic, and the handshake to reach it does not have
+    to wait for the page to ask. CanvasKit is ~1.6 MB brotli-compressed and is
+    the single largest thing a cold visit fetches; without these the browser
+    only starts resolving DNS, then TLS, at the moment flutter_bootstrap.js
+    asks for it — several hundred milliseconds of nothing on a high-latency
+    connection before a byte of the engine moves.
+
+    Kept on the CDN rather than served from this origin deliberately. The local
+    copy `flutter build web` emits is 5.6 MB raw and 2.1 MB under nginx's gzip;
+    gstatic serves a brotli build at 1.6 MB. Self-hosting would remove a
+    third-party dependency and add half a megabyte to every cold load, which is
+    the wrong way round for this audience. Revisit if nginx ever grows brotli.
+  -->
+  <link rel="preconnect" href="https://www.gstatic.com" crossorigin>
+  <link rel="dns-prefetch" href="https://www.gstatic.com">
+  <!-- The engine asks for a Roboto fallback for glyphs the bundled fonts do
+       not carry. Same reasoning: the connection is cheaper opened early. -->
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
   <title>Stockpile — Inventory Tracker</title>
   <link rel="manifest" href="manifest.json">
+
+  <!--
+    THE SPLASH IS INLINE, AND THAT IS THE POINT.
+
+    A Flutter web app shows nothing at all until the engine and the compiled
+    app have been fetched, parsed and booted — several seconds on a cold cache
+    and longer on a phone connection. Until this, that wait was a blank white
+    page: no branding, no spinner, no indication the address had even been
+    reached. People reported it as the site being down.
+
+    Every byte needed to paint this is in the document: no stylesheet, no font
+    and no image, because each of those is another round trip that would have
+    to finish before the reassurance appeared. It is drawn before
+    flutter_bootstrap.js has been asked for.
+  -->
+  <style>
+    :root {
+      color-scheme: light dark;
+      /* Palette.light — plane, ink, inkMuted, brand, line. */
+      --boot-plane:  #F3F7FA;
+      --boot-ink:    #0B1220;
+      --boot-muted:  #64748B;
+      --boot-brand:  #0B7C79;
+      --boot-line:   #E2E8F0;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        /* Palette.dark — the app opens in ThemeMode.system, so the splash has
+           to follow the same signal or it flashes white before a dark app. */
+        --boot-plane:  #0A0F1A;
+        --boot-ink:    #F8FAFC;
+        --boot-muted:  #94A3B8;
+        --boot-brand:  #2DD4BF;
+        --boot-line:   #253044;
+      }
+    }
+
+    html, body { height: 100%; }
+
+    body {
+      margin: 0;
+      background: var(--boot-plane);
+      /* The system stack: a web font is a network request, and this text
+         exists precisely because the network has not finished yet. */
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                   "Helvetica Neue", Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    #boot {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      padding: 24px;
+      box-sizing: border-box;
+      background: var(--boot-plane);
+      /* Above nothing in particular — Flutter mounts its view into body and
+         this has to stay on top of it until the first frame is actually
+         painted, or the reader sees a half-built screen. */
+      z-index: 2147483647;
+      opacity: 1;
+      transition: opacity 240ms ease;
+    }
+
+    #boot[data-leaving="true"] { opacity: 0; pointer-events: none; }
+
+    .boot-mark {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 56px;
+      height: 56px;
+      border-radius: 16px;
+      background: var(--boot-brand);
+      color: #FFFFFF;
+    }
+
+    .boot-title {
+      margin: 0;
+      font-size: 17px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: var(--boot-ink);
+    }
+
+    /* The status line, and the only part that changes while waiting. It is a
+       live region, so the wait is announced rather than only drawn. */
+    .boot-status {
+      margin: 0;
+      min-height: 20px;
+      max-width: 34ch;
+      text-align: center;
+      font-size: 13.5px;
+      line-height: 1.5;
+      color: var(--boot-muted);
+    }
+
+    .boot-track {
+      position: relative;
+      width: 180px;
+      height: 3px;
+      border-radius: 999px;
+      background: var(--boot-line);
+      overflow: hidden;
+    }
+
+    .boot-track::after {
+      content: "";
+      position: absolute;
+      inset-block: 0;
+      inline-size: 40%;
+      border-radius: inherit;
+      background: var(--boot-brand);
+      animation: boot-slide 1.15s ease-in-out infinite;
+    }
+
+    @keyframes boot-slide {
+      0%   { transform: translateX(-100%); }
+      100% { transform: translateX(350%); }
+    }
+
+    /* MOTION IS NOT THE ONLY SIGNAL. With animation suppressed the bar becomes
+       a static filled track and the status line still says what is happening,
+       so the screen is never a frozen bar with no explanation. */
+    @media (prefers-reduced-motion: reduce) {
+      #boot { transition: none; }
+      .boot-track::after {
+        animation: none;
+        inline-size: 100%;
+        opacity: 0.45;
+      }
+    }
+  </style>
 </head>
 <body>
+  <div id="boot" role="status" aria-live="polite">
+    <div class="boot-mark" aria-hidden="true">
+      <!-- Inline, so it costs no request. Boxes on a shelf. -->
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="1.8"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5z"/>
+        <path d="M3 7.5 12 12l9-4.5"/>
+        <path d="M12 12v9"/>
+      </svg>
+    </div>
+
+    <h1 class="boot-title">Stockpile</h1>
+    <div class="boot-track" aria-hidden="true"></div>
+    <p class="boot-status" id="boot-status">Loading your inventory…</p>
+  </div>
+
   <!--
     You can customize the "flutter_bootstrap.js" script.
     This is useful to provide a custom configuration to the Flutter loader
@@ -43,5 +224,70 @@
     * https://docs.flutter.dev/platform-integration/web/initialization
   -->
   <script src="flutter_bootstrap.js" async></script>
+
+  <script>
+    (function () {
+      var boot = document.getElementById('boot');
+      var status = document.getElementById('boot-status');
+      if (!boot) return;
+
+      var done = false;
+
+      // WHAT IS SAID, AND WHEN. A single unchanging line for fifteen seconds
+      // reads as a hang. These say what the wait is actually for, and the last
+      // one offers the thing a person on a slow connection can act on.
+      var stages = [
+        { after:  4000, text: 'Still loading — the first visit fetches the app itself.' },
+        { after: 10000, text: 'Slow connection. This is a one-off; the next visit is cached.' },
+        { after: 25000, text: 'This is taking longer than it should. Reloading the page usually clears it.' }
+      ];
+      var timers = stages.map(function (stage) {
+        return window.setTimeout(function () {
+          if (!done && status) status.textContent = stage.text;
+        }, stage.after);
+      });
+
+      function reveal() {
+        if (done) return;
+        done = true;
+        timers.forEach(window.clearTimeout);
+        boot.setAttribute('data-leaving', 'true');
+        // Removed rather than left transparent: an invisible full-screen
+        // element over the app still swallows the first click on it.
+        window.setTimeout(function () {
+          if (boot && boot.parentNode) boot.parentNode.removeChild(boot);
+        }, 280);
+      }
+
+      // THE SIGNAL IS THE VIEW ITSELF. `flutter-view` is the element the
+      // engine mounts into (DomManager.flutterViewTagName), so its arrival
+      // means pixels, not merely that a script finished downloading. Two
+      // frames of grace so the splash covers the first paint rather than
+      // uncovering a half-drawn one.
+      function mounted() {
+        return document.querySelector('flutter-view, flt-glass-pane, flt-scene-host');
+      }
+
+      if (mounted()) {
+        requestAnimationFrame(function () { requestAnimationFrame(reveal); });
+      } else {
+        var observer = new MutationObserver(function () {
+          if (!mounted()) return;
+          observer.disconnect();
+          requestAnimationFrame(function () { requestAnimationFrame(reveal); });
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+
+        // A SPLASH MUST NOT BE ABLE TO TRAP ANYBODY. If the engine never
+        // mounts — a failed chunk, a browser it cannot run in — this uncovers
+        // whatever is underneath after a minute, so the page is at worst
+        // honestly broken rather than permanently "loading".
+        window.setTimeout(function () {
+          observer.disconnect();
+          reveal();
+        }, 60000);
+      }
+    })();
+  </script>
 </body>
 </html>

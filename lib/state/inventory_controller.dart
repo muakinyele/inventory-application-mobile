@@ -2197,25 +2197,96 @@ class InventoryController extends ChangeNotifier {
   }
 
   // --- Categories ----------------------------------------------------------
+  //
+  // THESE WRITE TO THE SERVER, and until this fix they did not. Each one
+  // rebuilt `_settings` and called `notifyListeners()`, so the screen updated
+  // and nothing else did — the category list is loaded from
+  // `GET /inventory/categories` at startup, so a delete or a rename came back
+  // on the next load. It looked like a save that did not stick; it was a save
+  // that never happened. `saveCategories` existed on the API client the whole
+  // time with exactly one caller: `_persistSettingsTo`, reached only when
+  // saving an ITEM taught the picker a new name.
+  //
+  // THE WRITE IS REVERTED WHEN IT FAILS. Elsewhere in this controller a failed
+  // write leaves the optimistic state on screen and reports the error —
+  // reasonable when the screen is showing a value somebody typed and can retry
+  // from. It is the wrong answer here: a category that vanishes from the list
+  // and is still on the server reproduces the exact defect above, one reload
+  // later. Better to put it back and say so.
 
-  void addCategory(String name, int swatchIndex) {
+  /// Persists the category list, and any items the change rewrote.
+  ///
+  /// Items carry their category by NAME, so a rename or a delete has to
+  /// rewrite every item that referenced it — the server's `replaceCategories`
+  /// only touches the category table. There is no bulk item endpoint, so they
+  /// go one PATCH each, in bounded batches: a category with two hundred items
+  /// behind it should not open two hundred simultaneous connections.
+  Future<bool> _commitCategories({
+    required AppSettings previousSettings,
+    required List<Item> previousItems,
+    required List<Item> touched,
+  }) async {
+    try {
+      await _api.saveCategories([
+        for (final name in _settings.categories)
+          (name: name, swatchIndex: _settings.categoryColors[name] ?? 0),
+      ]);
+
+      const batchSize = 8;
+      for (var i = 0; i < touched.length; i += batchSize) {
+        final batch = touched.skip(i).take(batchSize);
+        await Future.wait([
+          for (final item in batch) _api.updateItem(item.id, item),
+        ]);
+      }
+
+      lastWriteError = null;
+      return true;
+    } catch (error) {
+      // Back to exactly what was on screen before, so the list keeps agreeing
+      // with the server rather than with the attempt.
+      _settings = previousSettings;
+      _items = previousItems;
+      lastWriteError = error;
+      debugPrint('Stockpile: could not save the categories: $error');
+      return false;
+    }
+  }
+
+  /// Adds a category. Returns whether it reached the server.
+  Future<bool> addCategory(String name, int swatchIndex) async {
     final trimmed = name.trim();
-    if (trimmed.isEmpty) return;
+    if (trimmed.isEmpty) return false;
     if (_settings.categories.any(
       (c) => c.toLowerCase() == trimmed.toLowerCase(),
     )) {
-      return;
+      return false;
     }
+
+    final previousSettings = _settings;
     _settings = _settings.copyWith(
       categories: [..._settings.categories, trimmed],
       categoryColors: {..._settings.categoryColors, trimmed: swatchIndex},
     );
     notifyListeners();
+
+    final saved = await _commitCategories(
+      previousSettings: previousSettings,
+      previousItems: _items,
+      touched: const [],
+    );
+    notifyListeners();
+    return saved;
   }
 
-  void renameCategory(String from, String to, int swatchIndex) {
+  /// Renames a category and rewrites the items that referenced it, so no item
+  /// is orphaned. Returns whether it reached the server.
+  Future<bool> renameCategory(String from, String to, int swatchIndex) async {
     final trimmed = to.trim();
-    if (trimmed.isEmpty) return;
+    if (trimmed.isEmpty) return false;
+
+    final previousSettings = _settings;
+    final previousItems = _items;
 
     final colors = {..._settings.categoryColors}
       ..remove(from)
@@ -2236,11 +2307,23 @@ class InventoryController extends ChangeNotifier {
               .toList();
     _applyTouched(touched);
     notifyListeners();
+
+    final saved = await _commitCategories(
+      previousSettings: previousSettings,
+      previousItems: previousItems,
+      touched: touched,
+    );
+    notifyListeners();
+    return saved;
   }
 
   /// Removes the category and clears it from the items that used it, which
-  /// leaves their stock untouched and marks them uncategorised.
-  void deleteCategory(String name) {
+  /// leaves their stock untouched and marks them uncategorised. Returns
+  /// whether it reached the server.
+  Future<bool> deleteCategory(String name) async {
+    final previousSettings = _settings;
+    final previousItems = _items;
+
     _settings = _settings.copyWith(
       categories: _settings.categories.where((c) => c != name).toList(),
       categoryColors: {..._settings.categoryColors}..remove(name),
@@ -2253,6 +2336,14 @@ class InventoryController extends ChangeNotifier {
         .toList();
     _applyTouched(touched);
     notifyListeners();
+
+    final saved = await _commitCategories(
+      previousSettings: previousSettings,
+      previousItems: previousItems,
+      touched: touched,
+    );
+    notifyListeners();
+    return saved;
   }
 
   int _supplierOrder(Supplier a, Supplier b) =>

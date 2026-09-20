@@ -71,7 +71,10 @@ jobs:
       - name: Build web
         # The app ships to the browser, so a change that compiles for the VM
         # but not for the web is a broken release, not a broken test.
-        run: flutter build web --no-tree-shake-icons
+        # Icon tree-shaking left ON, as the image builds it. It fails the
+        # build on a runtime-constructed IconData, so running it here is what
+        # catches that before the release rather than on the site.
+        run: flutter build web
 
   # ---------------------------------------------------------------------
   # Dart API
