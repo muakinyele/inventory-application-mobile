@@ -64,9 +64,36 @@ server {
         proxy_cache_bypass 1;
     }
 
-    # Hashed build assets are safe to cache hard: a new build changes the
-    # filename, so a stale one is never requested.
-    location ~* \.(?:js|css|wasm|woff2?|ttf|png|jpg|jpeg|svg|ico)$ {
+    # THE PREMISE OF THIS RULE WAS FALSE, AND IT PINNED THE APP TO ONE BUILD.
+    #
+    # It said "hashed build assets are safe to cache hard: a new build changes
+    # the filename". Flutter web does not fingerprint its filenames. Every
+    # build emits main.dart.js and flutter_bootstrap.js under those exact
+    # names, and they were going out as `immutable, max-age=31536000` — so a
+    # browser that had once loaded the site would not re-request either of
+    # them for a year, whatever was deployed.
+    #
+    # index.html being no-store did not help: it only points at those two
+    # names. Nor did the service worker, because the version it registers is
+    # carried INSIDE flutter_bootstrap.js, which was itself pinned. Old
+    # bootstrap, old worker version, old main.dart.js, indefinitely. Three
+    # deploys landed on the origin, verified byte for byte with curl, while
+    # every returning browser kept running the build from before them.
+    #
+    # So these revalidate now. ETag and Last-Modified make that a conditional
+    # request: 304 and no body when nothing changed, which is what this used
+    # to buy with a year of staleness.
+    location ~* \.(?:js|css|wasm|json|otf|ttf|woff2?|png|jpg|jpeg|svg|ico)$ {
+        add_header Cache-Control "no-cache";
+        add_header X-Content-Type-Options nosniff always;
+        try_files $uri =404;
+    }
+
+    # The engine is the one thing here that IS addressed by version: its files
+    # live under a path that changes with the engine, so a stale one is never
+    # asked for. (The app loads this from the CDN by default; served locally
+    # it caches the same way.)
+    location ^~ /canvaskit/ {
         expires 1y;
         add_header Cache-Control "public, immutable";
         add_header X-Content-Type-Options nosniff always;

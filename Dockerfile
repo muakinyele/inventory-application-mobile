@@ -64,6 +64,27 @@ ARG API_BASE_URL=/api
 RUN flutter build web --release \
       --dart-define=STOCKPILE_API_URL="${API_BASE_URL}"
 
+# STAMP THE BOOTSTRAP URL, so a browser already holding the old one has to ask
+# for this build.
+#
+# The cache headers this image serves now let every file revalidate, but that
+# only governs copies fetched from here on. A browser that loaded the site
+# while flutter_bootstrap.js was going out as `immutable, max-age=31536000`
+# holds it under those terms until 2027 and will not revalidate it — the fix
+# for the header cannot itself be delivered through the file the header
+# pinned. index.html is the way in: it is never cached, and a query string
+# makes a different cache key, so `?v=<hash>` is a miss against the pinned
+# entry and fetches this build's bootstrap. That carries this build's service
+# worker version, which re-fetches the rest.
+#
+# The hash is of main.dart.js, so it changes when and only when the app does:
+# an unchanged rebuild leaves the URL alone and nobody re-downloads anything.
+RUN set -eu; \
+    stamp="$(sha256sum /app/build/web/main.dart.js | cut -c1-12)"; \
+    sed -i "s|src=\"flutter_bootstrap.js\"|src=\"flutter_bootstrap.js?v=${stamp}\"|" \
+      /app/build/web/index.html; \
+    grep -q "flutter_bootstrap.js?v=${stamp}" /app/build/web/index.html
+
 # ---------------------------------------------------------------------------
 # Runtime
 # ---------------------------------------------------------------------------
