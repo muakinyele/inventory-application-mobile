@@ -71,6 +71,26 @@ class FakeInventoryServer {
 
     if (request.method == 'DELETE') return http.Response('', 204);
 
+    // The category write answers with what it stored, as the real route does.
+    // Anything less makes a client that adopts the reply look broken here and
+    // work in production, which is the wrong way round for a test double.
+    if (request.method == 'PUT' && path == '/api/inventory/categories') {
+      final body = jsonDecode(request.body) as Map<String, dynamic>;
+      final seen = <String>{};
+      return _ok({
+        'categories': [
+          for (final raw in (body['categories'] as List? ?? const []))
+            if (raw is Map)
+              if (((raw['name'] as String?) ?? '').trim() case final name
+                  when name.isNotEmpty && seen.add(name))
+                {
+                  'name': name,
+                  'swatchIndex': (raw['swatchIndex'] as num?)?.toInt() ?? 0,
+                },
+        ],
+      });
+    }
+
     // A well-formed answer, not a computed one: the count that comes back is
     // whatever was sent. A test asserting on the resulting quantity is
     // asserting the server's arithmetic and belongs in the server suite; what

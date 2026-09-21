@@ -450,18 +450,39 @@ class InventoryApi {
     ];
   }
 
-  Future<void> saveCategories(
+  /// Writes the category list and returns what the server now holds.
+  ///
+  /// The response is the authoritative list, and the caller is expected to
+  /// adopt it rather than keep the list it sent: the server drops blanks and
+  /// collapses repeats, so the two are not always the same, and a screen that
+  /// keeps its own version is how a category appears to save and then comes
+  /// back changed on the next load.
+  /// Null when the response carried no list at all, which is not the same as
+  /// an empty one: deleting the last category legitimately returns none, and
+  /// adopting `[]` from a reply that simply did not mention categories would
+  /// erase the list rather than mirror it.
+  Future<List<({String name, int swatchIndex})>?> saveCategories(
     List<({String name, int swatchIndex})> categories,
-  ) => _auth.send(
-    'PUT',
-    '/inventory/categories',
-    body: {
-      'categories': [
-        for (final c in categories)
-          {'name': c.name, 'swatchIndex': c.swatchIndex},
-      ],
-    },
-  );
+  ) async {
+    final body = await _auth.send(
+      'PUT',
+      '/inventory/categories',
+      body: {
+        'categories': [
+          for (final c in categories)
+            {'name': c.name, 'swatchIndex': c.swatchIndex},
+        ],
+      },
+    );
+    if (body['categories'] is! List) return null;
+    return [
+      for (final row in _list(body['categories']))
+        (
+          name: row['name'] as String? ?? '',
+          swatchIndex: (row['swatchIndex'] as num?)?.toInt() ?? 0,
+        ),
+    ];
+  }
 
   /// One picker list — locations, units — in the order the workspace set.
   Future<List<String>> lookupValues(String kind) async {

@@ -545,19 +545,35 @@ class _SettingsPageState extends State<SettingsPage> {
             final values = _listFor(settings, kind);
             final p = sheetContext.palette;
 
-            void add() {
+            // AWAITED, AND REPORTED. These went out unawaited into a save
+            // that swallowed its own failures, so an entry that never reached
+            // the server still cleared the field and sat in the list until the
+            // next load took it away again. The categories list is edited
+            // here as well as on its own page, and this is the half that said
+            // nothing.
+            Future<void> add() async {
               final value = entry.text.trim();
               if (value.isEmpty) return;
-              if (values.contains(value)) {
+              // Case-insensitive, because the server keys a category on its
+              // name and "Parts" beside "parts" is two rows that read as one.
+              if (values.any((v) => v.toLowerCase() == value.toLowerCase())) {
                 _notify(
                   'That entry already exists.',
                   tone: MessageTone.warning,
                 );
                 return;
               }
-              controller.updateSettings(
+              final saved = await controller.updateSettings(
                 _withList(settings, kind, [...values, value]),
               );
+              if (!saved) {
+                await _notify(
+                  '"$value" could not be saved, so it was not added. '
+                  'Check your connection and try again.',
+                  tone: MessageTone.failure,
+                );
+                return;
+              }
               setSheetState(() => entry.clear());
             }
 
@@ -607,14 +623,22 @@ class _SettingsPageState extends State<SettingsPage> {
                           for (final value in values)
                             InputChip(
                               label: Text(value),
-                              onDeleted: () {
-                                controller.updateSettings(
+                              onDeleted: () async {
+                                final saved = await controller.updateSettings(
                                   _withList(
                                     settings,
                                     kind,
                                     values.where((v) => v != value).toList(),
                                   ),
                                 );
+                                if (!saved) {
+                                  await _notify(
+                                    '"$value" could not be removed, so it is '
+                                    'still here. Check your connection and '
+                                    'try again.',
+                                    tone: MessageTone.failure,
+                                  );
+                                }
                                 setSheetState(() {});
                               },
                             ),

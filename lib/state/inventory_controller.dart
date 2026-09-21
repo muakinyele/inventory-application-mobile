@@ -715,7 +715,9 @@ class InventoryController extends ChangeNotifier {
     try {
       final saved = await _api.createItem(draft);
       _items = [saved, ..._items.where((i) => i.id != saved.id)];
-      if (_learnOptions(saved)) await _persistSettingsTo();
+      if (_learnOptions(saved)) {
+        await _persistSettingsTo(replaceCategories: false);
+      }
       lastWriteError = null;
       notifyListeners();
       return saved;
@@ -740,7 +742,9 @@ class InventoryController extends ChangeNotifier {
     try {
       final saved = await _api.updateItem(id, draft);
       _items = _items.map((i) => i.id == id ? saved : i).toList();
-      if (_learnOptions(saved)) await _persistSettingsTo();
+      if (_learnOptions(saved)) {
+        await _persistSettingsTo(replaceCategories: false);
+      }
       lastWriteError = null;
     } catch (error) {
       lastWriteError = error;
@@ -765,22 +769,75 @@ class InventoryController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Writes the picker lists back after an item taught us a new one.
+  /// Writes the picker lists back, and says whether they reached the server.
   ///
   /// Shared, these belong to the workspace rather than the device: a category
   /// somebody types on one screen has to appear in everybody else's picker.
-  Future<void> _persistSettingsTo() async {
+  ///
+  /// THE RETURN VALUE IS NOT DECORATION. This swallowed every failure and only
+  /// printed, on the reasoning that an item save had already succeeded and the
+  /// picker would catch up on the next load. That is true of the one caller it
+  /// was written for and false of the other: the settings sheet adds and
+  /// removes CATEGORIES through here, and a silent failure there is a category
+  /// that sits on screen, never reaches the server, and is gone on the next
+  /// load — reported as "the category is not saving after inputting".
+  Future<bool> _persistSettingsTo({bool replaceCategories = true}) async {
     try {
-      await _api.saveCategories([
-        for (final name in _settings.categories)
+      // ADD-ONLY WHEN AN ITEM TAUGHT US THE NAME. The endpoint replaces the
+      // whole list, so writing this device's copy of it deletes anything
+      // another device added since this one loaded — and the item path has no
+      // business deleting a category at all: its entire purpose is to make
+      // sure a name somebody typed into an item exists in the picker. Saving
+      // an item on a tab left open all morning was enough to erase a category
+      // a colleague added on theirs, with nothing on either screen to say so.
+      //
+      // The settings screen still replaces, because removing an entry there is
+      // exactly what the user asked for.
+      final names = replaceCategories
+          ? _settings.categories
+          : await _categoriesUnion();
+
+      final stored = await _api.saveCategories([
+        for (final name in names)
           (name: name, swatchIndex: _settings.categoryColors[name] ?? 0),
       ]);
+      _adoptCategories(stored);
       await _api.saveLookupValues('location', _settings.locations);
       await _api.saveLookupValues('unit', _settings.units);
+      return true;
     } catch (error) {
-      // The item itself saved; the picker will catch up on the next load.
       debugPrint('Stockpile: could not save the picker lists: $error');
+      return false;
     }
+  }
+
+  /// The server's category list with this device's additions folded in.
+  ///
+  /// Read first, so the write that follows can only ever add. The server's
+  /// order is kept and new names go on the end, which is where the picker
+  /// shows them.
+  Future<List<String>> _categoriesUnion() async {
+    final onServer = await _api.categories();
+    final names = [for (final c in onServer) c.name];
+    final known = names.toSet();
+    for (final name in _settings.categories) {
+      if (known.add(name)) names.add(name);
+    }
+    return names;
+  }
+
+  /// Takes the server's category list as the truth after a write.
+  ///
+  /// The server drops blank names and collapses repeats, so what it stored is
+  /// not always what was sent. Keeping the sent version is how a category
+  /// appears to save and then changes on the next load; this closes that gap
+  /// at the moment of the write rather than one reload later.
+  void _adoptCategories(List<({String name, int swatchIndex})>? stored) {
+    if (stored == null) return;
+    _settings = _settings.copyWith(
+      categories: [for (final c in stored) c.name],
+      categoryColors: {for (final c in stored) c.name: c.swatchIndex},
+    );
   }
 
   /// Creates or edits a supplier.
@@ -2227,10 +2284,11 @@ class InventoryController extends ChangeNotifier {
     required List<Item> touched,
   }) async {
     try {
-      await _api.saveCategories([
+      final stored = await _api.saveCategories([
         for (final name in _settings.categories)
           (name: name, swatchIndex: _settings.categoryColors[name] ?? 0),
       ]);
+      _adoptCategories(stored);
 
       const batchSize = 8;
       for (var i = 0; i < touched.length; i += batchSize) {
@@ -2360,7 +2418,8 @@ class InventoryController extends ChangeNotifier {
 
   // --- Settings and bulk ---------------------------------------------------
 
-  Future<void> updateSettings(AppSettings next) async {
+  /// Saves the workspace settings. Returns whether they reached the server.
+  Future<bool> updateSettings(AppSettings next) async {
     _settings = next;
     notifyListeners();
 
@@ -2379,13 +2438,23 @@ class InventoryController extends ChangeNotifier {
         'taxLabel': next.taxLabel,
         'receiptFooter': next.receiptFooter,
       });
-      await _persistSettingsTo();
+      // Reported, not printed. The categories, locations and units live here
+      // as well as on their own screens, and a caller that is told nothing
+      // cannot tell the user anything either.
+      if (!await _persistSettingsTo()) {
+        lastWriteError = StateError('The picker lists did not save.');
+        notifyListeners();
+        return false;
+      }
       lastWriteError = null;
     } catch (error) {
       lastWriteError = error;
       debugPrint('Stockpile: could not save the settings: $error');
+      notifyListeners();
+      return false;
     }
     notifyListeners();
+    return true;
   }
 
   void loadSampleData() => _replace(
