@@ -773,4 +773,133 @@ void main() {
       );
     });
   });
+
+  // ------------------------------------------------------------------
+  // Categories
+  //
+  // The list is REPLACED by each write and the name is the primary key, so
+  // the payload has to be a set before it reaches the insert. Both ways it
+  // could fail to be one were reachable from the app, and both surfaced to
+  // the user as the same thing: a category that would not save.
+  // ------------------------------------------------------------------
+  group('categories', () {
+    test(
+      'a repeated name is collapsed rather than failing the write',
+      () async {
+        // Renaming one category onto another's name sends the same name twice.
+        // That used to fail the batch insert outright — a 500 the app reported
+        // as "the category could not be saved", for a payload naming only
+        // categories the workspace already had.
+        final session = await admin();
+
+        final response = await server.put(
+          '/inventory/categories',
+          accessToken: session.accessToken,
+          body: {
+            'categories': [
+              {'name': 'Parts', 'swatchIndex': 1},
+              {'name': 'Parts', 'swatchIndex': 4},
+            ],
+          },
+        );
+
+        expect(response.statusCode, 200);
+        final stored = response.json['categories'] as List;
+        expect(stored, hasLength(1));
+        expect(
+          (stored.single as Map)['swatchIndex'],
+          1,
+          reason: 'the first occurrence wins, so the order sent is kept',
+        );
+      },
+    );
+
+    test('a blank name is dropped rather than stored', () async {
+      // A nameless category is a blank row in the list with no way to select,
+      // rename or delete it.
+      final session = await admin();
+
+      await server.put(
+        '/inventory/categories',
+        accessToken: session.accessToken,
+        body: {
+          'categories': [
+            {'name': 'Parts', 'swatchIndex': 1},
+            {'name': '   ', 'swatchIndex': 0},
+          ],
+        },
+      );
+
+      final read = await server.get(
+        '/inventory/categories',
+        accessToken: session.accessToken,
+      );
+      final stored = read.json['categories'] as List;
+      expect(stored, hasLength(1));
+      expect((stored.single as Map)['name'], 'Parts');
+    });
+
+    test('names are trimmed, and positions close the gaps', () async {
+      final session = await admin();
+
+      final response = await server.put(
+        '/inventory/categories',
+        accessToken: session.accessToken,
+        body: {
+          'categories': [
+            {'name': '  Parts  ', 'swatchIndex': 1},
+            {'name': '', 'swatchIndex': 0},
+            {'name': 'Tools', 'swatchIndex': 2},
+          ],
+        },
+      );
+
+      final stored = response.json['categories'] as List;
+      expect([for (final c in stored) (c as Map)['name']], ['Parts', 'Tools']);
+      expect(
+        [for (final c in stored) (c as Map)['position']],
+        [0, 1],
+        reason: 'a dropped entry must not leave a hole in the order',
+      );
+    });
+
+    test('the write answers with the list it stored', () async {
+      // The client adopts this reply rather than keeping what it sent, which
+      // is what stops a category appearing to save and then changing on the
+      // next load.
+      final session = await admin();
+
+      final response = await server.put(
+        '/inventory/categories',
+        accessToken: session.accessToken,
+        body: {
+          'categories': [
+            {'name': 'Drinks', 'swatchIndex': 3},
+          ],
+        },
+      );
+
+      final read = await server.get(
+        '/inventory/categories',
+        accessToken: session.accessToken,
+      );
+      expect(response.json['categories'], equals(read.json['categories']));
+    });
+
+    test('staff cannot change the categories', () async {
+      final staff = await server.signedInUser(email: 'hand@example.com');
+
+      final response = await server.put(
+        '/inventory/categories',
+        accessToken: staff.accessToken,
+        body: {
+          'categories': [
+            {'name': 'Parts', 'swatchIndex': 1},
+          ],
+        },
+      );
+
+      expect(response.statusCode, 403);
+    });
+  });
 }

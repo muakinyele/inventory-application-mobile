@@ -43,6 +43,10 @@ class _Server {
   bool conflictNext = false;
   bool failNext = false;
 
+  /// What the category table holds, so a test can stage another device having
+  /// added one since this controller loaded.
+  List<String> categoriesOnServer = const [];
+
   http.Client client() => MockClient((request) async {
     final route = '${request.method} ${request.url.path}';
     calls.add(route);
@@ -343,7 +347,26 @@ class _Server {
     }
 
     if (route == 'PUT /api/inventory/categories') {
-      return _ok({'categories': <Object?>[]});
+      // Echoed the way the real route answers: the stored list, blanks
+      // dropped and repeats collapsed. It used to reply with an empty list
+      // whatever it was sent, which modelled a server that silently discarded
+      // every category — so a client that trusts the reply, as it now does,
+      // would have been tested against the one answer the real server never
+      // gives.
+      final body = jsonDecode(request.body) as Map<String, dynamic>;
+      final seen = <String>{};
+      return _ok({
+        'categories': [
+          for (final raw in (body['categories'] as List? ?? const []))
+            if (raw is Map)
+              if (((raw['name'] as String?) ?? '').trim() case final name
+                  when name.isNotEmpty && seen.add(name))
+                {
+                  'name': name,
+                  'swatchIndex': (raw['swatchIndex'] as num?)?.toInt() ?? 0,
+                },
+        ],
+      });
     }
 
     if (route.startsWith('PUT /api/inventory/lookups/')) {
@@ -367,6 +390,15 @@ class _Server {
 
     if (route == 'GET /api/inventory/movements') {
       return _ok({'movements': <Object?>[]});
+    }
+
+    if (route == 'GET /api/inventory/categories') {
+      return _ok({
+        'categories': [
+          for (final name in categoriesOnServer)
+            {'name': name, 'swatchIndex': 0},
+        ],
+      });
     }
 
     if (route.contains('/inventory/items/')) {
@@ -1360,6 +1392,82 @@ void main() {
 
       expect(added, isTrue);
       expect(controller.lastWriteError, isNull);
+    });
+
+    test('the list the server stored is the one left on screen', () async {
+      // The server drops blanks and collapses repeats, so what it stored is
+      // not always what was sent. Keeping the sent version is how a category
+      // appears to save and then changes on the next load.
+      final server = _Server();
+      final controller = await _controller(server);
+
+      await controller.updateSettings(
+        controller.settings.copyWith(categories: ['Parts', '  ', 'Tools']),
+      );
+
+      expect(
+        controller.settings.categories,
+        ['Parts', 'Tools'],
+        reason: 'the blank the server refused must not sit in the list',
+      );
+    });
+
+    // THE SECOND PLACE CATEGORIES ARE EDITED. The settings sheet adds and
+    // removes them through `updateSettings`, which swallowed every failure and
+    // only printed — so an entry that never reached the server stayed on
+    // screen until the next load took it away. Reported as "the category is
+    // not saving after inputting".
+    test('a settings write the server refused is reported', () async {
+      final server = _Server();
+      final controller = await _controller(server);
+      server.failNext = true;
+
+      final saved = await controller.updateSettings(
+        controller.settings.copyWith(categories: ['Parts', 'Fasteners']),
+      );
+
+      expect(saved, isFalse, reason: 'the caller has to be able to say so');
+      expect(controller.lastWriteError, isNotNull);
+    });
+
+    test(
+      'saving an item cannot delete a category it never knew about',
+      () async {
+        // The category endpoint replaces the whole list, so an item save that
+        // wrote this device's copy of it erased anything added elsewhere since
+        // this device loaded. The item path exists only to teach the picker a
+        // new name; it has no business removing one.
+        final server = _Server();
+        final controller = await _controller(server);
+        server.categoriesOnServer = ['Added Elsewhere'];
+
+        await controller.updateItem(
+          'i1',
+          controller.byId('i1')!.copyWith(category: 'Brand New'),
+        );
+
+        final sent = server.lastBodyFor['PUT /api/inventory/categories']!;
+        final names = [
+          for (final c in (sent['categories'] as List)) (c as Map)['name'],
+        ];
+        expect(
+          names,
+          containsAll(<String>['Added Elsewhere', 'Brand New']),
+          reason: 'the write must fold in what the server already had',
+        );
+      },
+    );
+
+    test('a settings write that succeeded says so', () async {
+      final server = _Server();
+      final controller = await _controller(server);
+
+      final saved = await controller.updateSettings(
+        controller.settings.copyWith(categories: ['Parts']),
+      );
+
+      expect(saved, isTrue);
+      expect(controller.settings.categories, ['Parts']);
     });
   });
 }

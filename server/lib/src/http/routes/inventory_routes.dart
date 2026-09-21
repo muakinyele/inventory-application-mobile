@@ -251,17 +251,35 @@ Router inventoryRoutes({required InventoryService inventory}) {
     final raw = body['categories'];
     if (raw is! List) throw ApiError.badRequest('categories must be a list.');
 
+    // NAME IS THE PRIMARY KEY, so the payload has to be a set before it
+    // reaches the batch insert. It was taken at face value, and both ways that
+    // can go wrong were reachable from the client: a blank name stored a
+    // nameless category that then drew a blank row in the list, and a repeated
+    // name failed the whole insert — a 500 that the app reported as "the
+    // category could not be saved", for a payload that only ever names
+    // categories the user already has. Renaming one category onto another's
+    // name is how the repeat arises.
+    //
+    // First occurrence wins, so the position the client sent is kept.
+    final seen = <String>{};
+    final companions = <CategoriesCompanion>[];
+    for (var i = 0; i < raw.length; i++) {
+      if (raw[i] case final Map entry) {
+        final name = (entry['name'] as String? ?? '').trim();
+        if (name.isEmpty || !seen.add(name)) continue;
+        companions.add(
+          CategoriesCompanion.insert(
+            name: name,
+            swatchIndex: (entry['swatchIndex'] as num?)?.toInt() ?? 0,
+            position: Value(companions.length),
+          ),
+        );
+      }
+    }
+
     // Replaced wholesale because the client owns the order, and a per-row
     // update cannot express "this one moved above that one".
-    await inventory.replaceCategories([
-      for (var i = 0; i < raw.length; i++)
-        if (raw[i] case final Map entry)
-          CategoriesCompanion.insert(
-            name: entry['name'] as String? ?? '',
-            swatchIndex: (entry['swatchIndex'] as num?)?.toInt() ?? 0,
-            position: Value(i),
-          ),
-    ]);
+    await inventory.replaceCategories(companions);
     return jsonResponse({
       'categories': [
         for (final c in await inventory.categories()) categoryJson(c),
