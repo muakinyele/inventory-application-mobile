@@ -507,8 +507,34 @@ class _ReceiptDetailPageState extends State<ReceiptDetailPage> {
     field.dispose();
 
     if (amount == null || amount <= 0) return;
-    controller.settleReceipt(receipt.id, amount, method: method);
-    if (mounted) _notify('${money(amount, currency)} recorded');
+
+    // Awaited, and reported. This said "recorded" the instant it was tapped,
+    // for a write that never left the device — and now that it does leave,
+    // the server decides how much of the offer was actually owed. It answers
+    // with what it took; the difference is the customer's change.
+    final applied = await controller.settleReceipt(
+      receipt.id,
+      amount,
+      method: method,
+    );
+    if (!mounted) return;
+
+    if (applied == null) {
+      await _notify(
+        'That payment was not recorded, so nothing was changed. '
+        'Check your connection and try again.',
+        tone: MessageTone.failure,
+      );
+      return;
+    }
+
+    final change = amount - applied;
+    _notify(
+      change < 0.005
+          ? '${money(applied, currency)} recorded'
+          : '${money(applied, currency)} recorded · '
+                '${money(change, currency)} change',
+    );
   }
 
   Future<void> _refund(InventoryController controller, Receipt receipt) async {

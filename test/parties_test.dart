@@ -55,24 +55,30 @@ void main() {
       expect(c.itemCountForSupplier(supplier.id), 1);
     });
 
-    test('deleting one unlinks its items but keeps the name as text', () async {
-      final c = await newController();
-      final supplier = await c.createSupplier(supplierDraft());
-      final item = await c.createItem(
-        draft().copyWith(supplierId: supplier.id),
-      );
+    // Archiving, not deleting: purchase orders reference suppliers and those
+    // references have to stay resolvable, so the app archives and there is no
+    // delete. This used to test a `deleteSupplier` the UI never called.
+    test(
+      'archiving one unlinks its items but keeps the name as text',
+      () async {
+        final c = await newController();
+        final supplier = await c.createSupplier(supplierDraft());
+        final item = await c.createItem(
+          draft().copyWith(supplierId: supplier.id),
+        );
 
-      c.deleteSupplier(supplier.id);
+        await c.archiveSupplier(supplier.id);
 
-      final after = c.byId(item.id)!;
-      expect(after.supplierId, isNull, reason: 'no dangling reference');
-      expect(
-        after.supplier,
-        'Nexa Components',
-        reason: 'history stays readable',
-      );
-      expect(c.suppliers, isEmpty);
-    });
+        final after = c.byId(item.id)!;
+        expect(after.supplierId, isNull, reason: 'no dangling reference');
+        expect(
+          after.supplier,
+          'Nexa Components',
+          reason: 'history stays readable',
+        );
+        expect(c.suppliers, isEmpty);
+      },
+    );
   });
 
   group('customers', () {
@@ -82,12 +88,13 @@ void main() {
       expect(priceTierFrom('distributor'), PriceTier.distributor);
     });
 
-    test('deleting one removes it', () async {
+    test('archiving one takes it out of the pickers', () async {
       final c = await newController();
       final customer = await c.createCustomer(customerDraft());
 
-      c.deleteCustomer(customer.id);
+      final archived = await c.archiveCustomer(customer.id);
 
+      expect(archived, isTrue);
       expect(c.customers, isEmpty);
     });
   });

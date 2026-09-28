@@ -564,12 +564,15 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
     reason.dispose();
     if (confirmed != true) return;
 
-    final done = controller.cancelInvoice(invoice.id, reason: text);
+    // Awaited: the cancellation reaches the server now, so it can fail — and
+    // reporting success before the request has been answered is what made the
+    // old version look like it worked.
+    final done = await controller.cancelInvoice(invoice.id, reason: text);
     if (mounted) {
       _notify(
         done
             ? '${invoice.reference} cancelled'
-            : 'That invoice cannot be cancelled',
+            : 'That invoice could not be cancelled, so nothing was changed.',
         tone: done ? MessageTone.success : MessageTone.failure,
       );
     }

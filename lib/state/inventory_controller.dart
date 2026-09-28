@@ -100,9 +100,31 @@ class InventoryController extends ChangeNotifier {
   Map<String, int> _sequences;
   AppSettings _settings;
 
-  /// Set when a database write fails, so a screen can surface it rather than
-  /// letting the UI silently diverge from what is on disk.
+  /// Set when a write fails, so the screen can surface it rather than letting
+  /// the UI silently diverge from what the server holds.
+  ///
+  /// IT WAS SET IN FORTY-FIVE PLACES AND SHOWN IN NONE. Every failed write in
+  /// this app recorded itself here and then said nothing: the optimistic
+  /// change stayed on screen, the server never heard, and the row came back on
+  /// the next load. The three screens that did report a failure each checked a
+  /// return value of their own; everything else — archiving a supplier, saving
+  /// an item, settling a receipt, cancelling an order — failed in silence.
+  ///
+  /// [InventoryStatusBanner] watches it now, so a failure anywhere is visible
+  /// without every caller having to remember. A screen that can say something
+  /// more specific still should; this is the floor, not the ceiling.
   Object? lastWriteError;
+
+  /// Dismisses the write-failure banner.
+  ///
+  /// Clearing it does not retry anything and does not make the change land —
+  /// it only acknowledges the message, which is why the banner says what is
+  /// still unsaved rather than offering a button that looks like a fix.
+  void clearWriteError() {
+    if (lastWriteError == null) return;
+    lastWriteError = null;
+    notifyListeners();
+  }
 
   List<Item> get items => List.unmodifiable(_items);
   List<Movement> get movements => List.unmodifiable(_movements);
@@ -1076,9 +1098,18 @@ class InventoryController extends ChangeNotifier {
   ///
   /// Items linked to the supplier keep its name as free text, so the
   /// catalogue still reads properly with nothing left to click through to.
-  Future<void> archiveSupplier(String id) async {
+  /// Archives a supplier. Returns whether it reached the server.
+  ///
+  /// THE ROW USED TO GO WHATEVER HAPPENED. `_saveSupplierOnServer` catches its
+  /// own failure and returns the payload it was handed, so the caller cannot
+  /// tell a save from a refusal — and this then removed the supplier from the
+  /// list and notified. Archiving with the server unreachable therefore took
+  /// the supplier off the screen and left it untouched on the server, which is
+  /// the same lie the category list used to tell: gone until the next load
+  /// brings it back.
+  Future<bool> archiveSupplier(String id) async {
     final supplier = supplierById(id);
-    if (supplier == null) return;
+    if (supplier == null) return false;
 
     final now = DateTime.now();
     for (final item in _items.where((i) => i.supplierId == id).toList()) {
@@ -1111,13 +1142,22 @@ class InventoryController extends ChangeNotifier {
       ),
       id: id,
     );
+
+    // Checked rather than assumed, because the save reports failure only here.
+    if (lastWriteError != null) {
+      notifyListeners();
+      return false;
+    }
+
     _suppliers = _suppliers.where((s) => s.id != id).toList();
     notifyListeners();
+    return true;
   }
 
-  Future<void> archiveCustomer(String id) async {
+  /// Archives a customer. Returns whether it reached the server.
+  Future<bool> archiveCustomer(String id) async {
     final customer = customerById(id);
-    if (customer == null) return;
+    if (customer == null) return false;
 
     await _saveCustomerOnServer(
       _api,
@@ -1136,8 +1176,15 @@ class InventoryController extends ChangeNotifier {
       ),
       id: id,
     );
+
+    if (lastWriteError != null) {
+      notifyListeners();
+      return false;
+    }
+
     _customers = _customers.where((c) => c.id != id).toList();
     notifyListeners();
+    return true;
   }
 
   /// Re-reads what a document just changed.
@@ -1147,7 +1194,10 @@ class InventoryController extends ChangeNotifier {
   /// per item to populate something usually off screen.
   Future<void> _refreshStockView() async {
     try {
-      final page = await _api.items();
+      // allItems, not items: the plain call stops at one page of 500, so a
+      // larger catalogue lost everything past that on the first document
+      // anybody raised — the same truncation the opening load had.
+      final page = await _api.allItems();
       _items = page.items;
       _movements = await _api.movements(limit: maxMovements);
     } catch (error) {
@@ -1778,17 +1828,42 @@ class InventoryController extends ChangeNotifier {
   /// Records money received against a receipt that was left owing — settling
   /// an account sale. Never takes the paid figure past the total, so a
   /// receipt can not end up showing change it never gave.
-  void settleReceipt(String id, double amount, {PaymentMethod? method}) {
+  /// Takes money against an outstanding receipt. Returns what was applied.
+  ///
+  /// THIS NEVER LEFT THE DEVICE EITHER, and unlike the invoice cancellation it
+  /// had nowhere to go: there was no endpoint at all. So a receipt left owing
+  /// was marked paid on the till's own screen, the server never heard, and the
+  /// next load showed it outstanding again — with the money already in the
+  /// drawer.
+  ///
+  /// The server holds the arithmetic now, as it does for an invoice payment:
+  /// it adds rather than overwrites, so two tills settling the same receipt
+  /// accumulate instead of racing, and it caps the amount at the balance.
+  /// Null when the write was refused.
+  Future<double?> settleReceipt(
+    String id,
+    double amount, {
+    PaymentMethod? method,
+  }) async {
     final receipt = receiptById(id);
-    if (receipt == null || amount <= 0 || !receipt.status.countsAsSale) return;
+    if (receipt == null || amount <= 0 || !receipt.status.countsAsSale) {
+      return null;
+    }
 
-    final updated = receipt.copyWith(
-      amountPaid: receipt.amountPaid + amount.clamp(0, receipt.balanceDue),
-      method: method,
-      updatedAt: DateTime.now(),
-    );
-    _receipts = _receipts.map((r) => r.id == id ? updated : r).toList();
-    notifyListeners();
+    try {
+      final result = await _api.settleReceipt(id, amount, method: method?.name);
+      _receipts = _receipts
+          .map((r) => r.id == id ? result.receipt : r)
+          .toList();
+      lastWriteError = null;
+      notifyListeners();
+      return result.applied;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not settle the receipt: $error');
+      notifyListeners();
+      return null;
+    }
   }
 
   /// Removes a voided receipt from the file. Only a void is ever deletable:
@@ -1964,7 +2039,20 @@ class InventoryController extends ChangeNotifier {
   /// arrived the document has a history worth keeping. A cancellation puts
   /// back exactly the stock the invoice took, and nothing when it never moved
   /// any.
-  bool cancelInvoice(String id, {String reason = ''}) {
+  ///
+  /// THIS NEVER LEFT THE DEVICE. It put the stock back, wrote the movements
+  /// and marked the invoice cancelled — all in memory, then notified. The
+  /// server was never told, though `POST /documents/invoices/<id>/cancel` has
+  /// been there the whole time and `InventoryApi.cancelInvoice` with it. So
+  /// the screen showed a cancelled invoice and stock back on the shelf, and
+  /// the next load showed the invoice still live and the stock still gone —
+  /// having meanwhile told the user a count that was never true anywhere but
+  /// on their own screen.
+  ///
+  /// The server owns the whole operation now, as it does for issuing one: it
+  /// decides what goes back, writes the movements, and answers with the
+  /// document. This adopts that answer rather than computing its own.
+  Future<bool> cancelInvoice(String id, {String reason = ''}) async {
     final invoice = invoiceById(id);
     if (invoice == null ||
         invoice.status != InvoiceStatus.open ||
@@ -1972,55 +2060,22 @@ class InventoryController extends ChangeNotifier {
       return false;
     }
 
-    final now = DateTime.now();
-    final touchedItems = <Item>[];
-    final movements = <Movement>[];
-    final binWrites = <String, Map<String, int>>{};
-
-    if (invoice.movesStock) {
-      // Summed by item first: an invoice may name the same item on two lines,
-      // and each has to go back against the running total.
-      final byItem = <String, int>{};
-      for (final line in invoice.lines) {
-        if (line.quantity <= 0) continue;
-        byItem[line.itemId] = (byItem[line.itemId] ?? 0) + line.quantity;
-      }
-      for (final entry in byItem.entries) {
-        final item = byId(entry.key);
-        if (item == null) continue;
-        final after = item.quantity + entry.value;
-        final updatedItem = item.copyWith(quantity: after, updatedAt: now);
-        touchedItems.add(updatedItem);
-        _putLevels(item.id, _settled(item.id, entry.value, item.location));
-        binWrites[item.id] = _levels[item.id] ?? const <String, int>{};
-        movements.add(
-          _movement(
-            updatedItem,
-            MovementKind.stockIn,
-            item.quantity,
-            after,
-            'Cancelled ${invoice.reference}',
-            documentId: invoice.id,
-          ),
-        );
-      }
+    try {
+      final saved = await _api.cancelInvoice(id, reason: reason);
+      _invoices = _invoices.map((i) => i.id == id ? saved : i).toList();
+      // The stock and the movements are the server's answer too: a
+      // cancellation that moved stock changed counts this device now has to
+      // re-read rather than recalculate.
+      if (invoice.movesStock) await _refreshStockView();
+      lastWriteError = null;
+      notifyListeners();
+      return true;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not cancel the invoice: $error');
+      notifyListeners();
+      return false;
     }
-
-    final updated = invoice.copyWith(
-      status: InvoiceStatus.cancelled,
-      closedAt: now,
-      cancelledReason: reason,
-      updatedAt: now,
-    );
-
-    _applyTouched(touchedItems);
-    for (final movement in movements) {
-      _record(movement);
-    }
-    _invoices = _invoices.map((i) => i.id == id ? updated : i).toList();
-    notifyListeners();
-
-    return true;
   }
 
   /// Removes a cancelled invoice from the file. Only a cancellation is ever

@@ -25,6 +25,10 @@ class FakeInventoryServer {
   final calls = <String>[];
   int _nextId = 1;
 
+  /// Makes the next write fail, so a test can check what the app does when a
+  /// save does not land — which is where the quiet bugs live.
+  bool failNextWrite = false;
+
   String _id(Map<String, dynamic> body, String fallbackPrefix) {
     final sent = body['id'];
     if (sent is String && sent.isNotEmpty) return sent;
@@ -34,6 +38,17 @@ class FakeInventoryServer {
   http.Client client() => MockClient((request) async {
     final route = '${request.method} ${request.url.path}';
     calls.add(route);
+
+    if (failNextWrite && request.method != 'GET') {
+      failNextWrite = false;
+      return http.Response(
+        jsonEncode({
+          'error': {'code': 'internal_error', 'message': 'Nope.'},
+        }),
+        500,
+        headers: {'content-type': 'application/json'},
+      );
+    }
     final body = request.body.isEmpty
         ? <String, dynamic>{}
         : jsonDecode(request.body) as Map<String, dynamic>;
@@ -141,6 +156,30 @@ class FakeInventoryServer {
     if (path == '/api/documents/receipts') {
       return _ok(echo('receipt', 'rcp-', {'reference': 'RC-0001'}));
     }
+    // Settling a receipt. Thin like the rest of this fake: it answers with
+    // what it was told, capped at nothing, because the capping-at-the-balance
+    // arithmetic is the server's and is tested there. What a client test can
+    // usefully assert here is that the write LEFT, and that the answer was
+    // adopted rather than recomputed.
+    if (path.startsWith('/api/documents/receipts/') &&
+        path.endsWith('/payments')) {
+      final body = jsonDecode(request.body) as Map<String, dynamic>;
+      final amount = (body['amount'] as num?)?.toDouble() ?? 0;
+      final id = path.split('/')[4];
+      return _ok({
+        'receipt': {
+          'id': id,
+          'reference': 'RC-0001',
+          'amountPaid': amount,
+          'lines': <Object?>[],
+          'issuedAt': DateTime.now().toIso8601String(),
+          'createdAt': DateTime.now().toIso8601String(),
+          'updatedAt': DateTime.now().toIso8601String(),
+        },
+        'applied': amount,
+      });
+    }
+
     if (path == '/api/documents/purchase-orders') {
       return _ok(echo('purchaseOrder', 'po-', {'reference': 'PO-0001'}));
     }

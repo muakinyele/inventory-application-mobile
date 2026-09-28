@@ -333,6 +333,28 @@ class InventoryApi {
     );
   }
 
+  /// Takes money against an outstanding receipt.
+  ///
+  /// The counter twin of [recordInvoicePayment], and added for the same reason
+  /// that one exists: the server adds to the running total rather than being
+  /// told what it is, and caps the amount at the balance. [applied] is what
+  /// was actually taken; the difference is the customer's change.
+  Future<({Receipt receipt, double applied})> settleReceipt(
+    String id,
+    double amount, {
+    String? method,
+  }) async {
+    final body = await _auth.send(
+      'POST',
+      '/documents/receipts/$id/payments',
+      body: {'amount': amount, 'method': ?method},
+    );
+    return (
+      receipt: receiptFromJson(body['receipt'] as Map<String, dynamic>),
+      applied: (body['applied'] as num?)?.toDouble() ?? 0,
+    );
+  }
+
   Future<List<Receipt>> receipts({String? status}) async {
     final body = await _auth.send(
       'GET',

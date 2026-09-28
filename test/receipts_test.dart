@@ -93,7 +93,13 @@ void main() {
       expect(receipt.isPaid, isTrue);
     });
 
-    test('an account sale is left owing and can be settled', () async {
+    // THE ARITHMETIC MOVED TO THE SERVER, and so did the assertions about it:
+    // capping a payment at the balance, adding rather than overwriting, and
+    // refusing a settled receipt are covered in the server suite now. What
+    // matters here is that settling LEAVES THE DEVICE at all — it used to
+    // change the screen and nothing else — and that the answer is adopted
+    // rather than recomputed.
+    test('settling an account sale reaches the server', () async {
       final c = await newController();
       final item = await c.createItem(draft(quantity: 20));
 
@@ -104,16 +110,27 @@ void main() {
       expect(receipt.balanceDue, 1000);
       expect(c.unpaidReceipts.single.id, receipt.id);
 
-      c.settleReceipt(receipt.id, 400);
-      expect(c.receiptById(receipt.id)!.balanceDue, 600);
+      final applied = await c.settleReceipt(receipt.id, 400);
 
-      // Paying more than is owed never turns into change that was never given.
-      c.settleReceipt(receipt.id, 5000, method: PaymentMethod.cash);
-      final settled = c.receiptById(receipt.id)!;
-      expect(settled.amountPaid, 1000);
-      expect(settled.isPaid, isTrue);
-      expect(settled.change, 0);
-      expect(c.unpaidReceipts, isEmpty);
+      expect(applied, 400, reason: 'what the server said it took');
+      expect(
+        c.receiptById(receipt.id)!.amountPaid,
+        400,
+        reason: 'the receipt is the one the server answered with',
+      );
+    });
+
+    test('a refused settlement changes nothing and says so', () async {
+      final c = await newController();
+      final item = await c.createItem(draft(quantity: 20));
+      final receipt = (await c.issueReceipt(
+        method: PaymentMethod.credit,
+        lines: [receiptLine(item.id, 'Bolt', quantity: 2, price: 500)],
+      ))!;
+
+      // Nothing to settle with is refused before it reaches the server.
+      expect(await c.settleReceipt(receipt.id, 0), isNull);
+      expect(c.receiptById(receipt.id)!.amountPaid, 0);
     });
 
     test('the receipt keeps the tax rate it was issued at', () async {

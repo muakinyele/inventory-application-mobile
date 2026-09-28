@@ -634,6 +634,132 @@ void main() {
       expect(voided.json['receipt']['status'], 'voided');
       expect(await quantityOf(s, id), 10);
     });
+
+    // SETTLING HAD NOWHERE TO GO. A receipt left owing was marked paid on the
+    // till's own screen and the server never heard, so the next load showed it
+    // outstanding again.
+    Future<String> owing(TestSession s, String itemId) async {
+      final created = await server.post(
+        '/documents/receipts',
+        accessToken: s.accessToken,
+        body: {
+          'status': 'issued',
+          'movesStock': true,
+          'amountPaid': 0,
+          'lines': [
+            {
+              'itemId': itemId,
+              'itemName': 'Widget',
+              'quantity': 4,
+              'unitPrice': 25.0,
+            },
+          ],
+        },
+      );
+      return created.json['receipt']['id'] as String;
+    }
+
+    test('a payment against a receipt sticks', () async {
+      final s = await admin();
+      final id = await owing(s, await item(s));
+
+      final paid = await server.post(
+        '/documents/receipts/$id/payments',
+        accessToken: s.accessToken,
+        body: {'amount': 40.0},
+      );
+
+      expect(paid.statusCode, 200);
+      expect(paid.json['applied'], 40.0);
+      expect(paid.json['receipt']['amountPaid'], 40.0);
+    });
+
+    test('payments add rather than overwrite', () async {
+      // Two tills taking money against the same receipt must accumulate.
+      final s = await admin();
+      final id = await owing(s, await item(s));
+
+      await server.post(
+        '/documents/receipts/$id/payments',
+        accessToken: s.accessToken,
+        body: {'amount': 30.0},
+      );
+      final second = await server.post(
+        '/documents/receipts/$id/payments',
+        accessToken: s.accessToken,
+        body: {'amount': 20.0},
+      );
+
+      expect(second.json['receipt']['amountPaid'], 50.0);
+    });
+
+    test('paying more than is owed takes only the balance', () async {
+      final s = await admin();
+      final id = await owing(s, await item(s));
+
+      final paid = await server.post(
+        '/documents/receipts/$id/payments',
+        accessToken: s.accessToken,
+        body: {'amount': 500.0},
+      );
+
+      expect(
+        paid.json['applied'],
+        100.0,
+        reason: 'the rest is the customer\'s change, not the shop\'s money',
+      );
+      expect(paid.json['receipt']['amountPaid'], 100.0);
+    });
+
+    test('a settled receipt refuses another payment', () async {
+      final s = await admin();
+      final id = await owing(s, await item(s));
+      await server.post(
+        '/documents/receipts/$id/payments',
+        accessToken: s.accessToken,
+        body: {'amount': 100.0},
+      );
+
+      final again = await server.post(
+        '/documents/receipts/$id/payments',
+        accessToken: s.accessToken,
+        body: {'amount': 10.0},
+      );
+
+      expect(again.statusCode, 400);
+      expect(again.json['error']['message'], contains('already settled'));
+    });
+
+    test('a voided receipt takes no payment', () async {
+      final s = await admin();
+      final id = await owing(s, await item(s));
+      await server.post(
+        '/documents/receipts/$id/void',
+        accessToken: s.accessToken,
+        body: {'reason': 'Wrong item'},
+      );
+
+      final paid = await server.post(
+        '/documents/receipts/$id/payments',
+        accessToken: s.accessToken,
+        body: {'amount': 10.0},
+      );
+
+      expect(paid.statusCode, 400);
+    });
+
+    test('nothing is not a payment', () async {
+      final s = await admin();
+      final id = await owing(s, await item(s));
+
+      final paid = await server.post(
+        '/documents/receipts/$id/payments',
+        accessToken: s.accessToken,
+        body: {'amount': 0},
+      );
+
+      expect(paid.statusCode, 400);
+    });
   });
 
   group('refunds', () {

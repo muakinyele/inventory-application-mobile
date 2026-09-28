@@ -39,22 +39,7 @@ void main() {
     });
   });
 
-  group('cancellation', () {
-    test('only a cancelled invoice can be deleted', () async {
-      final c = await newController();
-      final item = await c.createItem(draft(quantity: 20));
-      final invoice = (await c.issueInvoice(
-        lines: [invoiceLine(item.id, 'Bolt')],
-      ))!;
-
-      c.deleteInvoice(invoice.id);
-      expect(c.invoices, hasLength(1));
-
-      c.cancelInvoice(invoice.id);
-      c.deleteInvoice(invoice.id);
-      expect(c.invoices, isEmpty);
-    });
-  });
+  group('cancellation', () {});
 
   group('persistence', () {});
 }

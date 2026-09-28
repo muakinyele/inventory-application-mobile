@@ -36,6 +36,26 @@ class InventoryStatusBanner extends StatelessWidget {
       );
     }
 
+    // A FAILED WRITE, WHICH WAS THE QUIETEST FAILURE OF THE LOT. It sits below
+    // a stock conflict, which is about one specific number the user is looking
+    // at, and above the load states, which are about the whole screen — but it
+    // is shown on every screen because a save can fail from any of them.
+    //
+    // No retry button: the controller keeps no record of what the failed write
+    // was trying to do, so a button here could only pretend. Saying plainly
+    // that the change did not reach the server, and leaving the user to do it
+    // again, is the honest offer.
+    if (controller.lastWriteError != null) {
+      return _Strip(
+        icon: Icons.cloud_off_rounded,
+        tone: context.palette.critical,
+        message:
+            'The last change could not be saved. What is on screen has not '
+            'reached the server, and will be gone when this page reloads.',
+        action: (label: 'Dismiss', onPressed: controller.clearWriteError),
+      );
+    }
+
     return switch (controller.load) {
       InventoryLoad.failed => _Strip(
         icon: Icons.cloud_off_rounded,

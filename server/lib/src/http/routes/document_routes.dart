@@ -91,6 +91,32 @@ Router documentRoutes({required DocumentService documents}) {
     });
   });
 
+  // The counter twin of the invoice payment above. A receipt raised against an
+  // account can be left owing, and settling it had nowhere to go: the till
+  // marked it paid on its own screen and the server never heard.
+  router.post('/receipts/<id>/payments', (Request request, String id) async {
+    final caller = request.require('receipts.create');
+    final body = await readJsonBody(request);
+
+    final amount = body['amount'];
+    if (amount is! num) {
+      throw ApiError.badRequest('amount must be a number.');
+    }
+
+    final result = await documents.settleReceipt(
+      id: id,
+      amount: amount.toDouble(),
+      actorId: caller.user.id,
+      method: body['method'] as String?,
+    );
+    final lines = (await documents.receipt(id)).lines;
+    return jsonResponse({
+      'receipt': receiptJson(result.receipt, lines),
+      // What was actually taken; the difference is the customer's change.
+      'applied': result.applied,
+    });
+  });
+
   // Cancelled rather than deleted: an invoice that was issued is a thing that
   // happened, and the stock it moved has to come back through a movement
   // rather than by the original quietly disappearing.

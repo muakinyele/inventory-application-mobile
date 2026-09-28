@@ -237,6 +237,86 @@ class DocumentService {
     return subtotal + subtotal * invoice.taxRate;
   }
 
+  /// Takes money against an outstanding receipt.
+  ///
+  /// The counter twin of [recordPayment]. A receipt is usually paid in full at
+  /// the till, but one raised against an account can be left owing — and until
+  /// now settling it happened only on the device that did it, because there
+  /// was no endpoint to tell.
+  ///
+  /// Adds rather than overwrites, for the same reason invoices do: two tills
+  /// taking money against the same receipt must accumulate, not race.
+  Future<({Receipt receipt, double applied})> settleReceipt({
+    required String id,
+    required double amount,
+    required String actorId,
+    String? method,
+  }) async {
+    if (amount <= 0) {
+      throw ApiError.badRequest('A payment has to be more than nothing.');
+    }
+
+    return db.transaction(() async {
+      final receipt = await (db.select(
+        db.receipts,
+      )..where((t) => t.id.equals(id))).getSingleOrNull();
+      if (receipt == null) throw ApiError.notFound;
+
+      if (receipt.status == 'voided') {
+        throw ApiError.badRequest(
+          'Receipt ${receipt.reference} was voided and takes no payment.',
+        );
+      }
+
+      final lines = await _receiptLines(id);
+      final total = _receiptTotal(receipt, lines);
+      final balance = total - receipt.amountPaid;
+
+      // The same hundredth-of-a-penny rounding the invoice path uses, so a
+      // percentage tax cannot leave a receipt owing forever.
+      if (balance < 0.005) {
+        throw ApiError.badRequest(
+          'Receipt ${receipt.reference} is already settled.',
+        );
+      }
+
+      final applied = amount > balance ? balance : amount;
+      final now = DateTime.now().toUtc();
+
+      await (db.update(db.receipts)..where((t) => t.id.equals(id))).write(
+        ReceiptsCompanion(
+          amountPaid: Value(receipt.amountPaid + applied),
+          method: method == null ? const Value.absent() : Value(method),
+          updatedAt: Value(now),
+        ),
+      );
+
+      return (
+        receipt: await (db.select(
+          db.receipts,
+        )..where((t) => t.id.equals(id))).getSingle(),
+        applied: applied,
+      );
+    });
+  }
+
+  /// What a receipt comes to, by the same arithmetic as an invoice: a refund
+  /// reduces what is owed, so refunded quantities come out of the goods before
+  /// the tax goes on.
+  double _receiptTotal(Receipt receipt, List<ReceiptLine> lines) {
+    final gross = lines.fold(
+      0.0,
+      (sum, l) => sum + (l.quantity - l.quantityRefunded) * l.unitPrice,
+    );
+    final lineDiscount = lines.fold(0.0, (sum, l) => sum + l.discount);
+    final discount = (lineDiscount + receipt.discount).clamp(
+      0.0,
+      gross <= 0 ? 0.0 : gross,
+    );
+    final subtotal = (gross - discount).clamp(0.0, double.infinity);
+    return subtotal + subtotal * receipt.taxRate;
+  }
+
   /// Cancels an invoice and puts the stock back.
   ///
   /// Never deleted. An invoice that was issued is a thing that happened, and
