@@ -187,6 +187,38 @@ The deploy job declares a GitHub environment, so production can require a
 review before the job starts: Settings → Environments → `production` →
 *Required reviewers*. Nothing is published or deployed until it is approved.
 
+### Staging is this machine
+
+`main` deploys to production. Nothing else deploys anywhere: staging runs in
+Docker on a developer's own machine.
+
+```bash
+./scripts/staging-up.sh            # build the working tree, bring the stack up
+./scripts/staging-up.sh --fresh    # the same, on an empty database
+```
+
+It serves on `WEB_PORT` from `.env`, and verifies rather than assumes —
+`docker compose up` answering on the port proves only that *something* is
+listening, and a stack left from an earlier build answers identically. So it
+checks the running schema against `schemaVersion` in the source, checks the
+`categories` table exists, checks the bundle being served hashes to the
+`main.dart.js` inside the image, and checks the API answers `401` rather than
+`404` through the proxy. Any mismatch fails the script.
+
+**Why there is no remote staging.** Every `DEPLOY_*` value is a repository
+secret shared by both environments, and the environment name only ever reached
+the job's title — so a push to `develop` would have announced "Deploy to
+staging" and then rsynced to the *production* host, over the production path,
+restarting the live stack against the live database. A hosted runner cannot
+reach a developer's Docker either way, so the workflow publishes the images
+for a non-production branch, tags them with the branch, and stops.
+
+Giving staging a real host later means environment-scoped secrets — its own
+host, path, known-hosts entry, URL, database password, and **its own
+`TOKEN_PEPPER`**, since the pepper is what makes a session token valid and one
+pepper across both environments means a token minted on staging is accepted by
+production.
+
 ## First-time host setup
 
 One thing is done once, by hand, on the host. It does not belong in the deploy

@@ -125,6 +125,7 @@ jobs:
       - name: Check the deployment is fully configured
         id: guard
         env:
+          TARGET: ${{ github.event.inputs.environment || (github.ref_name == 'main' && 'production' || 'staging') }}
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
@@ -159,6 +160,29 @@ jobs:
           # knowable before a single byte was copied.
           if [ -z "$DEPLOY_HOST" ]; then
             echo "::notice::No DEPLOY_HOST configured; skipping remote deploy. Images were published and can be rolled out manually."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # -------------------------------------------------------------
+          # STAGING IS LOCAL, SO NOTHING IS DEPLOYED FROM HERE.
+          #
+          # Every DEPLOY_* value is a repository secret shared by both
+          # environments, and the environment name only ever reached the job's
+          # title. A push to `develop` therefore announced "Deploy to staging"
+          # and then rsynced to the PRODUCTION host, over the production path,
+          # writing the production .env and restarting the production stack
+          # against the production database — while the log said staging.
+          #
+          # Staging runs on a developer's own machine instead: scripts/
+          # staging-up.sh builds the working tree and brings the stack up in
+          # Docker. A hosted runner could not reach that machine anyway, so
+          # there is nothing here to send. The images are still published and
+          # tagged with the branch, which is the part of this job that is
+          # useful to a non-production branch.
+          # -------------------------------------------------------------
+          if [ "$TARGET" != "production" ]; then
+            echo "::notice::'$TARGET' is a local environment — images were published and tagged, but nothing was deployed. Run it with: ./scripts/staging-up.sh"
             echo "configured=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
