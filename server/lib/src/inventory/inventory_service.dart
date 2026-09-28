@@ -47,7 +47,13 @@ class InventoryService {
   /// Deliberately does not touch users, roles, sessions or audit logs. Those
   /// are not inventory, and somebody clearing the stock has not asked to be
   /// signed out or to lose the record of who did what.
-  Future<void> eraseEverything() => db.transaction(() async {
+  Future<void> eraseEverything() => db.transaction(_eraseInventory);
+
+  /// The deletes, without opening a transaction of their own, so a restore can
+  /// clear and refill inside ONE transaction. A restore that erased in its own
+  /// transaction and then failed while inserting would leave the workspace
+  /// empty — the one outcome a restore must never produce.
+  Future<void> _eraseInventory({bool includeAllPreferences = false}) async {
     // Children before parents, so nothing is briefly orphaned even inside the
     // transaction.
     await db.delete(db.receiptLines).go();
@@ -70,9 +76,125 @@ class InventoryService {
 
     // Document counters go too, so the next invoice is 0001 again rather than
     // carrying on from a numbering nothing refers to any more.
-    await (db.delete(
-      db.preferences,
-    )..where((t) => t.key.like('sequence.%'))).go();
+    //
+    // A restore takes ALL of them, because the backup carries the workspace's
+    // own settings and half-replacing those would leave a company name from
+    // one moment beside a tax rate from another.
+    if (includeAllPreferences) {
+      await db.delete(db.preferences).go();
+    } else {
+      await (db.delete(
+        db.preferences,
+      )..where((t) => t.key.like('sequence.%'))).go();
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Backup and restore
+  // ------------------------------------------------------------------
+  //
+  // TABLE-FAITHFUL, NOT A RECONSTRUCTION. The rows go out exactly as the
+  // database holds them and come back the same way, because anything else
+  // loses something: rebuilding stock through the adjustment endpoint would
+  // invent a movement per item and change every timestamp, and rebuilding
+  // documents through their own endpoints would allocate fresh reference
+  // numbers. A restored workspace has to be the one that was backed up, down
+  // to the invoice numbers and the movement history.
+  //
+  // It is also taken HERE rather than from the app's memory. The client loads
+  // at most 500 items, so a backup built from what the screen holds silently
+  // drops everything past that — a workspace with 600 items would back up 500
+  // and restore a workspace with 500.
+
+  /// The backup format. Bumped only when an older reader could not cope.
+  static const int backupVersion = 1;
+
+  /// Every inventory row, in the order a restore puts them back.
+  Future<Map<String, Object?>> exportEverything() async {
+    Future<List<Map<String, dynamic>>> rows<T extends DataClass>(
+      TableInfo<Table, T> table,
+    ) async => [for (final row in await db.select(table).get()) row.toJson()];
+
+    return {
+      'version': backupVersion,
+      'takenAt': DateTime.now().toUtc().toIso8601String(),
+      'tables': {
+        'items': await rows(db.items),
+        'suppliers': await rows(db.suppliers),
+        'customers': await rows(db.customers),
+        'categories': await rows(db.categories),
+        'lookups': await rows(db.lookups),
+        'preferences': await rows(db.preferences),
+        'stockLevels': await rows(db.stockLevels),
+        'movements': await rows(db.movements),
+        'purchaseOrders': await rows(db.purchaseOrders),
+        'purchaseOrderLines': await rows(db.purchaseOrderLines),
+        'salesOrders': await rows(db.salesOrders),
+        'salesOrderLines': await rows(db.salesOrderLines),
+        'transfers': await rows(db.transfers),
+        'transferLines': await rows(db.transferLines),
+        'invoices': await rows(db.invoices),
+        'invoiceLines': await rows(db.invoiceLines),
+        'receipts': await rows(db.receipts),
+        'receiptLines': await rows(db.receiptLines),
+      },
+    };
+  }
+
+  /// Replaces the whole workspace with [tables].
+  ///
+  /// One transaction: the erase and every insert succeed together or the
+  /// workspace is untouched. A restore that cleared first and then failed
+  /// would leave nothing behind, which is worse than the state it was asked
+  /// to replace.
+  ///
+  /// Counts what it wrote, so the caller can say what happened rather than
+  /// "done".
+  Future<Map<String, int>> restoreEverything(
+    Map<String, List<Map<String, dynamic>>> tables,
+  ) => db.transaction(() async {
+    await _eraseInventory(includeAllPreferences: true);
+
+    final written = <String, int>{};
+
+    Future<void> put<T extends Insertable<T>>(
+      String name,
+      TableInfo<Table, T> table,
+      T Function(Map<String, dynamic>) parse,
+    ) async {
+      final incoming = tables[name] ?? const [];
+      if (incoming.isEmpty) return;
+      final parsed = [for (final row in incoming) parse(row)];
+      await db.batch((b) => b.insertAll(table, parsed));
+      written[name] = parsed.length;
+    }
+
+    // Parents first. Nothing here declares a foreign key, so this is for the
+    // reader rather than the database.
+    await put('items', db.items, Item.fromJson);
+    await put('suppliers', db.suppliers, Supplier.fromJson);
+    await put('customers', db.customers, Customer.fromJson);
+    await put('categories', db.categories, Category.fromJson);
+    await put('lookups', db.lookups, Lookup.fromJson);
+    await put('preferences', db.preferences, Preference.fromJson);
+    await put('stockLevels', db.stockLevels, StockLevel.fromJson);
+    await put('movements', db.movements, Movement.fromJson);
+    await put('purchaseOrders', db.purchaseOrders, PurchaseOrder.fromJson);
+    await put(
+      'purchaseOrderLines',
+      db.purchaseOrderLines,
+      PurchaseOrderLine.fromJson,
+    );
+    await put('salesOrders', db.salesOrders, SalesOrder.fromJson);
+    await put('salesOrderLines', db.salesOrderLines, SalesOrderLine.fromJson);
+    await put('transfers', db.transfers, Transfer.fromJson);
+    await put('transferLines', db.transferLines, TransferLine.fromJson);
+    await put('invoices', db.invoices, Invoice.fromJson);
+    await put('invoiceLines', db.invoiceLines, InvoiceLine.fromJson);
+    await put('receipts', db.receipts, Receipt.fromJson);
+    await put('receiptLines', db.receiptLines, ReceiptLine.fromJson);
+
+    return written;
   });
 
   // ------------------------------------------------------------------

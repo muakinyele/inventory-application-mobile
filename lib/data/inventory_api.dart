@@ -499,6 +499,30 @@ class InventoryApi {
   // Workspace settings
   // ------------------------------------------------------------------
 
+  // ------------------------------------------------------------------
+  // Backup and restore
+  // ------------------------------------------------------------------
+
+  /// The whole workspace, as the server holds it.
+  ///
+  /// Taken server-side rather than assembled from what this device has
+  /// loaded: the item list is fetched one page at a time, so a backup built
+  /// from memory would quietly stop at whatever the last page was.
+  Future<Map<String, dynamic>> backup() =>
+      _auth.send('GET', '/inventory/backup');
+
+  /// Replaces the workspace with [payload]. Returns what was written, by
+  /// table, so the screen can say more than "done".
+  Future<Map<String, int>> restore(Map<String, dynamic> payload) async {
+    final body = await _auth.send('POST', '/inventory/restore', body: payload);
+    final restored = body['restored'];
+    if (restored is! Map) return const {};
+    return {
+      for (final entry in restored.entries)
+        entry.key.toString(): (entry.value as num?)?.toInt() ?? 0,
+    };
+  }
+
   Future<Map<String, String>> preferences() async {
     final body = await _auth.send('GET', '/inventory/preferences');
     final raw = body['preferences'];

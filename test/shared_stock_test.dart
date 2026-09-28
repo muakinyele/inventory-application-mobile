@@ -392,6 +392,24 @@ class _Server {
       return _ok({'movements': <Object?>[]});
     }
 
+    if (route == 'GET /api/inventory/backup') {
+      return _ok({
+        'version': 1,
+        'takenAt': '2026-09-28T00:00:00.000Z',
+        'tables': {
+          'items': [
+            {'id': 'i1'},
+          ],
+        },
+      });
+    }
+
+    if (route == 'POST /api/inventory/restore') {
+      return _ok({
+        'restored': {'items': 1, 'stockLevels': 2},
+      });
+    }
+
     if (route == 'GET /api/inventory/categories') {
       return _ok({
         'categories': [
@@ -1457,6 +1475,61 @@ void main() {
         );
       },
     );
+
+    test('a backup is taken from the server, not from memory', () async {
+      // Built from the controller's own lists it would stop at whatever page
+      // of items had been loaded, and omit every table the screen never
+      // reads — which is what the old client-side backup did.
+      final server = _Server();
+      final controller = await _controller(server);
+
+      final payload = await controller.exportBackup();
+
+      expect(server.calls, contains('GET /api/inventory/backup'));
+      expect(payload, isNotNull);
+      expect(payload!['tables'], isA<Map<String, dynamic>>());
+    });
+
+    test('a restore reloads, so the screens show what was restored', () async {
+      final server = _Server();
+      final controller = await _controller(server);
+      server.calls.clear();
+
+      final result = await controller.restoreBackup({
+        'version': 1,
+        'tables': {
+          'items': [
+            {'id': 'i1'},
+          ],
+        },
+      });
+
+      expect(result.ok, isTrue);
+      expect(result.rows, 3, reason: 'what the server said it wrote');
+      expect(
+        server.calls,
+        contains('GET /api/inventory/items'),
+        reason: 'every screen reads state that the restore just replaced',
+      );
+    });
+
+    test('a refused restore reports, and changes nothing here', () async {
+      final server = _Server();
+      final controller = await _controller(server);
+      server.failNext = true;
+
+      final result = await controller.restoreBackup({
+        'version': 1,
+        'tables': {
+          'items': [
+            {'id': 'i1'},
+          ],
+        },
+      });
+
+      expect(result.ok, isFalse);
+      expect(controller.lastWriteError, isNotNull);
+    });
 
     test('a settings write that succeeded says so', () async {
       final server = _Server();

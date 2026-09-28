@@ -101,6 +101,16 @@ const List<PermissionDef> allPermissions = [
     'Administration',
     'Change workspace settings, currency and lookups',
   ),
+  PermissionDef(
+    'backup.export',
+    'Administration',
+    'Download a full backup of the workspace',
+  ),
+  PermissionDef(
+    'backup.restore',
+    'Administration',
+    'Replace the whole workspace from a backup',
+  ),
   PermissionDef('users.view', 'Administration', 'View the user list'),
   PermissionDef('users.create', 'Administration', 'Invite new users'),
   PermissionDef('users.update', 'Administration', 'Edit user details'),

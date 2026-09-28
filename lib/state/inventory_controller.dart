@@ -2468,6 +2468,54 @@ class InventoryController extends ChangeNotifier {
   /// Shared, this has to reach the server or it clears the screen and nothing
   /// else: the rows come back on the next load, and they never left anybody
   /// else's. That is what it did until now.
+  // --- Backup and restore --------------------------------------------------
+
+  /// The whole workspace as JSON, ready to write to a file.
+  ///
+  /// Comes from the server, not from this controller: what is in memory is one
+  /// page of items and whatever else has been loaded, and a backup that
+  /// quietly stopped at the page boundary would restore a smaller workspace
+  /// than the one it was taken from.
+  Future<Map<String, dynamic>?> exportBackup() async {
+    try {
+      final payload = await _api.backup();
+      lastWriteError = null;
+      return payload;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not take a backup: $error');
+      notifyListeners();
+      return null;
+    }
+  }
+
+  /// Replaces the workspace from [payload] and reloads from the server.
+  ///
+  /// The reload is not optional. Every screen reads this controller, and after
+  /// a restore its entire contents — items, documents, stock, settings — belong
+  /// to the workspace that was just replaced.
+  Future<({bool ok, int rows, Object? error})> restoreBackup(
+    Map<String, dynamic> payload,
+  ) async {
+    try {
+      final written = await _api.restore(payload);
+      lastWriteError = null;
+      await reload();
+      return (
+        ok: true,
+        rows: written.values.fold<int>(0, (sum, n) => sum + n),
+        error: null,
+      );
+    } catch (error) {
+      // The server restores inside one transaction, so a failure here means
+      // the workspace was left exactly as it was. Nothing to undo.
+      lastWriteError = error;
+      debugPrint('Stockpile: could not restore the backup: $error');
+      notifyListeners();
+      return (ok: false, rows: 0, error: error);
+    }
+  }
+
   Future<void> eraseAll() async {
     try {
       await _api.eraseEverything();

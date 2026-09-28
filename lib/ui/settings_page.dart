@@ -142,22 +142,206 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  /// Downloads the whole workspace as JSON.
+  ///
+  /// THIS USED TO BE FOUR OF EIGHTEEN TABLES. It was assembled here from what
+  /// the controller had in memory — items, movements, receipts and settings —
+  /// which left out suppliers, customers, purchase orders, sales orders,
+  /// invoices, transfers and, most consequentially, the per-bin stock levels.
+  /// A workspace restored from one of those files would have come back with
+  /// no trading partners, no documents, and every count in the wrong place.
+  /// It was also capped at the one page of items the app had loaded.
+  ///
+  /// The server takes it now, straight from the tables.
   Future<void> _exportBackup(BuildContext buttonContext) async {
     final controller = context.read<InventoryController>();
-    final payload = {
-      'version': 1,
-      'items': controller.items.map((i) => i.toJson()).toList(),
-      'movements': controller.movements.map((m) => m.toJson()).toList(),
-      'receipts': controller.receipts.map((r) => r.toJson()).toList(),
-      'settings': controller.settings.toJson(),
-    };
+    // Taken before the await: it is where the row was when it was tapped, and
+    // reading a BuildContext after an await is how that becomes a crash on a
+    // screen that has since been left.
+    final origin = shareOriginOf(buttonContext);
+
+    _notify('Preparing the backup…', tone: MessageTone.info);
+    final payload = await controller.exportBackup();
+    if (!mounted) return;
+
+    if (payload == null) {
+      await _notify(
+        'The backup could not be taken, so no file was saved. '
+        'Check your connection and try again.',
+        tone: MessageTone.failure,
+      );
+      return;
+    }
+
+    final tables = payload['tables'];
+    final rows = tables is Map
+        ? tables.values.fold<int>(
+            0,
+            (sum, t) => sum + (t is List ? t.length : 0),
+          )
+        : 0;
+
+    final stamp = DateTime.now().toIso8601String().split('T').first;
     await const ExportService().shareText(
-      filename: 'inventory-backup.json',
+      filename: 'stockpile-backup-$stamp.json',
       contents: const JsonEncoder.withIndent('  ').convert(payload),
       mimeType: 'application/json',
-      originRect: shareOriginOf(buttonContext),
+      originRect: origin,
     );
-    if (mounted) _notify('Backup exported');
+    if (mounted) _notify('Backup saved — ${number(rows)} rows');
+  }
+
+  /// Replaces the workspace from a backup file.
+  ///
+  /// Guarded twice on purpose. This is the most destructive thing in the app:
+  /// it does not merge, it replaces, and what it replaces is everything.
+  Future<void> _restoreBackup() async {
+    final controller = context.read<InventoryController>();
+
+    final file = await FilePicker.pickFile(
+      type: FileType.custom,
+      allowedExtensions: const ['json'],
+    );
+    if (file == null) return;
+
+    Map<String, dynamic> payload;
+    try {
+      // Bytes rather than a path: on web there is no path to read.
+      final text = utf8.decode(await file.readAsBytes(), allowMalformed: true);
+      payload = jsonDecode(text) as Map<String, dynamic>;
+    } catch (_) {
+      if (mounted) {
+        await _notify(
+          'That file could not be read as a backup.',
+          tone: MessageTone.failure,
+        );
+      }
+      return;
+    }
+
+    // Described before it is agreed to, so the confirmation says what will
+    // actually happen rather than "are you sure?".
+    final tables = payload['tables'];
+    final counts = <String, int>{
+      if (tables is Map)
+        for (final entry in tables.entries)
+          if (entry.value is List && (entry.value as List).isNotEmpty)
+            entry.key.toString(): (entry.value as List).length,
+    };
+
+    if (counts.isEmpty) {
+      if (mounted) {
+        await _notify(
+          'That backup has nothing in it, so there is nothing to restore.',
+          tone: MessageTone.failure,
+        );
+      }
+      return;
+    }
+
+    if (!mounted) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Restore this backup?'),
+        content: SizedBox(
+          width: 420,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Everything in this workspace will be replaced by the '
+                'contents of this file. Items, stock levels, documents, '
+                'partners and settings that are not in the backup will be '
+                'gone.',
+                style: const TextStyle(fontSize: 14, height: 1.45),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                'The backup holds:',
+                style: Theme.of(dialogContext).textTheme.labelMedium,
+              ),
+              const SizedBox(height: 6),
+              for (final entry in counts.entries)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 2),
+                  child: Text(
+                    '${_tableLabel(entry.key)}: ${number(entry.value)}',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                ),
+              if (payload['takenAt'] is String) ...[
+                const SizedBox(height: 10),
+                Text(
+                  'Taken ${(payload['takenAt'] as String).split('T').first}',
+                  style: const TextStyle(fontSize: 12.5),
+                ),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(dialogContext).colorScheme.error,
+            ),
+            child: const Text('Replace everything'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    if (mounted) _notify('Restoring…', tone: MessageTone.info);
+    final result = await controller.restoreBackup(payload);
+    if (!mounted) return;
+
+    if (!result.ok) {
+      await _notify(
+        'The restore did not happen, and nothing was changed. '
+        '${_messageFor(result.error)}',
+        tone: MessageTone.failure,
+      );
+      return;
+    }
+    await _notify('Restored ${number(result.rows)} rows.');
+  }
+
+  /// A table name as somebody reading a dialog would say it.
+  String _tableLabel(String table) => switch (table) {
+    'items' => 'Items',
+    'movements' => 'Stock movements',
+    'stockLevels' => 'Stock by location',
+    'suppliers' => 'Suppliers',
+    'customers' => 'Customers',
+    'categories' => 'Categories',
+    'lookups' => 'Picker lists',
+    'preferences' => 'Settings',
+    'purchaseOrders' => 'Purchase orders',
+    'purchaseOrderLines' => 'Purchase order lines',
+    'salesOrders' => 'Sales orders',
+    'salesOrderLines' => 'Sales order lines',
+    'transfers' => 'Transfers',
+    'transferLines' => 'Transfer lines',
+    'invoices' => 'Invoices',
+    'invoiceLines' => 'Invoice lines',
+    'receipts' => 'Receipts',
+    'receiptLines' => 'Receipt lines',
+    _ => table,
+  };
+
+  /// The server's own words where it gave any, since they say which file was
+  /// wrong and why.
+  String _messageFor(Object? error) {
+    final text = error?.toString() ?? '';
+    final match = RegExp(r'[A-Z][^]*?[.!]').firstMatch(text);
+    return match?.group(0) ?? 'Check your connection and try again.';
   }
 
   Future<void> _importCsv() async {
@@ -451,8 +635,16 @@ class _SettingsPageState extends State<SettingsPage> {
                     builder: (rowContext) => _MenuRow(
                       icon: Icons.layers_outlined,
                       label: 'Export full backup (JSON)',
+                      note: 'everything',
                       onTap: () => _exportBackup(rowContext),
                     ),
+                  ),
+                  Divider(color: p.line, height: 1),
+                  _MenuRow(
+                    icon: Icons.settings_backup_restore,
+                    label: 'Restore from backup (JSON)',
+                    onTap: _restoreBackup,
+                    danger: true,
                   ),
                   Divider(color: p.line, height: 1),
                   _MenuRow(

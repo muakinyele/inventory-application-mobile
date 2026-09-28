@@ -318,6 +318,74 @@ Router inventoryRoutes({required InventoryService inventory}) {
     });
   });
 
+  // ------------------------------------------------------------------
+  // Backup and restore
+  // ------------------------------------------------------------------
+  router.get('/backup', (Request request) async {
+    request.require('backup.export');
+    return jsonResponse(await inventory.exportEverything());
+  });
+
+  router.post('/restore', (Request request) async {
+    request.require('backup.restore');
+    final body = await readJsonBody(request);
+
+    // Refused rather than guessed at. A restore replaces everything, so a
+    // payload this cannot read must not be run half-understood.
+    final version = (body['version'] as num?)?.toInt();
+    if (version == null) {
+      throw ApiError.badRequest(
+        'This file is not a Stockpile backup: it carries no version.',
+      );
+    }
+    if (version > InventoryService.backupVersion) {
+      throw ApiError.badRequest(
+        'This backup was taken by a newer version of Stockpile '
+        '(format $version, this server reads up to '
+        '${InventoryService.backupVersion}). Update the server first.',
+      );
+    }
+
+    final raw = body['tables'];
+    if (raw is! Map) {
+      throw ApiError.badRequest('This backup has no tables in it.');
+    }
+
+    final tables = <String, List<Map<String, dynamic>>>{};
+    for (final entry in raw.entries) {
+      final rows = entry.value;
+      if (rows is! List) continue;
+      tables[entry.key.toString()] = [
+        for (final row in rows)
+          if (row is Map) row.cast<String, dynamic>(),
+      ];
+    }
+
+    if (tables.values.every((rows) => rows.isEmpty)) {
+      throw ApiError.badRequest(
+        'That backup is empty. Restoring it would erase this workspace and '
+        'put nothing back.',
+      );
+    }
+
+    final Map<String, int> written;
+    try {
+      written = await inventory.restoreEverything(tables);
+    } on ApiError {
+      rethrow;
+    } catch (error) {
+      // A row the parser cannot read is a bad file, not a broken server, and
+      // saying so is the difference between "try another backup" and "the
+      // restore is broken". The transaction rolled back, so the workspace is
+      // exactly as it was.
+      throw ApiError.badRequest(
+        'This backup could not be read, so nothing was changed. It may be '
+        'from a different application, or the file may be damaged.',
+      );
+    }
+    return jsonResponse({'restored': written});
+  });
+
   router.get('/preferences', (Request request) async {
     request.require('items.view');
     return jsonResponse({'preferences': await inventory.preferences()});

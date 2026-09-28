@@ -902,4 +902,279 @@ void main() {
       expect(response.statusCode, 403);
     });
   });
+
+  // ------------------------------------------------------------------
+  // Backup and restore
+  //
+  // The promise is that a restored workspace IS the one that was backed up.
+  // Every test here checks that against the API the app actually reads, not
+  // against the row count.
+  // ------------------------------------------------------------------
+  group('backup and restore', () {
+    /// A workspace with something in every corner of it.
+    Future<void> seed(TestSession session) async {
+      await server.put(
+        '/inventory/categories',
+        accessToken: session.accessToken,
+        body: {
+          'categories': [
+            {'name': 'Parts', 'swatchIndex': 2},
+          ],
+        },
+      );
+      await server.patch(
+        '/inventory/preferences',
+        accessToken: session.accessToken,
+        body: {
+          'preferences': {'companyName': 'Chedra Olympas'},
+        },
+      );
+      final supplier = await server.post(
+        '/inventory/suppliers',
+        accessToken: session.accessToken,
+        body: {'name': 'Acme', 'email': 'acme@example.com'},
+      );
+      final itemId = await createItem(
+        session,
+        name: 'Bolt',
+        quantity: 12,
+        location: 'Main',
+      );
+      await server.patch(
+        '/inventory/items/$itemId',
+        accessToken: session.accessToken,
+        body: {
+          'category': 'Parts',
+          'supplierId': supplier.json['supplier']['id'],
+        },
+      );
+    }
+
+    test('a backup carries every table, not just the visible ones', () async {
+      final session = await admin();
+      await seed(session);
+
+      final backup = await server.get(
+        '/inventory/backup',
+        accessToken: session.accessToken,
+      );
+
+      expect(backup.statusCode, 200);
+      expect(backup.json['version'], 1);
+      final tables = backup.json['tables'] as Map;
+      // The four the old client-side backup carried, and the ones it did not.
+      for (final name in [
+        'items',
+        'movements',
+        'receipts',
+        'preferences',
+        'suppliers',
+        'customers',
+        'categories',
+        'lookups',
+        'stockLevels',
+        'purchaseOrders',
+        'salesOrders',
+        'invoices',
+        'transfers',
+      ]) {
+        expect(tables.containsKey(name), isTrue, reason: '\$name is missing');
+      }
+      expect((tables['items'] as List), hasLength(1));
+      expect((tables['suppliers'] as List), hasLength(1));
+      expect(
+        (tables['stockLevels'] as List),
+        isNotEmpty,
+        reason: 'where the stock actually sits',
+      );
+    });
+
+    test('restoring puts the workspace back as it was', () async {
+      final session = await admin();
+      await seed(session);
+
+      final backup = await server.get(
+        '/inventory/backup',
+        accessToken: session.accessToken,
+      );
+      final before = await server.get(
+        '/inventory/items',
+        accessToken: session.accessToken,
+      );
+      final stockBefore = await server.get(
+        '/inventory/stock',
+        accessToken: session.accessToken,
+      );
+
+      // Somebody empties it, then changes their mind.
+      await server.delete('/inventory', accessToken: session.accessToken);
+      final emptied = await server.get(
+        '/inventory/items',
+        accessToken: session.accessToken,
+      );
+      expect(emptied.json['total'], 0);
+
+      final restore = await server.post(
+        '/inventory/restore',
+        accessToken: session.accessToken,
+        body: backup.json,
+      );
+      expect(restore.statusCode, 200);
+
+      final after = await server.get(
+        '/inventory/items',
+        accessToken: session.accessToken,
+      );
+      expect(after.json['items'], equals(before.json['items']));
+
+      final stockAfter = await server.get(
+        '/inventory/stock',
+        accessToken: session.accessToken,
+      );
+      expect(
+        stockAfter.json['stock'],
+        equals(stockBefore.json['stock']),
+        reason: 'stock must come back where it was, not as a fresh count',
+      );
+
+      final categories = await server.get(
+        '/inventory/categories',
+        accessToken: session.accessToken,
+      );
+      expect((categories.json['categories'] as List).single['name'], 'Parts');
+
+      final prefs = await server.get(
+        '/inventory/preferences',
+        accessToken: session.accessToken,
+      );
+      expect(prefs.json['preferences']['companyName'], 'Chedra Olympas');
+
+      final suppliers = await server.get(
+        '/inventory/suppliers',
+        accessToken: session.accessToken,
+      );
+      expect((suppliers.json['suppliers'] as List), hasLength(1));
+    });
+
+    test('restoring replaces rather than merges', () async {
+      // Otherwise a restore doubles everything it is given.
+      final session = await admin();
+      await seed(session);
+      final backup = await server.get(
+        '/inventory/backup',
+        accessToken: session.accessToken,
+      );
+
+      await server.post(
+        '/inventory/restore',
+        accessToken: session.accessToken,
+        body: backup.json,
+      );
+
+      final items = await server.get(
+        '/inventory/items',
+        accessToken: session.accessToken,
+      );
+      expect(items.json['total'], 1, reason: 'restored onto itself, not twice');
+    });
+
+    test('a failed restore leaves the workspace untouched', () async {
+      // The whole point of doing it in one transaction: a restore that
+      // cleared first and then failed would leave nothing at all.
+      final session = await admin();
+      await seed(session);
+
+      final response = await server.post(
+        '/inventory/restore',
+        accessToken: session.accessToken,
+        body: {
+          'version': 1,
+          'tables': {
+            'items': [
+              {'this': 'is not an item'},
+            ],
+          },
+        },
+      );
+      expect(
+        response.statusCode,
+        400,
+        reason: 'a bad file is the caller\'s problem, not a server error',
+      );
+      expect(response.json['error']['message'], contains('could not be read'));
+
+      final items = await server.get(
+        '/inventory/items',
+        accessToken: session.accessToken,
+      );
+      expect(
+        items.json['total'],
+        1,
+        reason: 'the workspace it refused to replace is still here',
+      );
+    });
+
+    test('an empty backup is refused rather than obeyed', () async {
+      final session = await admin();
+      await seed(session);
+
+      final response = await server.post(
+        '/inventory/restore',
+        accessToken: session.accessToken,
+        body: {'version': 1, 'tables': <String, Object?>{}},
+      );
+
+      expect(response.statusCode, 400);
+      final items = await server.get(
+        '/inventory/items',
+        accessToken: session.accessToken,
+      );
+      expect(items.json['total'], 1);
+    });
+
+    test('a backup from a newer format is refused', () async {
+      final session = await admin();
+      final response = await server.post(
+        '/inventory/restore',
+        accessToken: session.accessToken,
+        body: {
+          'version': 99,
+          'tables': {
+            'items': [
+              {'id': 'x'},
+            ],
+          },
+        },
+      );
+      expect(response.statusCode, 400);
+      expect(response.json['error']['message'], contains('newer version'));
+    });
+
+    test('a file that is not a backup is refused', () async {
+      final session = await admin();
+      final response = await server.post(
+        '/inventory/restore',
+        accessToken: session.accessToken,
+        body: {'hello': 'world'},
+      );
+      expect(response.statusCode, 400);
+    });
+
+    test('staff can neither back up nor restore', () async {
+      final staff = await server.signedInUser(email: 'hand2@example.com');
+
+      final backup = await server.get(
+        '/inventory/backup',
+        accessToken: staff.accessToken,
+      );
+      expect(backup.statusCode, 403);
+
+      final restore = await server.post(
+        '/inventory/restore',
+        accessToken: staff.accessToken,
+        body: {'version': 1, 'tables': <String, Object?>{}},
+      );
+      expect(restore.statusCode, 403);
+    });
+  });
 }
