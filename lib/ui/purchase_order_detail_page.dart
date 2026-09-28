@@ -7,8 +7,10 @@ import '../core/design.dart';
 import '../core/formatters.dart';
 import '../core/palette.dart';
 import '../models/purchase_order.dart';
+import '../data/order_document.dart';
 import '../state/inventory_controller.dart';
 import 'widgets/app_message.dart';
+import 'widgets/document_share_sheet.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/page_header.dart';
 import 'widgets/section_card.dart';
@@ -73,6 +75,11 @@ class PurchaseOrderDetailPage extends StatelessWidget {
                     icon: const Icon(Icons.inventory_outlined, size: 18),
                     label: const Text('Receive'),
                   ),
+                OutlinedButton.icon(
+                  onPressed: () => _share(context, controller, order),
+                  icon: const Icon(Icons.ios_share_rounded, size: 18),
+                  label: const Text('Share'),
+                ),
               ],
             ),
             SectionCard(
@@ -425,4 +432,19 @@ class _ReceiveSheetState extends State<_ReceiveSheet> {
       ),
     );
   }
+}
+
+Future<void> _share(
+  BuildContext context,
+  InventoryController controller,
+  PurchaseOrder order,
+) {
+  final supplier = controller.supplierById(order.supplierId);
+  return shareOrderDocument(
+    context,
+    controller,
+    OrderDocumentData.fromPurchase(order),
+    contactPhone: supplier?.phone ?? '',
+    contactEmail: supplier?.email ?? '',
+  );
 }

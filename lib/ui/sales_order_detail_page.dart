@@ -10,8 +10,10 @@ import '../models/invoice.dart';
 import '../models/party.dart';
 import '../models/receipt.dart';
 import '../models/sales_order.dart';
+import '../data/order_document.dart';
 import '../state/inventory_controller.dart';
 import 'widgets/app_message.dart';
+import 'widgets/document_share_sheet.dart';
 import 'widgets/document_link_row.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/page_header.dart';
@@ -80,6 +82,13 @@ class SalesOrderDetailPage extends StatelessWidget {
                     icon: const Icon(Icons.local_shipping_outlined, size: 18),
                     label: const Text('Send'),
                   ),
+                // "Share", not "Send": on this page sending already means
+                // putting the goods on a van.
+                OutlinedButton.icon(
+                  onPressed: () => _share(context, controller, order),
+                  icon: const Icon(Icons.ios_share_rounded, size: 18),
+                  label: const Text('Share'),
+                ),
                 // Only once something has actually gone out: a receipt is
                 // proof of goods handed over, not of a promise to send them.
                 if (order.unitsFulfilled > 0) ...[
@@ -589,4 +598,19 @@ class _SendSheetState extends State<_SendSheet> {
       ),
     );
   }
+}
+
+Future<void> _share(
+  BuildContext context,
+  InventoryController controller,
+  SalesOrder order,
+) {
+  final customer = controller.customerById(order.customerId);
+  return shareOrderDocument(
+    context,
+    controller,
+    OrderDocumentData.fromSales(order),
+    contactPhone: customer?.phone ?? '',
+    contactEmail: customer?.email ?? '',
+  );
 }

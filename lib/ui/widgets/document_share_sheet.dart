@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/design.dart';
+import '../../core/formatters.dart';
 import '../../core/palette.dart';
 import '../../data/export_service.dart';
+import '../../data/order_document.dart';
 import '../../data/share_targets.dart';
+import '../../state/inventory_controller.dart';
 import 'app_message.dart';
 
 /// Everything one document needs to be sent somewhere.
@@ -286,4 +289,54 @@ class _ShareTile extends StatelessWidget {
       onTap: onTap,
     );
   }
+}
+
+/// Offers a purchase or sales order as a document.
+///
+/// Shared by both order screens rather than written twice: they send the same
+/// page to different people, and a supplier's copy drifting apart from a
+/// customer's would be nobody's decision.
+///
+/// The written summary matters more here than on a receipt. An order is
+/// forwarded to ask a question about it — "can you do these by Friday" — so
+/// the message has to carry the lines and the total, not just name a file.
+Future<void> shareOrderDocument(
+  BuildContext context,
+  InventoryController controller,
+  OrderDocumentData data, {
+  required String contactPhone,
+  required String contactEmail,
+}) {
+  final settings = controller.settings;
+  final doc = OrderDocument(data, settings);
+  final kind = data.kind.toLowerCase();
+
+  final lines = [
+    '${settings.companyName} — $kind ${data.reference}',
+    '${data.partyLabel}: ${data.partyName}',
+    'Status: ${data.status}',
+    if (data.dueAt != null) '${data.dueLabel}: ${longDate(data.dueAt!)}',
+    '',
+    for (final line in data.lines)
+      '${number(line.quantity)} × ${line.itemName} — '
+          '${money(line.lineTotal, settings.currency)}',
+    '',
+    'Order total: ${money(data.total, settings.currency)}',
+    if (data.notes.trim().isNotEmpty) ...['', data.notes.trim()],
+  ];
+
+  return showDocumentShareSheet(
+    context,
+    ShareableDocument(
+      // Sentence case: "Purchase order PO-0007" reads as a title, where the
+      // document's own all-caps heading would read as shouting in a subject
+      // line or a WhatsApp message.
+      title: '${kind[0].toUpperCase()}${kind.substring(1)} ${data.reference}',
+      filename: doc.filename('pdf'),
+      summary: lines.join('\n'),
+      buildPdf: doc.toPdf,
+      recipientPhone: contactPhone,
+      recipientEmail: contactEmail,
+    ),
+  );
 }

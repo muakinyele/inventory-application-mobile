@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:stockpile/app.dart';
 import 'package:stockpile/models/party.dart';
+import 'package:stockpile/models/purchase_order.dart';
 import 'package:stockpile/models/receipt.dart';
 import 'package:stockpile/state/inventory_controller.dart';
 
@@ -151,6 +152,50 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Copy the details'), findsOneWidget);
+    });
+  });
+
+  // Orders are forwarded as often as receipts — a purchase order goes to a
+  // supplier to ask whether they can do it by Friday — which is why they got
+  // the same sheet rather than a thinner one.
+  group('sharing an order', () {
+    testWidgets('a purchase order offers the same sheet', (tester) async {
+      final order = PurchaseOrder(
+        id: 'po1',
+        reference: 'PO-0007',
+        supplierName: 'Nexa Components',
+        status: PurchaseStatus.ordered,
+        lines: const [
+          PurchaseOrderLine(
+            id: 'l1',
+            itemId: 'i1',
+            itemName: 'Bolt',
+            quantityOrdered: 100,
+            unitCost: 25,
+          ),
+        ],
+        createdAt: DateTime.utc(2026, 9, 20),
+        updatedAt: DateTime.utc(2026, 9, 20),
+      );
+      final controller = await seededController(purchaseOrders: [order]);
+
+      tester.view.physicalSize = _desktop;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: const StockpileApp(initialLocation: '/purchase-orders/po1'),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Share'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Purchase order PO-0007'), findsOneWidget);
+      expect(find.text('WhatsApp'), findsOneWidget);
+      expect(find.text('Share or save the PDF'), findsOneWidget);
     });
   });
 }
