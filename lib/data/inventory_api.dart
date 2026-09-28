@@ -59,6 +59,32 @@ class InventoryApi {
     );
   }
 
+  /// Every item, however many pages that takes.
+  ///
+  /// THE CATALOGUE IS NOT ONE PAGE. The server caps `limit` at 500 and the
+  /// app asked once, so a workspace with more than 500 items loaded the first
+  /// 500 and nothing else — and since every screen computes from that list,
+  /// the dashboard's stock value, the reports and the low-stock alerts were
+  /// all quietly answering for part of the catalogue. Nothing said so.
+  ///
+  /// Sequential rather than parallel: the first response is what says how many
+  /// more there are, and a workspace this size is a handful of round trips,
+  /// not something to open twenty connections for.
+  Future<({List<Item> items, int total})> allItems({int pageSize = 500}) async {
+    final first = await items(limit: pageSize);
+    if (first.items.length >= first.total) return first;
+
+    final collected = [...first.items];
+    // Bounded by the total the server reported, so a server that kept
+    // answering could not spin this forever.
+    while (collected.length < first.total) {
+      final next = await items(limit: pageSize, offset: collected.length);
+      if (next.items.isEmpty) break;
+      collected.addAll(next.items);
+    }
+    return (items: collected, total: first.total);
+  }
+
   /// One item with the per-bin breakdown the stock screen needs.
   Future<({Item item, Map<String, int> stock})> item(String id) async {
     final body = await _auth.send('GET', '/inventory/items/$id');

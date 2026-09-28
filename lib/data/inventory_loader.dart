@@ -13,10 +13,12 @@ import 'snapshot.dart';
 ///
 /// Every list is fetched in parallel. They are independent, and doing them in
 /// sequence would make startup the sum of nine round trips rather than the
-/// slowest one.
+/// slowest one. The catalogue is the exception: it pages, because the server
+/// caps a page at 500 and asking once left a larger workspace with a
+/// silently partial list behind every total in the app.
 Future<Snapshot> loadSharedSnapshot(InventoryApi api) async {
   final results = await Future.wait([
-    api.items(),
+    api.allItems(),
     api.movements(),
     api.suppliers(),
     api.customers(),

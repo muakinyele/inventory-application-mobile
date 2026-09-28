@@ -15,6 +15,7 @@ import 'widgets/app_message.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/filter_chips.dart';
 import 'widgets/page_header.dart';
+import 'widgets/pagination.dart';
 import 'widgets/product_card.dart';
 
 enum SortKey { name, quantity, value, updated }
@@ -59,6 +60,11 @@ class _ItemsPageState extends State<ItemsPage> {
   _StatusFilter _status;
   String? _category;
   String? _location;
+
+  /// Where in the list the reader is. Reset to the first page whenever the
+  /// filters change, because page 7 of the old result set means nothing in
+  /// the new one.
+  PageCursor _cursor = const PageCursor();
   String? _supplierId;
   SortKey _sort = SortKey.name;
 
@@ -122,6 +128,19 @@ class _ItemsPageState extends State<ItemsPage> {
     }
   }
 
+  /// Applies a filter change and returns to the first page.
+  ///
+  /// Every control goes through here. `clamped` would stop a stale page
+  /// rendering empty, but landing on the last page of a narrower result is
+  /// still not where somebody who just typed a search expects to be: they
+  /// expect the best match, which is at the top.
+  void _refine(VoidCallback change) {
+    setState(() {
+      change();
+      _cursor = _cursor.withPage(0);
+    });
+  }
+
   List<Item> _visible(InventoryController controller) {
     final query = _search.text.trim().toLowerCase();
 
@@ -169,6 +188,11 @@ class _ItemsPageState extends State<ItemsPage> {
     final controller = context.watch<InventoryController>();
     final settings = controller.settings;
     final visible = _visible(controller);
+    // Corrected against the filtered count, so a search run from deep in the
+    // list lands on a page that exists rather than on an empty one that reads
+    // as "nothing found".
+    final cursor = _cursor.clamped(visible.length);
+    final page = cursor.slice(visible);
     final p = context.palette;
 
     final categories = <String>{
@@ -220,7 +244,7 @@ class _ItemsPageState extends State<ItemsPage> {
                   ),
                   _SearchRow(
                     controller: _search,
-                    onChanged: (_) => setState(() {}),
+                    onChanged: (_) => _refine(() {}),
                     onScan: _scan,
                     onFilters: () => _openFilterSheet(controller),
                     extraFilters:
@@ -230,7 +254,7 @@ class _ItemsPageState extends State<ItemsPage> {
                   const SizedBox(height: Insets.md),
                   FilterChips<_StatusFilter>(
                     selected: _status,
-                    onSelected: (value) => setState(() => _status = value),
+                    onSelected: (value) => _refine(() => _status = value),
                     options: const [
                       FilterOption(null, 'All'),
                       FilterOption(StockStatus.low, 'Low Stock'),
@@ -242,7 +266,7 @@ class _ItemsPageState extends State<ItemsPage> {
                     const SizedBox(height: Insets.sm),
                     FilterChips<String?>(
                       selected: _category,
-                      onSelected: (value) => setState(() => _category = value),
+                      onSelected: (value) => _refine(() => _category = value),
                       options: [
                         const FilterOption(null, 'All categories'),
                         for (final name in categories)
@@ -277,7 +301,7 @@ class _ItemsPageState extends State<ItemsPage> {
                               label: const Text('Add Item'),
                             )
                           : OutlinedButton(
-                              onPressed: () => setState(() {
+                              onPressed: () => _refine(() {
                                 _search.clear();
                                 _status = null;
                                 _category = null;
@@ -287,11 +311,29 @@ class _ItemsPageState extends State<ItemsPage> {
                               child: const Text('Clear filters'),
                             ),
                     )
-                  : _Grid(
-                      items: visible,
-                      settings: settings,
-                      onAdjust: (item, delta) =>
-                          _quickAdjust(controller, item, delta),
+                  : Column(
+                      children: [
+                        Expanded(
+                          child: _Grid(
+                            items: page,
+                            settings: settings,
+                            onAdjust: (item, delta) =>
+                                _quickAdjust(controller, item, delta),
+                          ),
+                        ),
+                        Padding(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: _gutter(context),
+                          ),
+                          child: PaginationBar(
+                            cursor: cursor,
+                            total: visible.length,
+                            unfilteredTotal: controller.items.length,
+                            filtered: visible.length != controller.items.length,
+                            onCursor: (next) => setState(() => _cursor = next),
+                          ),
+                        ),
+                      ],
                     ),
             ),
           ],
@@ -329,7 +371,7 @@ class _ItemsPageState extends State<ItemsPage> {
         builder: (sheetContext, setSheetState) {
           void update(VoidCallback change) {
             setSheetState(change);
-            setState(change);
+            _refine(change);
           }
 
           return SafeArea(
