@@ -13,6 +13,7 @@ import 'widgets/app_message.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/filter_chips.dart';
 import 'widgets/page_header.dart';
+import 'widgets/pagination.dart';
 import 'widgets/stat_card.dart';
 import 'widgets/status_pill.dart';
 
@@ -29,6 +30,18 @@ class ReceiptsPage extends StatefulWidget {
 class _ReceiptsPageState extends State<ReceiptsPage> {
   _StatusFilter _status;
   final _search = TextEditingController();
+
+  /// Where in the list the reader is. Every control that changes what is in
+  /// the list goes through [_refine], which returns to the first page — a
+  /// search typed on page 4 has to land on its matches.
+  PageCursor _cursor = const PageCursor();
+
+  void _refine(VoidCallback change) {
+    setState(() {
+      change();
+      _cursor = _cursor.withPage(0);
+    });
+  }
 
   _ReceiptsPageState() : _status = null;
 
@@ -90,6 +103,7 @@ class _ReceiptsPageState extends State<ReceiptsPage> {
           r.customerName.toLowerCase().contains(query) ||
           r.lines.any((l) => l.itemName.toLowerCase().contains(query));
     }).toList();
+    final cursor = _cursor.clamped(visible.length);
 
     final today = DateTime.now();
     final todays = all.where((r) => _sameDay(r.issuedAt, today)).toList();
@@ -157,7 +171,7 @@ class _ReceiptsPageState extends State<ReceiptsPage> {
               const SizedBox(height: Insets.lg),
               TextField(
                 controller: _search,
-                onChanged: (_) => setState(() {}),
+                onChanged: (_) => _refine(() {}),
                 decoration: InputDecoration(
                   hintText: 'Search by reference, customer or item',
                   prefixIcon: const Icon(Icons.search, size: 20),
@@ -166,14 +180,14 @@ class _ReceiptsPageState extends State<ReceiptsPage> {
                       ? null
                       : IconButton(
                           icon: const Icon(Icons.clear, size: 18),
-                          onPressed: () => setState(_search.clear),
+                          onPressed: () => _refine(_search.clear),
                         ),
                 ),
               ),
               const SizedBox(height: Insets.md),
               FilterChips<_StatusFilter>(
                 selected: _status,
-                onSelected: (value) => setState(() => _status = value),
+                onSelected: (value) => _refine(() => _status = value),
                 options: const [
                   FilterOption(null, 'All'),
                   FilterOption(ReceiptStatus.issued, 'Issued'),
@@ -202,7 +216,7 @@ class _ReceiptsPageState extends State<ReceiptsPage> {
                           label: const Text('New Receipt'),
                         )
                       : OutlinedButton(
-                          onPressed: () => setState(() {
+                          onPressed: () => _refine(() {
                             _status = null;
                             _search.clear();
                           }),
@@ -211,10 +225,21 @@ class _ReceiptsPageState extends State<ReceiptsPage> {
                 ),
               )
             else
-              for (final receipt in visible) ...[
+              // The PAGE, not the whole list. Export still takes `visible`,
+              // so "export what you are looking at" keeps meaning the whole
+              // filtered set rather than whichever page is on screen.
+              for (final receipt in cursor.slice(visible)) ...[
                 _ReceiptCard(receipt: receipt, currency: currency),
                 const SizedBox(height: Insets.md),
               ],
+            PaginationBar(
+              cursor: cursor,
+              total: visible.length,
+              unit: 'receipts',
+              unfilteredTotal: all.length,
+              filtered: visible.length != all.length,
+              onCursor: (next) => setState(() => _cursor = next),
+            ),
           ],
         ),
       ),

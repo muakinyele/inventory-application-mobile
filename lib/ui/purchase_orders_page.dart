@@ -9,6 +9,7 @@ import '../models/purchase_order.dart';
 import '../state/inventory_controller.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/filter_chips.dart';
+import 'widgets/list_section.dart';
 import 'widgets/page_header.dart';
 import 'widgets/stat_card.dart';
 import 'widgets/status_pill.dart';
@@ -93,49 +94,55 @@ class _PurchaseOrdersPageState extends State<PurchaseOrdersPage> {
                 ],
               ),
               const SizedBox(height: Insets.lg),
-              FilterChips<_StatusFilter>(
-                selected: _status,
-                onSelected: (value) => setState(() => _status = value),
-                options: const [
-                  FilterOption(null, 'All'),
-                  FilterOption(PurchaseStatus.draft, 'Draft'),
-                  FilterOption(PurchaseStatus.ordered, 'Ordered'),
-                  FilterOption(PurchaseStatus.partial, 'Part received'),
-                  FilterOption(PurchaseStatus.received, 'Received'),
-                  FilterOption(PurchaseStatus.cancelled, 'Cancelled'),
-                ],
-              ),
-              const SizedBox(height: Insets.lg),
             ],
-            if (visible.isEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: Insets.section),
-                child: EmptyState(
-                  icon: Icons.receipt_long_outlined,
-                  title: all.isEmpty
-                      ? 'No purchase orders yet'
-                      : 'Nothing with that status',
-                  body: all.isEmpty
-                      ? 'Raise an order to record what you have bought, then '
-                            'receive it to book the stock in.'
-                      : 'Try another filter to see more orders.',
-                  action: all.isEmpty
-                      ? FilledButton.icon(
-                          onPressed: () => context.go('/purchase-orders/new'),
-                          icon: const Icon(Icons.add, size: 18),
-                          label: const Text('New Order'),
-                        )
-                      : OutlinedButton(
-                          onPressed: () => setState(() => _status = null),
-                          child: const Text('Show all'),
-                        ),
+            ListSection<PurchaseOrder>(
+              rows: visible,
+              totalRows: all.length,
+              unit: 'orders',
+              searchHint: 'Search by reference, supplier or item',
+              // The status pills are the page's, so the cursor rewinds on
+              // `filterSignature` when one is tapped.
+              filterSignature: _status,
+              onClearFilters: () => setState(() => _status = null),
+              filters: [
+                FilterChips<_StatusFilter>(
+                  selected: _status,
+                  onSelected: (value) => setState(() => _status = value),
+                  options: const [
+                    FilterOption(null, 'All'),
+                    FilterOption(PurchaseStatus.draft, 'Draft'),
+                    FilterOption(PurchaseStatus.ordered, 'Ordered'),
+                    FilterOption(PurchaseStatus.partial, 'Part received'),
+                    FilterOption(PurchaseStatus.received, 'Received'),
+                    FilterOption(PurchaseStatus.cancelled, 'Cancelled'),
+                  ],
                 ),
-              )
-            else
-              for (final order in visible) ...[
-                _OrderCard(order: order, currency: currency),
-                const SizedBox(height: Insets.md),
               ],
+              matches: (order, query) =>
+                  order.reference.toLowerCase().contains(query) ||
+                  order.supplierName.toLowerCase().contains(query) ||
+                  order.status.label.toLowerCase().contains(query) ||
+                  order.lines.any(
+                    (line) => line.itemName.toLowerCase().contains(query),
+                  ),
+              emptyState: EmptyState(
+                icon: Icons.receipt_long_outlined,
+                title: 'No purchase orders yet',
+                body:
+                    'Raise an order to record what you have bought, then '
+                    'receive it to book the stock in.',
+                action: FilledButton.icon(
+                  onPressed: () => context.go('/purchase-orders/new'),
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('New Order'),
+                ),
+              ),
+              nothingMatchesTitle: 'Nothing with that status',
+              nothingMatchesBody:
+                  'Try another filter or a different search term.',
+              itemBuilder: (context, order) =>
+                  _OrderCard(order: order, currency: currency),
+            ),
           ],
         ),
       ),

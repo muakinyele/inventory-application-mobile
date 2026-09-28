@@ -13,6 +13,7 @@ import 'widgets/app_message.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/filter_chips.dart';
 import 'widgets/page_header.dart';
+import 'widgets/pagination.dart';
 import 'widgets/stat_card.dart';
 import 'widgets/status_pill.dart';
 
@@ -29,6 +30,18 @@ class InvoicesPage extends StatefulWidget {
 class _InvoicesPageState extends State<InvoicesPage> {
   _StatusFilter _status;
   final _search = TextEditingController();
+
+  /// Where in the list the reader is. Every control that changes what is in
+  /// the list goes through [_refine], which returns to the first page — a
+  /// search typed on page 4 has to land on its matches.
+  PageCursor _cursor = const PageCursor();
+
+  void _refine(VoidCallback change) {
+    setState(() {
+      change();
+      _cursor = _cursor.withPage(0);
+    });
+  }
 
   _InvoicesPageState() : _status = null;
 
@@ -77,6 +90,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
           i.customerName.toLowerCase().contains(query) ||
           i.lines.any((l) => l.itemName.toLowerCase().contains(query));
     }).toList();
+    final cursor = _cursor.clamped(visible.length);
 
     final owed = controller.totalReceivable;
     final overdue = controller.overdueInvoices;
@@ -143,7 +157,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
               const SizedBox(height: Insets.lg),
               TextField(
                 controller: _search,
-                onChanged: (_) => setState(() {}),
+                onChanged: (_) => _refine(() {}),
                 decoration: InputDecoration(
                   hintText: 'Search by reference, customer or item',
                   prefixIcon: const Icon(Icons.search, size: 20),
@@ -152,14 +166,14 @@ class _InvoicesPageState extends State<InvoicesPage> {
                       ? null
                       : IconButton(
                           icon: const Icon(Icons.clear, size: 18),
-                          onPressed: () => setState(_search.clear),
+                          onPressed: () => _refine(_search.clear),
                         ),
                 ),
               ),
               const SizedBox(height: Insets.md),
               FilterChips<_StatusFilter>(
                 selected: _status,
-                onSelected: (value) => setState(() => _status = value),
+                onSelected: (value) => _refine(() => _status = value),
                 options: const [
                   FilterOption(null, 'All'),
                   FilterOption(InvoiceStatus.open, 'Unpaid'),
@@ -188,7 +202,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
                           label: const Text('New Invoice'),
                         )
                       : OutlinedButton(
-                          onPressed: () => setState(() {
+                          onPressed: () => _refine(() {
                             _status = null;
                             _search.clear();
                           }),
@@ -197,10 +211,21 @@ class _InvoicesPageState extends State<InvoicesPage> {
                 ),
               )
             else
-              for (final invoice in visible) ...[
+              // The PAGE, not the whole list. Export still takes `visible`,
+              // so "export what you are looking at" keeps meaning the whole
+              // filtered set rather than whichever page is on screen.
+              for (final invoice in cursor.slice(visible)) ...[
                 _InvoiceCard(invoice: invoice, currency: currency),
                 const SizedBox(height: Insets.md),
               ],
+            PaginationBar(
+              cursor: cursor,
+              total: visible.length,
+              unit: 'invoices',
+              unfilteredTotal: all.length,
+              filtered: visible.length != all.length,
+              onCursor: (next) => setState(() => _cursor = next),
+            ),
           ],
         ),
       ),

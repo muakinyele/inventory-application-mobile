@@ -7,6 +7,7 @@ import '../models/party.dart';
 import '../state/inventory_controller.dart';
 import 'widgets/contact_card.dart';
 import 'widgets/empty_state.dart';
+import 'widgets/list_section.dart';
 import 'widgets/page_header.dart';
 
 class CustomersPage extends StatelessWidget {
@@ -34,42 +35,45 @@ class CustomersPage extends StatelessWidget {
                 ),
               ],
             ),
-            if (customers.isEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: Insets.section),
-                child: EmptyState(
-                  icon: Icons.groups_outlined,
-                  title: 'No customers yet',
-                  body:
-                      'Recording customers lets a sale pick the right price '
-                      'tier automatically.',
-                  action: FilledButton.icon(
-                    onPressed: () => _edit(context, controller, null),
-                    icon: const Icon(Icons.add, size: 18),
-                    label: const Text('Add Customer'),
-                  ),
+            ListSection<Customer>(
+              rows: customers,
+              unit: 'customers',
+              searchHint: 'Search by name, contact, phone or email',
+              matches: (customer, query) =>
+                  customer.name.toLowerCase().contains(query) ||
+                  customer.contactName.toLowerCase().contains(query) ||
+                  customer.phone.toLowerCase().contains(query) ||
+                  customer.email.toLowerCase().contains(query) ||
+                  customer.address.toLowerCase().contains(query) ||
+                  customer.priceTier.label.toLowerCase().contains(query),
+              emptyState: EmptyState(
+                icon: Icons.groups_outlined,
+                title: 'No customers yet',
+                body:
+                    'Recording customers lets a sale pick the right price '
+                    'tier automatically.',
+                action: FilledButton.icon(
+                  onPressed: () => _edit(context, controller, null),
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('Add Customer'),
                 ),
-              )
-            else
-              for (final customer in customers) ...[
-                ContactCard(
-                  name: customer.name,
-                  badge: TierBadge(label: customer.priceTier.label),
-                  subtitle: [
-                    if (customer.contactName.isNotEmpty) customer.contactName,
-                    if (customer.phone.isNotEmpty) customer.phone,
-                    if (customer.email.isNotEmpty) customer.email,
-                  ].join(' · '),
-                  facts: [
-                    ('Price tier', customer.priceTier.label),
-                    ('Address', customer.address),
-                  ],
-                  onEdit: () => _edit(context, controller, customer),
-                  onArchive: () =>
-                      _confirmArchive(context, controller, customer),
-                ),
-                const SizedBox(height: Insets.md),
-              ],
+              ),
+              itemBuilder: (context, customer) => ContactCard(
+                name: customer.name,
+                badge: TierBadge(label: customer.priceTier.label),
+                subtitle: [
+                  if (customer.contactName.isNotEmpty) customer.contactName,
+                  if (customer.phone.isNotEmpty) customer.phone,
+                  if (customer.email.isNotEmpty) customer.email,
+                ].join(' · '),
+                facts: [
+                  ('Price tier', customer.priceTier.label),
+                  ('Address', customer.address),
+                ],
+                onEdit: () => _edit(context, controller, customer),
+                onArchive: () => _confirmArchive(context, controller, customer),
+              ),
+            ),
           ],
         ),
       ),

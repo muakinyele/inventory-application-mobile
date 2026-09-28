@@ -9,6 +9,7 @@ import '../models/transfer.dart';
 import '../state/inventory_controller.dart';
 import 'widgets/bin_bar.dart';
 import 'widgets/empty_state.dart';
+import 'widgets/list_section.dart';
 import 'widgets/page_header.dart';
 import 'widgets/section_card.dart';
 
@@ -71,28 +72,34 @@ class TransfersPage extends StatelessWidget {
               ),
               const SizedBox(height: Insets.lg),
             ],
-            if (transfers.isEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: Insets.section),
-                child: EmptyState(
-                  icon: Icons.swap_horiz_rounded,
-                  title: 'Nothing moved yet',
-                  body:
-                      'Record a transfer when stock goes from one location to '
-                      'another. The total on hand does not change — only where '
-                      'it is sitting.',
-                  action: FilledButton.icon(
-                    onPressed: () => context.go('/transfers/new'),
-                    icon: const Icon(Icons.add, size: 18),
-                    label: const Text('Move Stock'),
+            ListSection<Transfer>(
+              rows: transfers,
+              unit: 'transfers',
+              searchHint: 'Search by reference, location or item',
+              matches: (transfer, query) =>
+                  transfer.reference.toLowerCase().contains(query) ||
+                  transfer.fromLocation.toLowerCase().contains(query) ||
+                  transfer.toLocation.toLowerCase().contains(query) ||
+                  transfer.notes.toLowerCase().contains(query) ||
+                  transfer.lines.any(
+                    (line) => line.itemName.toLowerCase().contains(query),
                   ),
+              emptyState: EmptyState(
+                icon: Icons.swap_horiz_rounded,
+                title: 'Nothing moved yet',
+                body:
+                    'Record a transfer when stock goes from one location to '
+                    'another. The total on hand does not change — only where '
+                    'it is sitting.',
+                action: FilledButton.icon(
+                  onPressed: () => context.go('/transfers/new'),
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('Move Stock'),
                 ),
-              )
-            else
-              for (final transfer in transfers) ...[
-                _TransferCard(transfer: transfer),
-                const SizedBox(height: Insets.md),
-              ],
+              ),
+              itemBuilder: (context, transfer) =>
+                  _TransferCard(transfer: transfer),
+            ),
           ],
         ),
       ),

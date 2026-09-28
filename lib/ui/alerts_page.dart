@@ -7,6 +7,8 @@ import '../core/formatters.dart';
 import '../core/palette.dart';
 import '../models/item.dart';
 import '../state/inventory_controller.dart';
+import 'widgets/empty_state.dart';
+import 'widgets/list_section.dart';
 import 'widgets/page_header.dart';
 import 'widgets/stat_card.dart';
 import 'widgets/status_chip.dart';
@@ -123,10 +125,27 @@ class AlertsPage extends StatelessWidget {
               ],
             ),
             const SizedBox(height: Insets.lg),
-            for (final item in flagged) ...[
-              _AlertRow(item: item),
-              const SizedBox(height: Insets.md),
-            ],
+            ListSection<Item>(
+              rows: flagged,
+              unit: 'items',
+              searchHint: 'Search flagged items by name, SKU or category',
+              matches: (item, query) =>
+                  item.name.toLowerCase().contains(query) ||
+                  item.sku.toLowerCase().contains(query) ||
+                  item.barcode.contains(query) ||
+                  item.category.toLowerCase().contains(query) ||
+                  item.location.toLowerCase().contains(query) ||
+                  item.supplier.toLowerCase().contains(query),
+              // Unreachable in practice — the page returns the all-clear
+              // above when nothing is flagged — but a list widget that cannot
+              // say "nothing here" is one refactor away from showing blank.
+              emptyState: const EmptyState(
+                icon: Icons.check_circle_outline,
+                title: 'Nothing needs attention',
+                body: 'Every item is above its reorder level.',
+              ),
+              itemBuilder: (context, item) => _AlertRow(item: item),
+            ),
           ],
         ),
       ),

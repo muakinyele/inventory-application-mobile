@@ -9,6 +9,7 @@ import '../models/sales_order.dart';
 import '../state/inventory_controller.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/filter_chips.dart';
+import 'widgets/list_section.dart';
 import 'widgets/page_header.dart';
 import 'widgets/stat_card.dart';
 import 'widgets/status_pill.dart';
@@ -93,49 +94,55 @@ class _SalesOrdersPageState extends State<SalesOrdersPage> {
                 ],
               ),
               const SizedBox(height: Insets.lg),
-              FilterChips<_StatusFilter>(
-                selected: _status,
-                onSelected: (value) => setState(() => _status = value),
-                options: const [
-                  FilterOption(null, 'All'),
-                  FilterOption(SalesStatus.draft, 'Draft'),
-                  FilterOption(SalesStatus.confirmed, 'Confirmed'),
-                  FilterOption(SalesStatus.partial, 'Part sent'),
-                  FilterOption(SalesStatus.fulfilled, 'Fulfilled'),
-                  FilterOption(SalesStatus.cancelled, 'Cancelled'),
-                ],
-              ),
-              const SizedBox(height: Insets.lg),
             ],
-            if (visible.isEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: Insets.section),
-                child: EmptyState(
-                  icon: Icons.request_quote_outlined,
-                  title: all.isEmpty
-                      ? 'No sales yet'
-                      : 'Nothing with that status',
-                  body: all.isEmpty
-                      ? 'Raise a sale to record what a customer has bought, '
-                            'then send it to take the stock off the shelf.'
-                      : 'Try another filter to see more sales.',
-                  action: all.isEmpty
-                      ? FilledButton.icon(
-                          onPressed: () => context.go('/sales-orders/new'),
-                          icon: const Icon(Icons.add, size: 18),
-                          label: const Text('New Sale'),
-                        )
-                      : OutlinedButton(
-                          onPressed: () => setState(() => _status = null),
-                          child: const Text('Show all'),
-                        ),
+            ListSection<SalesOrder>(
+              rows: visible,
+              totalRows: all.length,
+              unit: 'sales',
+              searchHint: 'Search by reference, customer or item',
+              // The status pills are the page's, so the cursor rewinds on
+              // `filterSignature` when one is tapped.
+              filterSignature: _status,
+              onClearFilters: () => setState(() => _status = null),
+              filters: [
+                FilterChips<_StatusFilter>(
+                  selected: _status,
+                  onSelected: (value) => setState(() => _status = value),
+                  options: const [
+                    FilterOption(null, 'All'),
+                    FilterOption(SalesStatus.draft, 'Draft'),
+                    FilterOption(SalesStatus.confirmed, 'Confirmed'),
+                    FilterOption(SalesStatus.partial, 'Part sent'),
+                    FilterOption(SalesStatus.fulfilled, 'Fulfilled'),
+                    FilterOption(SalesStatus.cancelled, 'Cancelled'),
+                  ],
                 ),
-              )
-            else
-              for (final order in visible) ...[
-                _SaleCard(order: order, currency: currency),
-                const SizedBox(height: Insets.md),
               ],
+              matches: (order, query) =>
+                  order.reference.toLowerCase().contains(query) ||
+                  order.customerName.toLowerCase().contains(query) ||
+                  order.status.label.toLowerCase().contains(query) ||
+                  order.lines.any(
+                    (line) => line.itemName.toLowerCase().contains(query),
+                  ),
+              emptyState: EmptyState(
+                icon: Icons.receipt_long_outlined,
+                title: 'No sales yet',
+                body:
+                    'Raise a sale to record what a customer has bought, '
+                    'then send it to take the stock off the shelf.',
+                action: FilledButton.icon(
+                  onPressed: () => context.go('/sales-orders/new'),
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('New Order'),
+                ),
+              ),
+              nothingMatchesTitle: 'Nothing with that status',
+              nothingMatchesBody:
+                  'Try another filter, or a different search term.',
+              itemBuilder: (context, order) =>
+                  _SaleCard(order: order, currency: currency),
+            ),
           ],
         ),
       ),

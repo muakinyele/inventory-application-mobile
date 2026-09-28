@@ -14,6 +14,7 @@ import 'widgets/empty_state.dart';
 import 'widgets/filter_chips.dart';
 import 'widgets/movement_tile.dart';
 import 'widgets/page_header.dart';
+import 'widgets/pagination.dart';
 import 'widgets/section_card.dart';
 
 enum _Filter { all, stockIn, stockOut, edits }
@@ -27,6 +28,35 @@ class ActivityPage extends StatefulWidget {
 
 class _ActivityPageState extends State<ActivityPage> {
   _Filter _filter = _Filter.all;
+  final _search = TextEditingController();
+
+  /// The log is the longest list in the app — one row per stock change,
+  /// forever — so it is the one that most needed paging. Day grouping is
+  /// applied to the PAGE rather than the whole log, so the headings describe
+  /// what is on screen.
+  PageCursor _cursor = const PageCursor();
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  void _refine(VoidCallback change) {
+    setState(() {
+      change();
+      _cursor = _cursor.withPage(0);
+    });
+  }
+
+  bool _matchesQuery(Movement m) {
+    final query = _search.text.trim().toLowerCase();
+    if (query.isEmpty) return true;
+    return m.itemName.toLowerCase().contains(query) ||
+        m.note.toLowerCase().contains(query) ||
+        m.actor.toLowerCase().contains(query) ||
+        m.kind.name.toLowerCase().contains(query);
+  }
 
   bool _matches(Movement m) => switch (_filter) {
     _Filter.all => true,
@@ -61,8 +91,16 @@ class _ActivityPageState extends State<ActivityPage> {
       if (m.delta < 0) unitsOut -= m.delta;
     }
 
+    final visible = [
+      for (final m in controller.movements)
+        if (_matches(m) && _matchesQuery(m)) m,
+    ];
+    final cursor = _cursor.clamped(visible.length);
+
+    // Grouped after slicing, so a day heading never promises rows that are on
+    // the next page.
     final groups = <String, List<Movement>>{};
-    for (final m in controller.movements.where(_matches)) {
+    for (final m in cursor.slice(visible)) {
       groups.putIfAbsent(dayLabel(m.at), () => []).add(m);
     }
 
@@ -89,7 +127,7 @@ class _ActivityPageState extends State<ActivityPage> {
             ),
             FilterChips<_Filter>(
               selected: _filter,
-              onSelected: (value) => setState(() => _filter = value),
+              onSelected: (value) => _refine(() => _filter = value),
               options: const [
                 FilterOption(_Filter.all, 'All'),
                 FilterOption(
@@ -104,6 +142,12 @@ class _ActivityPageState extends State<ActivityPage> {
                 ),
                 FilterOption(_Filter.edits, 'Edits', icon: Icons.edit_outlined),
               ],
+            ),
+            const SizedBox(height: Insets.lg),
+            SearchField(
+              controller: _search,
+              hintText: 'Search the log by item, note or who did it',
+              onChanged: (_) => _refine(() {}),
             ),
             const SizedBox(height: Insets.lg),
             if (groups.isEmpty)
@@ -121,8 +165,10 @@ class _ActivityPageState extends State<ActivityPage> {
                   action: controller.movements.isEmpty
                       ? null
                       : OutlinedButton(
-                          onPressed: () =>
-                              setState(() => _filter = _Filter.all),
+                          onPressed: () => _refine(() {
+                            _filter = _Filter.all;
+                            _search.clear();
+                          }),
                           child: const Text('Show all'),
                         ),
                 ),
@@ -158,6 +204,14 @@ class _ActivityPageState extends State<ActivityPage> {
                 ),
                 const SizedBox(height: Insets.md),
               ],
+            PaginationBar(
+              cursor: cursor,
+              total: visible.length,
+              unit: 'movements',
+              unfilteredTotal: controller.movements.length,
+              filtered: visible.length != controller.movements.length,
+              onCursor: (next) => setState(() => _cursor = next),
+            ),
           ],
         ),
       ),

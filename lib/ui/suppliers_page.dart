@@ -9,6 +9,7 @@ import '../models/party.dart';
 import '../state/inventory_controller.dart';
 import 'widgets/contact_card.dart';
 import 'widgets/empty_state.dart';
+import 'widgets/list_section.dart';
 import 'widgets/page_header.dart';
 
 class SuppliersPage extends StatelessWidget {
@@ -36,53 +37,55 @@ class SuppliersPage extends StatelessWidget {
                 ),
               ],
             ),
-            if (suppliers.isEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: Insets.section),
-                child: EmptyState(
-                  icon: Icons.local_shipping_outlined,
-                  title: 'No suppliers yet',
-                  body:
-                      'Adding suppliers lets you track lead times and see '
-                      'which items come from where.',
-                  action: FilledButton.icon(
-                    onPressed: () => _edit(context, controller, null),
-                    icon: const Icon(Icons.add, size: 18),
-                    label: const Text('Add Supplier'),
+            ListSection<Supplier>(
+              rows: suppliers,
+              unit: 'suppliers',
+              searchHint: 'Search by name, contact, phone or email',
+              matches: (supplier, query) =>
+                  supplier.name.toLowerCase().contains(query) ||
+                  supplier.contactName.toLowerCase().contains(query) ||
+                  supplier.phone.toLowerCase().contains(query) ||
+                  supplier.email.toLowerCase().contains(query) ||
+                  supplier.address.toLowerCase().contains(query),
+              emptyState: EmptyState(
+                icon: Icons.local_shipping_outlined,
+                title: 'No suppliers yet',
+                body:
+                    'Adding suppliers lets you track lead times and see '
+                    'which items come from where.',
+                action: FilledButton.icon(
+                  onPressed: () => _edit(context, controller, null),
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('Add Supplier'),
+                ),
+              ),
+              itemBuilder: (context, supplier) => ContactCard(
+                name: supplier.name,
+                subtitle: [
+                  if (supplier.contactName.isNotEmpty) supplier.contactName,
+                  if (supplier.phone.isNotEmpty) supplier.phone,
+                  if (supplier.email.isNotEmpty) supplier.email,
+                ].join(' · '),
+                facts: [
+                  (
+                    'Items supplied',
+                    number(controller.itemCountForSupplier(supplier.id)),
                   ),
-                ),
-              )
-            else
-              for (final supplier in suppliers) ...[
-                ContactCard(
-                  name: supplier.name,
-                  subtitle: [
-                    if (supplier.contactName.isNotEmpty) supplier.contactName,
-                    if (supplier.phone.isNotEmpty) supplier.phone,
-                    if (supplier.email.isNotEmpty) supplier.email,
-                  ].join(' · '),
-                  facts: [
-                    (
-                      'Items supplied',
-                      number(controller.itemCountForSupplier(supplier.id)),
-                    ),
-                    (
-                      'Lead time',
-                      supplier.leadTimeDays == 0
-                          ? '—'
-                          : '${number(supplier.leadTimeDays)} days',
-                    ),
-                    ('Payment terms', supplier.paymentTerms),
-                  ],
-                  onTap: controller.itemCountForSupplier(supplier.id) == 0
-                      ? null
-                      : () => context.go('/items?supplier=${supplier.id}'),
-                  onEdit: () => _edit(context, controller, supplier),
-                  onArchive: () =>
-                      _confirmArchive(context, controller, supplier),
-                ),
-                const SizedBox(height: Insets.md),
-              ],
+                  (
+                    'Lead time',
+                    supplier.leadTimeDays == 0
+                        ? '—'
+                        : '${number(supplier.leadTimeDays)} days',
+                  ),
+                  ('Payment terms', supplier.paymentTerms),
+                ],
+                onTap: controller.itemCountForSupplier(supplier.id) == 0
+                    ? null
+                    : () => context.go('/items?supplier=${supplier.id}'),
+                onEdit: () => _edit(context, controller, supplier),
+                onArchive: () => _confirmArchive(context, controller, supplier),
+              ),
+            ),
           ],
         ),
       ),
