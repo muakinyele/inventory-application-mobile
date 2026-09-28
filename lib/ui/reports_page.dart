@@ -11,6 +11,7 @@ import '../models/app_settings.dart';
 import '../models/item.dart';
 import '../state/inventory_controller.dart';
 import 'widgets/app_message.dart';
+import 'widgets/document_share_sheet.dart';
 import 'widgets/charts.dart';
 import 'widgets/custom_period_dialog.dart';
 import 'widgets/empty_state.dart';
@@ -92,6 +93,42 @@ class _ReportsPageState extends State<ReportsPage> {
     MessageTone tone = MessageTone.success,
   }) {
     return showAppMessage(context, message, tone: tone);
+  }
+
+  /// Sends the period's figures.
+  ///
+  /// The reason this is here and not only on the documents: the month's
+  /// numbers are what gets forwarded to an accountant or a partner, and until
+  /// now the only way was to download a file and attach it by hand.
+  ///
+  /// The written summary is the headline figures rather than a note about an
+  /// attachment, because on WhatsApp there is no attachment — and the headline
+  /// figures are usually the whole question anyway.
+  Future<void> _share(SalesReport report, AppSettings settings) {
+    final doc = ReportDocument(report, settings);
+    String cash(num value) => money(value, settings.currency);
+
+    final lines = [
+      '${settings.companyName} — ${report.range.label}',
+      '',
+      'Revenue: ${cash(report.revenue)}',
+      'Cost of goods: ${cash(report.costOfGoods)}',
+      'Gross profit: ${cash(report.grossProfit)}',
+      'Units sold: ${number(report.unitsSold)}',
+      'Documents: ${number(report.documentCount)}',
+      if (report.outstanding > 0)
+        'Still outstanding: ${cash(report.outstanding)}',
+    ];
+
+    return showDocumentShareSheet(
+      context,
+      ShareableDocument(
+        title: 'Report — ${report.range.label}',
+        filename: doc.filename('pdf'),
+        summary: lines.join('\n'),
+        buildPdf: doc.toPdf,
+      ),
+    );
   }
 
   Future<void> _export(
@@ -238,6 +275,11 @@ class _ReportsPageState extends State<ReportsPage> {
                     icon: const Icon(Icons.table_chart_outlined, size: 18),
                     label: const Text('Excel'),
                   ),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _exporting ? null : () => _share(report, settings),
+                  icon: const Icon(Icons.ios_share_rounded, size: 18),
+                  label: const Text('Share'),
                 ),
               ],
             ),

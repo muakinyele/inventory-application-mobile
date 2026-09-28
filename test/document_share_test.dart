@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:stockpile/app.dart';
+import 'package:stockpile/models/item.dart';
 import 'package:stockpile/models/party.dart';
 import 'package:stockpile/models/purchase_order.dart';
 import 'package:stockpile/models/receipt.dart';
@@ -196,6 +197,45 @@ void main() {
       expect(find.text('Purchase order PO-0007'), findsOneWidget);
       expect(find.text('WhatsApp'), findsOneWidget);
       expect(find.text('Share or save the PDF'), findsOneWidget);
+    });
+  });
+
+  group('sharing a report', () {
+    testWidgets('the figures can be sent, not only downloaded', (tester) async {
+      // The month's numbers are what gets forwarded to an accountant, and the
+      // only way used to be download-then-attach by hand.
+      // The page shows an empty state with no catalogue at all, so the
+      // fixture needs an item as well as the sale.
+      final controller = await seededController(
+        items: [
+          Item(
+            id: 'i1',
+            name: 'Bolt',
+            quantity: 10,
+            unitCost: 1000,
+            createdAt: DateTime.utc(2026, 9, 1),
+            updatedAt: DateTime.utc(2026, 9, 1),
+          ),
+        ],
+        receipts: [_receipt],
+      );
+
+      tester.view.physicalSize = _desktop;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: controller,
+          child: const StockpileApp(initialLocation: '/reports'),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Share'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Report —'), findsOneWidget);
+      expect(find.text('WhatsApp'), findsOneWidget);
     });
   });
 }
