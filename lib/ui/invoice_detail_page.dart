@@ -13,6 +13,7 @@ import '../state/inventory_controller.dart';
 import 'document_view_page.dart';
 import 'widgets/app_message.dart';
 import 'widgets/document_link_row.dart';
+import 'widgets/document_share_sheet.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/page_header.dart';
 import 'widgets/section_card.dart';
@@ -107,6 +108,13 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
                         : const Icon(Icons.picture_as_pdf_outlined, size: 18),
                     label: const Text('Download PDF'),
                   ),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _exporting
+                      ? null
+                      : () => _share(invoice, payments),
+                  icon: const Icon(Icons.ios_share_rounded, size: 18),
+                  label: const Text('Send'),
                 ),
               ],
             ),
@@ -342,6 +350,51 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
   static String _percent(double rate) {
     final percent = rate * 100;
     return '${percent.toStringAsFixed(percent % 1 == 0 ? 0 : 2)}%';
+  }
+
+  /// Offers every way this invoice can reach the customer.
+  ///
+  /// An invoice's message leads with what is owed and by when, because that
+  /// is the reason it is being sent — and a deep link carries no attachment,
+  /// so the figure has to be in the words.
+  Future<void> _share(Invoice invoice, List<InvoicePayment> payments) async {
+    final controller = context.read<InventoryController>();
+    final settings = controller.settings;
+    final customer = controller.customerById(invoice.customerId);
+    final doc = InvoiceDocument(invoice, settings, payments: payments);
+
+    final lines = [
+      '${settings.companyName} — invoice ${invoice.reference}',
+      if (invoice.customerName.isNotEmpty) 'For: ${invoice.customerName}',
+      'Issued: ${longDate(invoice.issuedAt)}',
+      if (invoice.dueAt != null) 'Due: ${longDate(invoice.dueAt!)}',
+      '',
+      for (final line in invoice.lines)
+        '${line.quantity} × ${line.itemName} — '
+            '${money(line.net, settings.currency)}',
+      '',
+      'Total: ${money(invoice.total, settings.currency)}',
+      if (invoice.balanceDue > 0)
+        'Balance due: ${money(invoice.balanceDue, settings.currency)}'
+      else
+        'Settled in full — thank you.',
+      if (settings.companyPhone.isNotEmpty) '',
+      if (settings.companyPhone.isNotEmpty)
+        'Questions? ${settings.companyPhone}',
+    ];
+
+    await showDocumentShareSheet(
+      context,
+      ShareableDocument(
+        title: 'Invoice ${invoice.reference}',
+        filename: doc.filename('pdf'),
+        summary: lines.join('\n'),
+        buildPdf: doc.toPdf,
+        onView: () => context.go('/invoices/${invoice.id}/view'),
+        recipientPhone: customer?.phone,
+        recipientEmail: customer?.email,
+      ),
+    );
   }
 
   Future<void> _exportPdf(

@@ -14,6 +14,7 @@ import 'document_view_page.dart';
 import 'widgets/app_message.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/page_header.dart';
+import 'widgets/document_share_sheet.dart';
 import 'widgets/receipt_export_sheet.dart';
 import 'widgets/section_card.dart';
 import 'widgets/status_pill.dart';
@@ -101,12 +102,19 @@ class _ReceiptDetailPageState extends State<ReceiptDetailPage> {
                     label: const Text('Download PDF'),
                   ),
                 ),
+                OutlinedButton.icon(
+                  onPressed: _exporting
+                      ? null
+                      : () => _share(controller, receipt),
+                  icon: const Icon(Icons.ios_share_rounded, size: 18),
+                  label: const Text('Send'),
+                ),
                 Builder(
-                  builder: (buttonContext) => OutlinedButton.icon(
+                  builder: (buttonContext) => TextButton.icon(
                     onPressed: _exporting
                         ? null
                         : () => _exportAs(buttonContext, receipt),
-                    icon: const Icon(Icons.ios_share_rounded, size: 18),
+                    icon: const Icon(Icons.more_horiz, size: 18),
                     label: const Text('Other formats'),
                   ),
                 ),
@@ -387,6 +395,46 @@ class _ReceiptDetailPageState extends State<ReceiptDetailPage> {
       if (mounted) setState(() => _exporting = false);
     }
     if (mounted) _notify('${receipt.reference} exported as ${format.label}');
+  }
+
+  /// Offers every way this receipt can reach the customer.
+  ///
+  /// The summary is what a deep link carries, so it has to stand on its own:
+  /// somebody reading it in WhatsApp sees no attachment, and "please find
+  /// attached" would be a lie there.
+  Future<void> _share(InventoryController controller, Receipt receipt) async {
+    final settings = controller.settings;
+    final customer = controller.customerById(receipt.customerId);
+    final doc = ReceiptDocument(receipt, settings);
+
+    final lines = [
+      '${settings.companyName} — receipt ${receipt.reference}',
+      if (receipt.customerName.isNotEmpty) 'For: ${receipt.customerName}',
+      'Date: ${dateTimeLabel(receipt.issuedAt)}',
+      '',
+      for (final line in receipt.lines)
+        '${line.quantity} × ${line.itemName} — '
+            '${money(line.net, settings.currency)}',
+      '',
+      'Total: ${money(receipt.total, settings.currency)}',
+      if (receipt.balanceDue > 0)
+        'Outstanding: ${money(receipt.balanceDue, settings.currency)}'
+      else
+        'Paid in full — thank you.',
+    ];
+
+    await showDocumentShareSheet(
+      context,
+      ShareableDocument(
+        title: 'Receipt ${receipt.reference}',
+        filename: doc.filename('pdf'),
+        summary: lines.join('\n'),
+        buildPdf: doc.toPdf,
+        onView: () => context.go('/receipts/${receipt.id}/view'),
+        recipientPhone: customer?.phone,
+        recipientEmail: customer?.email,
+      ),
+    );
   }
 
   Future<void> _exportAs(BuildContext buttonContext, Receipt receipt) async {

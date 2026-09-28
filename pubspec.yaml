@@ -27,6 +27,10 @@ dependencies:
   printing: ^5.15.0
   provider: ^6.1.5+1
   share_plus: ^13.3.0
+  # Deep links into the apps people forward documents with — wa.me, mailto:,
+  # sms:. These carry TEXT; none of them can attach a file, which is why the
+  # system share sheet is still the way a PDF actually travels.
+  url_launcher: ^6.3.2
   shared_preferences: ^2.5.5
 
 dev_dependencies:
