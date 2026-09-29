@@ -497,6 +497,93 @@ class InventoryController extends ChangeNotifier {
     }
   }
 
+  /// Brings receipts in from a sheet, as history rather than as sales.
+  ///
+  /// NOTHING MOVES IN STOCK. These are receipts that already happened —
+  /// usually from the system this one is replacing — and the stock they took
+  /// was taken then, by that system. Booking them out again would subtract the
+  /// same goods twice and leave every count short by the whole imported
+  /// history.
+  ///
+  /// Item names are matched where they can be, so an imported line links to
+  /// the catalogue and shows in an item's history; an unmatched name stays as
+  /// text, which is what the exporter wrote and what keeps the record
+  /// readable either way.
+  ///
+  /// Returns how many landed. The ones that did not are in [failed], by
+  /// reference, so the screen can name them rather than saying "some".
+  Future<({int imported, List<String> failed})> importReceipts(
+    List<ReceiptDraft> drafts,
+  ) async {
+    final byName = {
+      for (final item in _items) item.name.toLowerCase().trim(): item,
+    };
+    final bySku = {
+      for (final item in _items)
+        if (item.sku.isNotEmpty) item.sku.toLowerCase().trim(): item,
+    };
+
+    var imported = 0;
+    final failed = <String>[];
+
+    for (final draft in drafts) {
+      final lines = <ReceiptLine>[];
+      for (final line in draft.lines) {
+        final match =
+            bySku[line.sku.toLowerCase().trim()] ??
+            byName[line.itemName.toLowerCase().trim()];
+        lines.add(
+          ReceiptLine(
+            id: line.id,
+            itemId: match?.id ?? '',
+            itemName: line.itemName,
+            sku: line.sku,
+            unit: line.unit,
+            quantity: line.quantity,
+            unitPrice: line.unitPrice,
+            discount: line.discount,
+            quantityRefunded: line.quantityRefunded,
+            costOfGoods: line.quantity * (match?.unitCost ?? 0),
+          ),
+        );
+      }
+
+      final now = DateTime.now();
+      final receipt = Receipt(
+        id: '',
+        // Blank, so the server mints one rather than this colliding with a
+        // reference the workspace already used.
+        reference: '',
+        customerName: draft.customerName,
+        method: draft.method,
+        lines: lines,
+        discount: draft.discount,
+        taxRate: draft.taxRate.clamp(0, 1).toDouble(),
+        taxLabel: draft.taxLabel,
+        amountPaid: draft.amountPaid,
+        notes: draft.notes,
+        movesStock: false,
+        issuedAt: draft.issuedAt,
+        createdAt: now,
+        updatedAt: now,
+      );
+
+      try {
+        final saved = await _api.saveReceipt(receipt);
+        _receipts = [saved, ..._receipts.where((r) => r.id != saved.id)];
+        imported++;
+      } catch (error) {
+        failed.add(draft.reference);
+        lastWriteError = error;
+        debugPrint('Stockpile: could not import ${draft.reference}: $error');
+      }
+    }
+
+    if (imported > 0 && failed.isEmpty) lastWriteError = null;
+    notifyListeners();
+    return (imported: imported, failed: failed);
+  }
+
   /// Books a delivery in on the server and adopts the result.
   ///
   /// Returns the units the server actually accepted, which is not always what

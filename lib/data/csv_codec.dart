@@ -1,5 +1,6 @@
 import '../models/item.dart';
 import '../models/movement.dart';
+import '../models/receipt.dart';
 
 const _itemColumns = [
   'name',
@@ -226,4 +227,182 @@ ImportResult csvToItems(String text) {
   }
 
   return ImportResult(items, errors);
+}
+
+/// One receipt rebuilt from a sheet, with the lines that belonged to it.
+class ReceiptDraft {
+  const ReceiptDraft({
+    required this.reference,
+    required this.issuedAt,
+    required this.customerName,
+    required this.method,
+    required this.lines,
+    this.notes = '',
+    this.taxLabel = 'VAT',
+    this.taxRate = 0,
+    this.discount = 0,
+    this.amountPaid = 0,
+  });
+
+  final String reference;
+  final DateTime issuedAt;
+  final String customerName;
+  final PaymentMethod method;
+  final List<ReceiptLine> lines;
+  final String notes;
+  final String taxLabel;
+  final double taxRate;
+  final double discount;
+  final double amountPaid;
+}
+
+class ReceiptImportResult {
+  const ReceiptImportResult(this.receipts, this.errors);
+  final List<ReceiptDraft> receipts;
+  final List<String> errors;
+}
+
+/// Rebuilds receipts from the sheet [receiptsToCsv] writes.
+///
+/// ONE ROW PER LINE, so the rows have to be gathered back into documents:
+/// every row repeats its receipt's reference, totals and customer, and the
+/// columns that differ are the item ones. Rows are grouped by reference in the
+/// order they appear, which keeps a hand-edited sheet importable as long as a
+/// receipt's rows stay together — and tolerates them not being, since grouping
+/// is by key rather than by adjacency.
+///
+/// Totals are NOT read back. They are derived from the lines, the discount and
+/// the tax rate, and a sheet someone has edited will have a stale total in it
+/// far more often than a wrong line. Reading the total would import an
+/// arithmetic that disagrees with the lines printed beside it.
+ReceiptImportResult csvToReceipts(String text) {
+  final rows = parseCsv(text);
+  if (rows.length < 2) {
+    return const ReceiptImportResult([], ['The file has no data rows.']);
+  }
+
+  final header = rows.first
+      .map((h) => h.trim().toLowerCase().replaceAll(RegExp(r'[\s_-]'), ''))
+      .toList();
+  int col(String name) => header.indexOf(name);
+
+  final iReference = col('reference');
+  if (iReference == -1) {
+    return const ReceiptImportResult([], [
+      'No "reference" column found. That column is required.',
+    ]);
+  }
+
+  final iIssued = col('issuedat');
+  final iCustomer = col('customer');
+  final iMethod = col('paymentmethod');
+  final iItem = col('item');
+  final iSku = col('sku');
+  final iQuantity = col('quantity');
+  final iUnit = col('unit');
+  final iUnitPrice = col('unitprice');
+  final iLineDiscount = col('linediscount');
+  final iRefunded = col('quantityrefunded');
+  final iDiscount = col('receiptdiscount');
+  final iTaxLabel = col('taxlabel');
+  final iTaxRate = col('taxrate');
+  final iPaid = col('amountpaid');
+  final iNotes = col('notes');
+
+  String cell(List<String> row, int i) =>
+      (i == -1 || i >= row.length) ? '' : row[i].trim();
+
+  double num_(List<String> row, int i) {
+    final raw = cell(row, i).replaceAll(RegExp(r'[^0-9.\-]'), '');
+    return double.tryParse(raw) ?? 0;
+  }
+
+  int int_(List<String> row, int i) => num_(row, i).round();
+
+  final byReference = <String, ReceiptDraft>{};
+  final linesByReference = <String, List<ReceiptLine>>{};
+  final errors = <String>[];
+  var lineId = 0;
+
+  for (var r = 1; r < rows.length; r++) {
+    final row = rows[r];
+    if (row.every((c) => c.trim().isEmpty)) continue;
+
+    final reference = cell(row, iReference);
+    if (reference.isEmpty) {
+      errors.add('Row ${r + 1}: no receipt reference, so it was skipped.');
+      continue;
+    }
+
+    final issuedRaw = cell(row, iIssued);
+    final issuedAt = DateTime.tryParse(issuedRaw);
+    if (issuedAt == null && issuedRaw.isNotEmpty) {
+      errors.add('Row ${r + 1}: "$issuedRaw" is not a date it could read.');
+    }
+
+    byReference.putIfAbsent(
+      reference,
+      () => ReceiptDraft(
+        reference: reference,
+        issuedAt: issuedAt ?? DateTime.now(),
+        customerName: cell(row, iCustomer),
+        method: paymentMethodFrom(cell(row, iMethod)),
+        lines: const [],
+        notes: cell(row, iNotes),
+        taxLabel: cell(row, iTaxLabel).isEmpty ? 'VAT' : cell(row, iTaxLabel),
+        taxRate: num_(row, iTaxRate),
+        discount: num_(row, iDiscount),
+        amountPaid: num_(row, iPaid),
+      ),
+    );
+
+    // A receipt with no lines still gets a row on the way out, so a blank item
+    // here is that row rather than a mistake.
+    final itemName = cell(row, iItem);
+    if (itemName.isEmpty) continue;
+
+    final quantity = int_(row, iQuantity);
+    if (quantity <= 0) {
+      errors.add(
+        'Row ${r + 1}: "$itemName" has no quantity, so it was left out.',
+      );
+      continue;
+    }
+
+    linesByReference
+        .putIfAbsent(reference, () => [])
+        .add(
+          ReceiptLine(
+            id: 'csv-${lineId++}',
+            // The sheet carries a name, not an id: an imported receipt is history
+            // being brought across, and the item it names may not exist here.
+            itemId: '',
+            itemName: itemName,
+            sku: cell(row, iSku),
+            unit: cell(row, iUnit),
+            quantity: quantity,
+            unitPrice: num_(row, iUnitPrice),
+            discount: num_(row, iLineDiscount),
+            quantityRefunded: int_(row, iRefunded).clamp(0, quantity),
+          ),
+        );
+  }
+
+  final receipts = [
+    for (final entry in byReference.entries)
+      ReceiptDraft(
+        reference: entry.key,
+        issuedAt: entry.value.issuedAt,
+        customerName: entry.value.customerName,
+        method: entry.value.method,
+        lines: linesByReference[entry.key] ?? const [],
+        notes: entry.value.notes,
+        taxLabel: entry.value.taxLabel,
+        taxRate: entry.value.taxRate,
+        discount: entry.value.discount,
+        amountPaid: entry.value.amountPaid,
+      ),
+  ];
+
+  return ReceiptImportResult(receipts, errors);
 }

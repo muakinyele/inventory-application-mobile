@@ -169,13 +169,54 @@ Middleware throttle(RateLimiter limiter, {String? bucket}) {
 
 /// Caps request bodies.
 ///
-/// Nothing this API accepts is large, and an unbounded body is a trivial way
-/// to exhaust memory.
-Middleware limitBodySize({int maxBytes = 64 * 1024}) {
+/// An unbounded body is a trivial way to exhaust memory, so there is a cap.
+/// The old one was 64 KiB on the reasoning that "nothing this API accepts is
+/// large", and that was simply not true of this app:
+///
+///   * an ITEM CARRIES ITS PHOTO INLINE as base64, and so does the company
+///     logo on the settings screen. Both are capped at 5 MB by the client and
+///     both were refused by the server at 64 KiB — so neither feature worked
+///     at all, and the nginx in front was configured to 8m for exactly these;
+///   * a RESTORE carries the entire workspace, every row and every photo, in
+///     one request.
+///
+/// THE DEFAULT STAYS TIGHT. Raising it everywhere would make an
+/// eight-megabyte password a legitimate request, and refusing that before it
+/// is read is the reason this exists. Only the routes that carry an image, and
+/// the one that carries the whole workspace, are raised.
+Middleware limitBodySize({
+  int maxBytes = 64 * 1024,
+  Map<String, int> overrides = const {
+    // Every row and every photo, in one request.
+    '/inventory/restore': 256 * 1024 * 1024,
+    // An item carries its photo inline; the client caps the image at 5 MB and
+    // base64 inflates it by about a third.
+    '/inventory/items': 8 * 1024 * 1024,
+    // The company logo lives in preferences, the same way.
+    '/inventory/preferences': 8 * 1024 * 1024,
+  },
+}) {
   return (innerHandler) {
     return (request) async {
+      // Leading slash normalised: shelf strips it from `url.path`, and a
+      // route table that silently never matches is worse than no table.
+      final path = '/${request.url.path}';
+
+      // By PREFIX, because an item is edited at `/inventory/items/<id>`, and
+      // longest match wins so a shorter entry cannot shadow a longer one.
+      var limit = maxBytes;
+      var matched = 0;
+      for (final entry in overrides.entries) {
+        if (path == entry.key || path.startsWith('${entry.key}/')) {
+          if (entry.key.length > matched) {
+            matched = entry.key.length;
+            limit = entry.value;
+          }
+        }
+      }
+
       final declared = request.contentLength;
-      if (declared != null && declared > maxBytes) {
+      if (declared != null && declared > limit) {
         throw const ApiError(
           413,
           'payload_too_large',

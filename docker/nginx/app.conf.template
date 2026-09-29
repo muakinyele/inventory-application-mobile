@@ -26,6 +26,43 @@ server {
         return 200 "ok\n";
     }
 
+    # A RESTORE IS THE ONE BIG REQUEST THIS APP MAKES. Everything else is
+    # small JSON — the 8m above is a sensible guard for it — but a full backup
+    # carries every row including item photos, which are stored inline as
+    # base64. A catalogue with a few hundred photographed items runs to tens of
+    # megabytes, and nginx answered 413 with an HTML error page the app could
+    # not even parse into a message. It read as "restore does not work".
+    #
+    # Its own location purely to raise the cap; the proxying is the same as
+    # /api/ below, repeated because nginx has no way to vary one directive per
+    # URI within a location.
+    location = /api/inventory/restore {
+        client_max_body_size 256m;
+
+        # A restore replaces the whole workspace in one transaction, so it can
+        # legitimately take longer than an ordinary request.
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+        # Streamed rather than spooled to disk first: the body is large and
+        # buffering it twice helps nobody.
+        proxy_request_buffering off;
+
+        resolver ${DNS_RESOLVER} valid=10s ipv6=off;
+        set $api_backend ${API_UPSTREAM};
+        rewrite ^/api/(.*)$ /$1 break;
+        proxy_pass $api_backend;
+
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_no_cache     1;
+        proxy_cache_bypass 1;
+    }
+
     # Same-origin API. The client is built with a relative base, so it calls
     # here and CORS never applies.
     location /api/ {

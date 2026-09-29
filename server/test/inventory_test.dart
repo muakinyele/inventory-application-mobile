@@ -1160,6 +1160,41 @@ void main() {
       expect(response.statusCode, 400);
     });
 
+    test('a photo-sized body is accepted', () async {
+      // The cap was 64 KiB, which is smaller than any photograph. An item
+      // carries its photo inline as base64, so this was not a limit on abuse
+      // — it was the photo feature not working.
+      final session = await admin();
+
+      final response = await server.post(
+        '/inventory/items',
+        accessToken: session.accessToken,
+        body: {
+          'name': 'Photographed',
+          'quantity': 1,
+          'photo': 'data:image/png;base64,${'A' * 200000}',
+        },
+      );
+
+      expect(response.statusCode, 201);
+    });
+
+    test('a company logo is accepted', () async {
+      final session = await admin();
+
+      final response = await server.patch(
+        '/inventory/preferences',
+        accessToken: session.accessToken,
+        body: {
+          'preferences': {
+            'companyLogo': 'data:image/png;base64,${'A' * 200000}',
+          },
+        },
+      );
+
+      expect(response.statusCode, 200);
+    });
+
     test('staff can neither back up nor restore', () async {
       final staff = await server.signedInUser(email: 'hand2@example.com');
 

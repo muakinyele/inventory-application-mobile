@@ -94,6 +94,12 @@ class _SettingsPageState extends State<SettingsPage> {
     return showAppMessage(context, message, tone: tone);
   }
 
+  /// Which long-running job is on, so its row can show a spinner and refuse a
+  /// second tap. Null when nothing is running.
+  String? _busyRow;
+
+  bool _isBusy(String row) => _busyRow == row;
+
   List<String> _listFor(AppSettings settings, _ListKind kind) => switch (kind) {
     _ListKind.categories => settings.categories,
     _ListKind.locations => settings.locations,
@@ -160,9 +166,10 @@ class _SettingsPageState extends State<SettingsPage> {
     // screen that has since been left.
     final origin = shareOriginOf(buttonContext);
 
-    _notify('Preparing the backup…', tone: MessageTone.info);
+    setState(() => _busyRow = 'backup');
     final payload = await controller.exportBackup();
     if (!mounted) return;
+    setState(() => _busyRow = null);
 
     if (payload == null) {
       await _notify(
@@ -298,9 +305,10 @@ class _SettingsPageState extends State<SettingsPage> {
     );
     if (confirmed != true) return;
 
-    if (mounted) _notify('Restoring…', tone: MessageTone.info);
+    setState(() => _busyRow = 'restore');
     final result = await controller.restoreBackup(payload);
     if (!mounted) return;
+    setState(() => _busyRow = null);
 
     if (!result.ok) {
       await _notify(
@@ -311,6 +319,99 @@ class _SettingsPageState extends State<SettingsPage> {
       return;
     }
     await _notify('Restored ${number(result.rows)} rows.');
+  }
+
+  /// Brings receipts in from a sheet.
+  ///
+  /// The counterpart to "Export receipts (CSV)", which has existed on its own
+  /// since the beginning — a one-way door out of the app.
+  Future<void> _importReceipts() async {
+    final controller = context.read<InventoryController>();
+
+    final file = await FilePicker.pickFile(
+      type: FileType.custom,
+      allowedExtensions: const ['csv'],
+    );
+    if (file == null) return;
+
+    String text;
+    try {
+      text = utf8.decode(await file.readAsBytes(), allowMalformed: true);
+    } catch (_) {
+      if (mounted) {
+        await _notify(
+          'That file could not be read.',
+          tone: MessageTone.failure,
+        );
+      }
+      return;
+    }
+
+    final parsed = csvToReceipts(text);
+    if (parsed.receipts.isEmpty) {
+      if (mounted) {
+        await _notify(
+          parsed.errors.firstOrNull ?? 'No receipts could be read from that.',
+          tone: MessageTone.failure,
+        );
+      }
+      return;
+    }
+
+    // Said plainly before it happens, because this is the part people get
+    // wrong: imported receipts are history, and re-booking their stock would
+    // leave every count short by the whole import.
+    if (!mounted) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Import ${number(parsed.receipts.length)} receipts?'),
+        content: SizedBox(
+          width: 420,
+          child: Text(
+            'They come in as history: stock is not moved, because these sales '
+            'already took their goods wherever they were first recorded. '
+            'Each gets a new reference from this workspace.'
+            '${parsed.errors.isEmpty ? '' : '\n\n${number(parsed.errors.length)} rows had problems and will be left out.'}',
+            style: const TextStyle(fontSize: 14, height: 1.45),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Import'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() => _busyRow = 'receipts-import');
+    final result = await controller.importReceipts(parsed.receipts);
+    if (!mounted) return;
+    setState(() => _busyRow = null);
+
+    if (result.imported == 0) {
+      await _notify(
+        'None of those receipts could be saved, so nothing was added.',
+        tone: MessageTone.failure,
+      );
+      return;
+    }
+
+    await _notify(
+      result.failed.isEmpty
+          ? 'Imported ${number(result.imported)} receipts'
+          : 'Imported ${number(result.imported)} receipts. '
+                '${number(result.failed.length)} could not be saved: '
+                '${result.failed.take(3).join(', ')}'
+                '${result.failed.length > 3 ? '…' : ''}',
+      tone: result.failed.isEmpty ? MessageTone.success : MessageTone.warning,
+    );
   }
 
   /// A table name as somebody reading a dialog would say it.
@@ -631,11 +732,19 @@ class _SettingsPageState extends State<SettingsPage> {
                     ),
                   ),
                   Divider(color: p.line, height: 1),
+                  _MenuRow(
+                    icon: Icons.upload_outlined,
+                    label: 'Import receipts (CSV)',
+                    busy: _isBusy('receipts-import'),
+                    onTap: _importReceipts,
+                  ),
+                  Divider(color: p.line, height: 1),
                   Builder(
                     builder: (rowContext) => _MenuRow(
                       icon: Icons.layers_outlined,
                       label: 'Export full backup (JSON)',
                       note: 'everything',
+                      busy: _isBusy('backup'),
                       onTap: () => _exportBackup(rowContext),
                     ),
                   ),
@@ -644,6 +753,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     icon: Icons.settings_backup_restore,
                     label: 'Restore from backup (JSON)',
                     onTap: _restoreBackup,
+                    busy: _isBusy('restore'),
                     danger: true,
                   ),
                   Divider(color: p.line, height: 1),
@@ -863,6 +973,7 @@ class _MenuRow extends StatelessWidget {
     this.note,
     this.trailing,
     this.danger = false,
+    this.busy = false,
   });
 
   final IconData icon;
@@ -870,6 +981,13 @@ class _MenuRow extends StatelessWidget {
   final String? note;
   final IconData? trailing;
   final bool danger;
+
+  /// Work in progress on THIS row. A spinner here rather than a dialog over
+  /// the page: a modal that says "working…" has to be dismissed before the
+  /// outcome can be shown, which is how a backup that was busy reading a file
+  /// looked like an app that had stopped.
+  final bool busy;
+
   final VoidCallback onTap;
 
   @override
@@ -878,7 +996,9 @@ class _MenuRow extends StatelessWidget {
     final tint = danger ? p.critical : p.accent;
 
     return InkWell(
-      onTap: onTap,
+      // Not tappable twice: a second restore starting while the first is still
+      // running would race two whole-workspace replacements.
+      onTap: busy ? null : onTap,
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 12),
         child: Row(
@@ -895,7 +1015,13 @@ class _MenuRow extends StatelessWidget {
                 ),
               ),
             ),
-            if (note != null)
+            if (busy)
+              const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            else if (note != null)
               Text(note!, style: TextStyle(fontSize: 12.5, color: p.inkMuted)),
             if (trailing != null) ...[
               const SizedBox(width: 6),
