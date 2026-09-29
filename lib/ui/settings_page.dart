@@ -228,13 +228,25 @@ class _SettingsPageState extends State<SettingsPage> {
 
     // Described before it is agreed to, so the confirmation says what will
     // actually happen rather than "are you sure?".
+    //
+    // TWO SHAPES. Backups this app wrote before the server took the job over
+    // are `{version, items, movements, receipts, settings}` with no `tables`
+    // key at all — and reading only the new shape told people holding one that
+    // their backup was empty. It is not; it is older. The server converts it;
+    // this only has to count it.
     final tables = payload['tables'];
+    final source = tables is Map ? tables : payload;
     final counts = <String, int>{
-      if (tables is Map)
-        for (final entry in tables.entries)
-          if (entry.value is List && (entry.value as List).isNotEmpty)
-            entry.key.toString(): (entry.value as List).length,
+      for (final entry in source.entries)
+        if (entry.value is List && (entry.value as List).isNotEmpty)
+          entry.key.toString(): (entry.value as List).length,
     };
+
+    // The old shape kept the workspace's settings as an object rather than a
+    // row count, so it would otherwise not appear in the summary at all.
+    if (tables is! Map && payload['settings'] is Map) {
+      counts['preferences'] = (payload['settings'] as Map).length;
+    }
 
     if (counts.isEmpty) {
       if (mounted) {
@@ -790,9 +802,16 @@ class _SettingsPageState extends State<SettingsPage> {
             SectionCard(
               title: 'About',
               child: Text(
-                'Everything is stored on this device only — no account, no '
-                'server, and it keeps working offline. Use the JSON backup to '
-                'move your data to another device.',
+                // WAS THE OPPOSITE OF TRUE. It said the workspace lived on
+                // this device with no account and no server, which described
+                // the app two rewrites ago. Everything is on the server and
+                // shared by everyone signed in — and somebody reading the old
+                // words would have thought clearing their browser was safe.
+                'Your inventory is stored on the server and shared with '
+                'everyone signed in to this workspace, so a change made here '
+                'shows up on their screens too. A signed-in connection is '
+                'needed to use it. The JSON backup is a full copy you can '
+                'keep, and restore from.',
                 style: TextStyle(color: p.inkSecondary),
               ),
             ),

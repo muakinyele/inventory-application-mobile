@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:stockpile_server/src/rbac/permissions.dart';
 import 'package:test/test.dart';
 
@@ -1193,6 +1196,142 @@ void main() {
       );
 
       expect(response.statusCode, 200);
+    });
+
+    // A BACKUP THE APP WROTE LAST MONTH IS STILL A BACKUP. This fixture is a
+    // real file exported by the browser-assembled version — four collections,
+    // no `tables` key, ISO dates, receipts with their lines nested — trimmed
+    // to a few rows with the business's own details replaced. Reading only the
+    // new shape told everybody holding one of these that it was empty.
+    group('a backup from before the server took over', () {
+      Map<String, Object?> legacy() =>
+          jsonDecode(
+                File('test/fixtures/legacy_backup.json').readAsStringSync(),
+              )
+              as Map<String, Object?>;
+
+      test('it restores rather than reporting an empty file', () async {
+        final session = await admin();
+
+        final response = await server.post(
+          '/inventory/restore',
+          accessToken: session.accessToken,
+          body: legacy(),
+        );
+
+        expect(response.statusCode, 200);
+        final restored = response.json['restored'] as Map;
+        expect(restored['items'], 3);
+        expect(restored['movements'], 3);
+        expect(restored['receipts'], 2);
+      });
+
+      test('the items come back readable through the API', () async {
+        final session = await admin();
+        await server.post(
+          '/inventory/restore',
+          accessToken: session.accessToken,
+          body: legacy(),
+        );
+
+        final items = await server.get(
+          '/inventory/items',
+          accessToken: session.accessToken,
+        );
+        expect(items.json['total'], 3);
+        final first = (items.json['items'] as List).first as Map;
+        expect(first['name'], isNotEmpty);
+        // The date was an ISO string in the file and is epoch millis in the
+        // table; a conversion that dropped it would leave the epoch here.
+        expect(first['updatedAt'], isNot(startsWith('1970')));
+      });
+
+      test('a receipt keeps the lines it had nested inside it', () async {
+        final session = await admin();
+        await server.post(
+          '/inventory/restore',
+          accessToken: session.accessToken,
+          body: legacy(),
+        );
+
+        final receipts = await server.get(
+          '/documents/receipts',
+          accessToken: session.accessToken,
+        );
+        final rows = receipts.json['receipts'] as List;
+        expect(rows, hasLength(2));
+        expect(
+          rows.fold<int>(
+            0,
+            (sum, r) => sum + ((r as Map)['lines'] as List).length,
+          ),
+          2,
+          reason: 'the lines were inside the receipt and belong beside it now',
+        );
+      });
+
+      test(
+        'the settings object becomes categories, pickers and prefs',
+        () async {
+          final session = await admin();
+          await server.post(
+            '/inventory/restore',
+            accessToken: session.accessToken,
+            body: legacy(),
+          );
+
+          final categories = await server.get(
+            '/inventory/categories',
+            accessToken: session.accessToken,
+          );
+          expect((categories.json['categories'] as List), hasLength(7));
+
+          final locations = await server.get(
+            '/inventory/lookups?kind=location',
+            accessToken: session.accessToken,
+          );
+          expect((locations.json['lookups'] as List), hasLength(3));
+
+          final prefs = await server.get(
+            '/inventory/preferences',
+            accessToken: session.accessToken,
+          );
+          expect(prefs.json['preferences']['companyName'], 'Example Trading');
+          expect(
+            prefs.json['preferences'].containsKey('themeMode'),
+            isFalse,
+            reason:
+                'which theme a screen uses is not the workspace\'s business',
+          );
+        },
+      );
+
+      test('restoring one replaces what was there', () async {
+        final session = await admin();
+        await createItem(session, name: 'Left over');
+
+        await server.post(
+          '/inventory/restore',
+          accessToken: session.accessToken,
+          body: legacy(),
+        );
+
+        final items = await server.get(
+          '/inventory/items?search=Left',
+          accessToken: session.accessToken,
+        );
+        expect(items.json['total'], 0);
+      });
+
+      test('a file that is neither shape is still refused', () async {
+        final session = await admin();
+        final response = await server.post(
+          '/inventory/restore',
+          accessToken: session.accessToken,
+          body: {'version': 1, 'somethingElse': 'entirely'},
+        );
+        expect(response.statusCode, 400);
+      });
     });
 
     test('staff can neither back up nor restore', () async {

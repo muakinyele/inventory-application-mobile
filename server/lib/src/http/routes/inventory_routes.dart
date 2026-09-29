@@ -346,7 +346,13 @@ Router inventoryRoutes({required InventoryService inventory}) {
       );
     }
 
-    final raw = body['tables'];
+    // A BACKUP THE APP ITSELF WROTE LAST MONTH IS STILL A BACKUP. Before the
+    // server took this over, the settings screen assembled one in the browser
+    // — `{version, items, movements, receipts, settings}`, with dates as ISO
+    // strings and a receipt carrying its lines inside it. Every file anybody
+    // already has is that shape, and a restore that only reads the new one
+    // tells them their backup is empty. It is not; it is just older.
+    final raw = body['tables'] ?? _tablesFromLegacyBackup(body);
     if (raw is! Map) {
       throw ApiError.badRequest('This backup has no tables in it.');
     }
@@ -475,4 +481,162 @@ int _boundedInt(
   final parsed = int.tryParse(raw ?? '');
   if (parsed == null) return fallback;
   return parsed.clamp(min, max);
+}
+
+/// Converts the old browser-assembled backup into the table shape.
+///
+/// Returns null when the body is not one, so the caller can report "no tables"
+/// rather than a confusing conversion error.
+///
+/// Only four collections were ever in that format — items, movements,
+/// receipts and settings — so a legacy restore cannot bring back suppliers,
+/// customers or purchase and sales orders. They were not in the file. What is
+/// there comes back exactly.
+Map<String, Object?>? _tablesFromLegacyBackup(Map<String, Object?> body) {
+  final items = body['items'];
+  final movements = body['movements'];
+  final receipts = body['receipts'];
+  final settings = body['settings'];
+
+  final looksLegacy =
+      items is List || movements is List || receipts is List || settings is Map;
+  if (!looksLegacy) return null;
+
+  // Dates were ISO strings then and are epoch milliseconds now, which is what
+  // drift's own serialiser reads. A row whose date will not parse is kept with
+  // the epoch rather than dropped: a movement with a broken timestamp is still
+  // a movement that happened.
+  Object? when(Object? value) {
+    if (value is num) return value.toInt();
+    if (value is String) {
+      return DateTime.tryParse(value)?.millisecondsSinceEpoch ?? 0;
+    }
+    return 0;
+  }
+
+  Map<String, Object?> dated(Map row, List<String> fields) => {
+    for (final entry in row.entries)
+      if (entry.value is! List && entry.value is! Map)
+        entry.key.toString(): fields.contains(entry.key)
+            ? when(entry.value)
+            : entry.value,
+  };
+
+  final itemRows = [
+    for (final row in _list(items))
+      dated(row, const ['createdAt', 'updatedAt']),
+  ];
+
+  final movementRows = [
+    for (final row in _list(movements)) dated(row, const ['at']),
+  ];
+
+  // A receipt carried its lines inside it; the tables keep them apart, and a
+  // line needs the receipt id the nesting used to imply.
+  final receiptRows = <Map<String, Object?>>[];
+  final receiptLineRows = <Map<String, Object?>>[];
+  for (final row in _list(receipts)) {
+    final id = row['id'] as String? ?? '';
+    receiptRows.add(
+      dated(row, const [
+        'issuedAt',
+        'refundedAt',
+        'voidedAt',
+        'createdAt',
+        'updatedAt',
+      ]),
+    );
+    final lines = row['lines'];
+    if (lines is! List) continue;
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i] case final Map line) {
+        receiptLineRows.add({
+          for (final entry in line.entries)
+            if (entry.value is! List && entry.value is! Map)
+              entry.key.toString(): entry.value,
+          'receiptId': id,
+          'position': i,
+        });
+      }
+    }
+  }
+
+  // Settings were one object; they are three tables now.
+  final categoryRows = <Map<String, Object?>>[];
+  final lookupRows = <Map<String, Object?>>[];
+  final preferenceRows = <Map<String, Object?>>[];
+
+  if (settings is Map) {
+    final colours = settings['categoryColors'];
+    final swatches = colours is Map
+        ? {
+            for (final entry in colours.entries)
+              entry.key.toString(): (entry.value as num?)?.toInt() ?? 0,
+          }
+        : const <String, int>{};
+
+    var position = 0;
+    for (final name in _list(settings['categories'], strings: true)) {
+      final text = name['value'] as String;
+      if (text.trim().isEmpty) continue;
+      categoryRows.add({
+        'name': text,
+        'swatchIndex': swatches[text] ?? 0,
+        'position': position++,
+      });
+    }
+
+    for (final kind in const ['locations', 'units']) {
+      var i = 0;
+      for (final value in _list(settings[kind], strings: true)) {
+        final text = value['value'] as String;
+        if (text.trim().isEmpty) continue;
+        lookupRows.add({
+          // The tables use the singular, the settings object the plural.
+          'kind': kind.substring(0, kind.length - 1),
+          'value': text,
+          'position': i++,
+        });
+      }
+    }
+
+    // The scalars, minus the three that became tables of their own and the
+    // theme, which is a per-device choice rather than the workspace's.
+    const skip = {
+      'categories',
+      'locations',
+      'units',
+      'categoryColors',
+      'themeMode',
+    };
+    for (final entry in settings.entries) {
+      final key = entry.key.toString();
+      if (skip.contains(key)) continue;
+      final value = entry.value;
+      if (value is List || value is Map) continue;
+      preferenceRows.add({'key': key, 'value': '${value ?? ''}'});
+    }
+  }
+
+  return {
+    'items': itemRows,
+    'movements': movementRows,
+    'receipts': receiptRows,
+    'receiptLines': receiptLineRows,
+    'categories': categoryRows,
+    'lookups': lookupRows,
+    'preferences': preferenceRows,
+  };
+}
+
+/// The maps in [raw], or single-value maps for a list of plain strings.
+List<Map<String, Object?>> _list(Object? raw, {bool strings = false}) {
+  if (raw is! List) return const [];
+  return [
+    for (final entry in raw)
+      if (entry is Map)
+        entry.cast<String, Object?>()
+      else if (strings && entry is String)
+        {'value': entry},
+  ];
 }
