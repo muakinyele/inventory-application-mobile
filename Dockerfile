@@ -85,6 +85,18 @@ RUN set -eu; \
       /app/build/web/index.html; \
     grep -q "flutter_bootstrap.js?v=${stamp}" /app/build/web/index.html
 
+# THE CSP SCRIPT HASH, derived from the file actually being shipped.
+#
+# index.html carries one inline script, the boot splash. The policy allows
+# it by hash so that 'unsafe-inline' -- which would allow every other inline
+# script as well -- is not needed. Computed here rather than written into the
+# config by hand, because a hand-written hash goes stale the moment the
+# splash is edited and a stale hash fails silently: the browser refuses the
+# script, the overlay is never removed, and the app looks like it hung.
+#
+# After the stamping above, so it covers the file as served.
+RUN dart run tool/csp_hash.dart build/web/index.html > /app/csp-script-hash.txt
+
 # ---------------------------------------------------------------------------
 # Runtime
 # ---------------------------------------------------------------------------
@@ -96,6 +108,18 @@ RUN rm -f /etc/nginx/conf.d/default.conf
 
 COPY docker/nginx/nginx.conf /etc/nginx/nginx.conf
 COPY docker/nginx/app.conf.template /etc/nginx/templates/app.conf.template
+COPY --from=build /app/csp-script-hash.txt /tmp/csp-script-hash.txt
+
+# Substituted at image build rather than container start: nginx's entrypoint
+# runs envsubst over this template, and the policy is not an environment
+# value. The two greps turn a failed substitution into a failed build, which
+# is the alternative to shipping a policy that refuses the splash.
+RUN set -eu; \
+    sed -i "s|__INLINE_SCRIPT_HASH__|$(cat /tmp/csp-script-hash.txt)|" \
+      /etc/nginx/templates/app.conf.template; \
+    ! grep -q '__INLINE_SCRIPT_HASH__' /etc/nginx/templates/app.conf.template; \
+    grep -q 'sha256-' /etc/nginx/templates/app.conf.template; \
+    rm /tmp/csp-script-hash.txt
 COPY --from=build /app/build/web /usr/share/nginx/html
 
 # nginx's own entrypoint renders anything in /etc/nginx/templates through

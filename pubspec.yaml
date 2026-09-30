@@ -39,6 +39,11 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^6.0.0
   flutter_launcher_icons: ^0.14.4
+  # tool/csp_hash.dart, which the image build runs to derive the Content
+  # Security Policy's script hash. Named explicitly rather than relied on
+  # transitively: a dependency bump that dropped it would break the build with
+  # an import error that says nothing about the policy.
+  crypto: ^3.0.6
 
 flutter:
   uses-material-design: true

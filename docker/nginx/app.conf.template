@@ -18,6 +18,35 @@ server {
     # response. nginx only inherits these into a location that declares none
     # of its own, so `location /api/` is left alone by having them here.
 
+    # WHAT THE APP PAGE IS ALLOWED TO DO. The API has had a policy since it
+    # was written (`default-src 'none'`); the page that nginx serves had none
+    # at all, so anything that ever did get onto it could load a script from
+    # anywhere and post the workspace wherever it liked.
+    #
+    # Each source is here because the app measurably needs it, not on
+    # principle — this was built by loading the real bundle behind the policy
+    # and reading the console until nothing was refused:
+    #
+    #   script-src   the engine is fetched from gstatic, and CanvasKit
+    #                compiles WebAssembly, which needs wasm-unsafe-eval. The
+    #                sha256 is index.html's inline splash script — hashed
+    #                rather than allowed with 'unsafe-inline', which would
+    #                permit every injected script as well as this one. The
+    #                Dockerfile computes it from the built file, so it cannot
+    #                drift from what is actually served.
+    #   style-src    Flutter writes its own inline styles into the document.
+    #   img-src      data: because item photos and the company logo are stored
+    #                as base64 and rendered straight from it.
+    #   font-src     the engine falls back to Roboto from fonts.gstatic.com
+    #                for glyphs the bundled faces lack.
+    #   connect-src  'self' is the /api proxy; gstatic is the engine download.
+    #   worker-src   blob: is how the engine starts its workers.
+    #
+    # frame-ancestors 'none' is the clickjacking half, and is a header-only
+    # directive — a <meta> CSP cannot express it, which is why this lives here
+    # rather than in the document.
+    set $csp "default-src 'none'; script-src 'self' https://www.gstatic.com 'wasm-unsafe-eval' '__INLINE_SCRIPT_HASH__'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' https://fonts.gstatic.com data:; connect-src 'self' https://www.gstatic.com https://fonts.gstatic.com; worker-src 'self' blob:; manifest-src 'self'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'; object-src 'none'";
+
     # The container's own liveness probe. Deliberately not proxied, so it
     # reports on *this* service rather than on the API behind it.
     location = /healthz {
@@ -144,6 +173,7 @@ server {
         add_header X-Content-Type-Options nosniff always;
         add_header X-Frame-Options DENY always;
         add_header Referrer-Policy no-referrer always;
+        add_header Content-Security-Policy $csp always;
         try_files $uri =404;
     }
 
@@ -159,6 +189,7 @@ server {
         add_header X-Content-Type-Options nosniff always;
         add_header X-Frame-Options DENY always;
         add_header Referrer-Policy no-referrer always;
+        add_header Content-Security-Policy $csp always;
         try_files $uri $uri/ /index.html;
     }
 }
