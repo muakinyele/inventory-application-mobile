@@ -3,6 +3,8 @@ import 'package:shelf/shelf.dart';
 import 'package:shelf_router/shelf_router.dart';
 
 import '../../db/database.dart';
+import '../../audit/audit_actions.dart';
+import '../../audit/audit_service.dart';
 import '../../inventory/inventory_service.dart';
 import '../api_error.dart';
 import '../inventory_serializers.dart';
@@ -16,7 +18,10 @@ import '../request_context.dart';
 /// restructuring this file. The permissions themselves already existed — they
 /// were written when the RBAC was built and have simply had nothing to guard
 /// until now.
-Router inventoryRoutes({required InventoryService inventory}) {
+Router inventoryRoutes({
+  required InventoryService inventory,
+  required AuditService audit,
+}) {
   final router = Router();
 
   // ------------------------------------------------------------------
@@ -78,8 +83,21 @@ Router inventoryRoutes({required InventoryService inventory}) {
   /// Behind settings.manage rather than items.delete: this is not a bigger
   /// version of deleting an item, it is a decision about the whole workspace.
   router.delete('/', (Request request) async {
-    request.require('settings.manage');
+    final caller = request.require('settings.manage');
+
+    // Counted BEFORE, because afterwards there is nothing left to count and
+    // "how much was lost" is the first question anybody asks.
+    final before = await inventory.rowCounts();
     await inventory.eraseEverything();
+
+    await audit.record(
+      action: AuditAction.inventoryErased,
+      actorId: caller.user.id,
+      actorEmail: caller.user.email,
+      targetType: 'inventory',
+      ipAddress: request.clientIp,
+      metadata: before,
+    );
     return Response(204);
   });
 
@@ -322,12 +340,34 @@ Router inventoryRoutes({required InventoryService inventory}) {
   // Backup and restore
   // ------------------------------------------------------------------
   router.get('/backup', (Request request) async {
-    request.require('backup.export');
-    return jsonResponse(await inventory.exportEverything());
+    final caller = request.require('backup.export');
+    final payload = await inventory.exportEverything();
+
+    // THE ONE THAT MOST NEEDED RECORDING. A backup is every customer's name,
+    // phone number and email address, every supplier, and the whole trading
+    // history, in one file. Taking it is silent — no screen changes, nothing
+    // breaks — so without this a leaver could copy the business on their last
+    // afternoon and nobody would ever have a reason to look.
+    final tables = payload['tables'];
+    await audit.record(
+      action: AuditAction.inventoryExported,
+      actorId: caller.user.id,
+      actorEmail: caller.user.email,
+      targetType: 'inventory',
+      ipAddress: request.clientIp,
+      metadata: {
+        if (tables is Map)
+          for (final entry in tables.entries)
+            if (entry.value is List && (entry.value as List).isNotEmpty)
+              entry.key.toString(): (entry.value as List).length,
+      },
+    );
+
+    return jsonResponse(payload);
   });
 
   router.post('/restore', (Request request) async {
-    request.require('backup.restore');
+    final caller = request.require('backup.restore');
     final body = await readJsonBody(request);
 
     // Refused rather than guessed at. A restore replaces everything, so a
@@ -389,6 +429,15 @@ Router inventoryRoutes({required InventoryService inventory}) {
         'from a different application, or the file may be damaged.',
       );
     }
+    await audit.record(
+      action: AuditAction.inventoryRestored,
+      actorId: caller.user.id,
+      actorEmail: caller.user.email,
+      targetType: 'inventory',
+      ipAddress: request.clientIp,
+      metadata: {'replacedWith': written, 'backupVersion': version},
+    );
+
     return jsonResponse({'restored': written});
   });
 

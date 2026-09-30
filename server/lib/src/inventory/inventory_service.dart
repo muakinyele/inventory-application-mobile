@@ -141,6 +141,30 @@ class InventoryService {
     };
   }
 
+  /// How many rows each table holds, skipping the empty ones.
+  ///
+  /// For the audit entry an erase writes: afterwards there is nothing left to
+  /// count, and "how much was lost" is the first question anybody asks.
+  Future<Map<String, int>> rowCounts() async {
+    Future<int> count<T extends DataClass>(TableInfo<Table, T> table) async =>
+        (await db.select(table).get()).length;
+
+    final counts = <String, int>{
+      'items': await count(db.items),
+      'movements': await count(db.movements),
+      'stockLevels': await count(db.stockLevels),
+      'suppliers': await count(db.suppliers),
+      'customers': await count(db.customers),
+      'purchaseOrders': await count(db.purchaseOrders),
+      'salesOrders': await count(db.salesOrders),
+      'invoices': await count(db.invoices),
+      'receipts': await count(db.receipts),
+      'transfers': await count(db.transfers),
+    };
+    counts.removeWhere((_, value) => value == 0);
+    return counts;
+  }
+
   /// Replaces the whole workspace with [tables].
   ///
   /// One transaction: the erase and every insert succeed together or the

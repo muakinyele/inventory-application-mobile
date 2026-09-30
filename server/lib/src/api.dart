@@ -215,7 +215,12 @@ class Api {
       '/inventory',
       Pipeline()
           .addMiddleware(requireAuth())
-          .addHandler(inventoryRoutes(inventory: inventoryService).call),
+          .addHandler(
+            inventoryRoutes(
+              inventory: inventoryService,
+              audit: auditService,
+            ).call,
+          ),
     );
 
     // Invoices, receipts and orders. Separate from /inventory because a

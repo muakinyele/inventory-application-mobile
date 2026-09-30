@@ -40,6 +40,20 @@ abstract final class AuditAction {
 
   static const notificationPreferencesChanged = 'notifications.changed';
 
+  // THE BUSINESS ITSELF, which nothing watched. Every event above concerns an
+  // account; none concerned the inventory — so somebody could download every
+  // customer's name, phone number and email along with the whole trading
+  // history, or replace the workspace, or empty it, and the trail that records
+  // "profile updated" would show nothing at all.
+  //
+  // The export is the one that matters most. Wiping a workspace is loud — the
+  // screens are empty the next morning and somebody asks. Copying it is
+  // silent, and a leaver with the permission had no reason to think anyone
+  // would ever know.
+  static const inventoryExported = 'inventory.exported';
+  static const inventoryRestored = 'inventory.restored';
+  static const inventoryErased = 'inventory.erased';
+
   /// Everything above, for the filter dropdown.
   static const all = [
     login,
@@ -71,5 +85,8 @@ abstract final class AuditAction {
     permissionsChanged,
     sessionRevoked,
     notificationPreferencesChanged,
+    inventoryExported,
+    inventoryRestored,
+    inventoryErased,
   ];
 }

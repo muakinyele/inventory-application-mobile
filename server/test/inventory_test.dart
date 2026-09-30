@@ -1334,6 +1334,106 @@ void main() {
       });
     });
 
+    // NOTHING ON THE INVENTORY SIDE WAS EVER AUDITED. Every account action was
+    // recorded and the admin screen shows them; wiping the business, replacing
+    // it, or copying every customer's contact details left no trace at all.
+    group('the trail', () {
+      Future<List<Map<String, Object?>>> entries(
+        TestSession session, {
+        required String action,
+      }) async {
+        final response = await server.get(
+          '/audit-logs?action=$action',
+          accessToken: session.accessToken,
+        );
+        return [
+          for (final row in response.json['entries'] as List)
+            (row as Map).cast<String, Object?>(),
+        ];
+      }
+
+      /// The metadata column is a JSON string, not an object.
+      Map<String, Object?> meta(Map<String, Object?> entry) =>
+          jsonDecode(entry['metadata'] as String) as Map<String, Object?>;
+
+      test('taking a backup is recorded, with who and from where', () async {
+        // The quiet one: copying the customer list changes no screen, so
+        // without a record there is nothing to notice.
+        final session = await admin();
+        await createItem(session, name: 'Bolt');
+
+        await server.get('/inventory/backup', accessToken: session.accessToken);
+
+        final logged = await entries(session, action: 'inventory.exported');
+        expect(logged, hasLength(1));
+        expect(logged.single['actorEmail'], 'admin@example.com');
+        expect(
+          logged.single['actorId'],
+          isNotNull,
+          reason: 'the account, not just the address it was using',
+        );
+      });
+
+      test('the backup entry says how much left', () async {
+        final session = await admin();
+        await createItem(session, name: 'Bolt');
+        await createItem(session, name: 'Nut');
+
+        await server.get('/inventory/backup', accessToken: session.accessToken);
+
+        final logged = await entries(session, action: 'inventory.exported');
+        expect(meta(logged.single)['items'], 2);
+      });
+
+      test('a restore is recorded', () async {
+        final session = await admin();
+        await createItem(session, name: 'Bolt');
+        final backup = await server.get(
+          '/inventory/backup',
+          accessToken: session.accessToken,
+        );
+
+        await server.post(
+          '/inventory/restore',
+          accessToken: session.accessToken,
+          body: backup.json,
+        );
+
+        final logged = await entries(session, action: 'inventory.restored');
+        expect(logged, hasLength(1));
+        expect(logged.single['actorEmail'], 'admin@example.com');
+      });
+
+      test('an erase is recorded, with what it destroyed', () async {
+        // Counted before the delete, because afterwards there is nothing left
+        // to count and the size of the loss is the first question asked.
+        final session = await admin();
+        await createItem(session, name: 'Bolt');
+        await createItem(session, name: 'Nut');
+
+        await server.delete('/inventory', accessToken: session.accessToken);
+
+        final logged = await entries(session, action: 'inventory.erased');
+        expect(logged, hasLength(1));
+        expect(meta(logged.single)['items'], 2);
+      });
+
+      test('a refused export leaves no entry', () async {
+        // Only what happened, so the trail cannot be padded by someone
+        // hammering an endpoint they have no permission for.
+        final staff = await server.signedInUser(email: 'hand3@example.com');
+        final session = await admin();
+
+        final refused = await server.get(
+          '/inventory/backup',
+          accessToken: staff.accessToken,
+        );
+        expect(refused.statusCode, 403);
+
+        expect(await entries(session, action: 'inventory.exported'), isEmpty);
+      });
+    });
+
     test('staff can neither back up nor restore', () async {
       final staff = await server.signedInUser(email: 'hand2@example.com');
 
