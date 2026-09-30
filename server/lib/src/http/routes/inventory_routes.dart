@@ -7,6 +7,7 @@ import '../../audit/audit_actions.dart';
 import '../../audit/audit_service.dart';
 import '../../inventory/inventory_service.dart';
 import '../api_error.dart';
+import '../image_payload.dart';
 import '../inventory_serializers.dart';
 import '../middleware.dart';
 import '../request_context.dart';
@@ -456,7 +457,12 @@ Router inventoryRoutes({
 
     await inventory.writePreferences({
       for (final entry in raw.entries)
-        entry.key.toString(): entry.value?.toString() ?? '',
+        entry.key.toString(): entry.key == 'companyLogo'
+            // The logo is the other image this app stores, and it reaches the
+            // database through this untyped bag rather than a column of its
+            // own — so it would otherwise never be looked at.
+            ? validatedImage(entry.value, field: 'companyLogo')
+            : entry.value?.toString() ?? '',
     });
     return jsonResponse({'preferences': await inventory.preferences()});
   });
@@ -487,7 +493,11 @@ ItemsCompanion _itemCompanion(Map<String, Object?> body) => ItemsCompanion(
   supplierId: _optional(body, 'supplierId'),
   unitsPerPack: _optionalInt(body, 'unitsPerPack'),
   notes: _optional(body, 'notes'),
-  photo: _optional(body, 'photo'),
+  // Checked rather than taken on trust: this column is decoded straight into
+  // an image widget and embedded into PDFs, and nothing else ever looks at it.
+  photo: body.containsKey('photo')
+      ? Value(validatedImage(body['photo'], field: 'photo'))
+      : const Value.absent(),
 );
 
 /// Absent when the key was not sent, so a PATCH touches only what it names.

@@ -1163,6 +1163,19 @@ void main() {
       expect(response.statusCode, 400);
     });
 
+    /// A blob that opens with [signature] and is padded out to [bytes].
+    ///
+    /// Only the opening bytes are inspected, so this exercises the check
+    /// honestly without shipping a real photograph into the repository.
+    String image(List<int> signature, {int bytes = 200000}) => base64Encode([
+      ...signature,
+      ...List.filled(bytes - signature.length, 0),
+    ]);
+
+    const png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    const jpeg = [0xFF, 0xD8, 0xFF];
+    const gif = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61];
+
     test('a photo-sized body is accepted', () async {
       // The cap was 64 KiB, which is smaller than any photograph. An item
       // carries its photo inline as base64, so this was not a limit on abuse
@@ -1172,11 +1185,7 @@ void main() {
       final response = await server.post(
         '/inventory/items',
         accessToken: session.accessToken,
-        body: {
-          'name': 'Photographed',
-          'quantity': 1,
-          'photo': 'data:image/png;base64,${'A' * 200000}',
-        },
+        body: {'name': 'Photographed', 'quantity': 1, 'photo': image(png)},
       );
 
       expect(response.statusCode, 201);
@@ -1189,13 +1198,196 @@ void main() {
         '/inventory/preferences',
         accessToken: session.accessToken,
         body: {
-          'preferences': {
-            'companyLogo': 'data:image/png;base64,${'A' * 200000}',
-          },
+          'preferences': {'companyLogo': image(png)},
         },
       );
 
       expect(response.statusCode, 200);
+    });
+
+    // THE PHOTO COLUMN TOOK ANY STRING. Five megabytes per item, writable by
+    // anyone who can edit one, never inspected, and carried into every
+    // backup — an arbitrary data store sitting inside the business record.
+    group('an image has to be one', () {
+      test('every format the app can render is accepted', () async {
+        final session = await admin();
+
+        for (final signature in [png, jpeg, gif]) {
+          final response = await server.post(
+            '/inventory/items',
+            accessToken: session.accessToken,
+            body: {
+              'name': 'Item ${signature.first}',
+              'quantity': 1,
+              'photo': image(signature, bytes: 64),
+            },
+          );
+          expect(response.statusCode, 201, reason: 'signature $signature');
+        }
+      });
+
+      test('a WebP is accepted, tags either side of its length', () async {
+        final session = await admin();
+        final webp = base64Encode([
+          0x52, 0x49, 0x46, 0x46, // RIFF
+          0, 0, 0, 0, // length
+          0x57, 0x45, 0x42, 0x50, // WEBP
+          ...List.filled(40, 0),
+        ]);
+
+        final response = await server.post(
+          '/inventory/items',
+          accessToken: session.accessToken,
+          body: {'name': 'Webp', 'quantity': 1, 'photo': webp},
+        );
+        expect(response.statusCode, 201);
+      });
+
+      test('a blob that is not an image is refused', () async {
+        final session = await admin();
+
+        final response = await server.post(
+          '/inventory/items',
+          accessToken: session.accessToken,
+          body: {
+            'name': 'Not a photo',
+            'quantity': 1,
+            'photo': base64Encode(utf8.encode('this is just text' * 500)),
+          },
+        );
+
+        expect(response.statusCode, 400);
+        expect(response.json['error']['message'], contains('not an image'));
+      });
+
+      test('an SVG is refused, which is the point', () async {
+        // The one image format that can carry script. It is XML, so it has no
+        // magic number and fails by construction rather than by a blocklist.
+        final session = await admin();
+        const svg =
+            '<svg xmlns="http://www.w3.org/2000/svg">'
+            '<script>alert(1)</script></svg>';
+
+        final response = await server.post(
+          '/inventory/items',
+          accessToken: session.accessToken,
+          body: {
+            'name': 'Svg',
+            'quantity': 1,
+            'photo': base64Encode(utf8.encode(svg)),
+          },
+        );
+
+        expect(response.statusCode, 400);
+      });
+
+      test('a declared type does not override the bytes', () async {
+        // The prefix is attacker-controlled; the bytes are what gets decoded.
+        final session = await admin();
+
+        final response = await server.post(
+          '/inventory/items',
+          accessToken: session.accessToken,
+          body: {
+            'name': 'Liar',
+            'quantity': 1,
+            'photo':
+                'data:image/png;base64,'
+                '${base64Encode(utf8.encode('definitely not a png'))}',
+          },
+        );
+
+        expect(response.statusCode, 400);
+      });
+
+      test('something that is not base64 at all is refused', () async {
+        final session = await admin();
+
+        final response = await server.post(
+          '/inventory/items',
+          accessToken: session.accessToken,
+          body: {'name': 'Bad', 'quantity': 1, 'photo': 'not!base64!!'},
+        );
+
+        expect(response.statusCode, 400);
+        expect(response.json['error']['message'], contains('base64'));
+      });
+
+      test(
+        'an empty photo is allowed, because that is how one is removed',
+        () async {
+          final session = await admin();
+          final created = await server.post(
+            '/inventory/items',
+            accessToken: session.accessToken,
+            body: {'name': 'Cleared', 'quantity': 1, 'photo': image(png)},
+          );
+
+          final response = await server.patch(
+            '/inventory/items/${created.json['item']['id']}',
+            accessToken: session.accessToken,
+            body: {'photo': ''},
+          );
+
+          expect(response.statusCode, 200);
+          expect(response.json['item']['photo'], anyOf(isNull, isEmpty));
+        },
+      );
+
+      test('an item saved without a photo is untouched', () async {
+        // An absent field is not a blank one; a name change must not wipe
+        // the picture.
+        final session = await admin();
+        final created = await server.post(
+          '/inventory/items',
+          accessToken: session.accessToken,
+          body: {'name': 'Keeps it', 'quantity': 1, 'photo': image(png)},
+        );
+
+        final response = await server.patch(
+          '/inventory/items/${created.json['item']['id']}',
+          accessToken: session.accessToken,
+          body: {'name': 'Renamed'},
+        );
+
+        expect(response.statusCode, 200);
+        expect(response.json['item']['photo'], isNotEmpty);
+      });
+
+      test('a logo that is not an image is refused too', () async {
+        final session = await admin();
+
+        final response = await server.patch(
+          '/inventory/preferences',
+          accessToken: session.accessToken,
+          body: {
+            'preferences': {'companyLogo': base64Encode(utf8.encode('<svg/>'))},
+          },
+        );
+
+        expect(response.statusCode, 400);
+      });
+
+      test('an oversized image is refused by size, not by shape', () async {
+        // 5.5 MB decoded is over the image cap of 5 MB, and its base64 is
+        // ~7.3 MB — under the 8 MB body cap, so it reaches the image check
+        // rather than bouncing off the outer wall first. The two limits are
+        // sized to leave exactly this gap.
+        final session = await admin();
+
+        final response = await server.post(
+          '/inventory/items',
+          accessToken: session.accessToken,
+          body: {
+            'name': 'Huge',
+            'quantity': 1,
+            'photo': image(png, bytes: 5500000),
+          },
+        );
+
+        expect(response.statusCode, 400);
+        expect(response.json['error']['message'], contains('larger than'));
+      });
     });
 
     // A BACKUP THE APP WROTE LAST MONTH IS STILL A BACKUP. This fixture is a
