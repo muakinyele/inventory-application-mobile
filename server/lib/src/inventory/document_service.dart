@@ -49,6 +49,87 @@ class DocumentService {
     return (invoice: row, lines: await _invoiceLines(id));
   }
 
+  // ------------------------------------------------------------------
+  // Lines for a LIST of documents
+  //
+  // THE LIST ENDPOINTS WERE N+1, AND THEN SOME. Each one fetched its rows and
+  // then, for every row, called the single-document reader — which re-SELECTS
+  // a row the caller already has and then queries its lines. Awaited inside
+  // the loop, so sequentially. At the default limit of 200 that is 1 + 200 × 2
+  // = 401 round trips to answer one request, and five such endpoints are
+  // fetched in parallel when the app starts.
+  //
+  // One query per list instead, grouped in memory. The ordering is kept where
+  // the single readers had it, so a document's lines still come back in the
+  // order they were entered.
+  // ------------------------------------------------------------------
+
+  Future<Map<String, List<InvoiceLine>>> invoiceLinesFor(
+    List<String> ids,
+  ) async {
+    if (ids.isEmpty) return const {};
+    final rows =
+        await (db.select(db.invoiceLines)
+              ..where((t) => t.invoiceId.isIn(ids))
+              ..orderBy([(t) => OrderingTerm(expression: t.position)]))
+            .get();
+    return _groupBy(rows, (row) => row.invoiceId);
+  }
+
+  Future<Map<String, List<ReceiptLine>>> receiptLinesFor(
+    List<String> ids,
+  ) async {
+    if (ids.isEmpty) return const {};
+    final rows =
+        await (db.select(db.receiptLines)
+              ..where((t) => t.receiptId.isIn(ids))
+              ..orderBy([(t) => OrderingTerm(expression: t.position)]))
+            .get();
+    return _groupBy(rows, (row) => row.receiptId);
+  }
+
+  Future<Map<String, List<PurchaseOrderLine>>> purchaseOrderLinesFor(
+    List<String> ids,
+  ) async {
+    if (ids.isEmpty) return const {};
+    final rows =
+        await (db.select(db.purchaseOrderLines)
+              ..where((t) => t.orderId.isIn(ids))
+              ..orderBy([(t) => OrderingTerm(expression: t.position)]))
+            .get();
+    return _groupBy(rows, (row) => row.orderId);
+  }
+
+  Future<Map<String, List<SalesOrderLine>>> salesOrderLinesFor(
+    List<String> ids,
+  ) async {
+    if (ids.isEmpty) return const {};
+    final rows =
+        await (db.select(db.salesOrderLines)
+              ..where((t) => t.orderId.isIn(ids))
+              ..orderBy([(t) => OrderingTerm(expression: t.position)]))
+            .get();
+    return _groupBy(rows, (row) => row.orderId);
+  }
+
+  Future<Map<String, List<TransferLine>>> transferLinesFor(
+    List<String> ids,
+  ) async {
+    if (ids.isEmpty) return const {};
+    final rows = await (db.select(
+      db.transferLines,
+    )..where((t) => t.transferId.isIn(ids))).get();
+    return _groupBy(rows, (row) => row.transferId);
+  }
+
+  Map<String, List<T>> _groupBy<T>(List<T> rows, String Function(T) key) {
+    final grouped = <String, List<T>>{};
+    for (final row in rows) {
+      (grouped[key(row)] ??= []).add(row);
+    }
+    return grouped;
+  }
+
   Future<List<InvoiceLine>> _invoiceLines(String id) =>
       (db.select(db.invoiceLines)
             ..where((t) => t.invoiceId.equals(id))

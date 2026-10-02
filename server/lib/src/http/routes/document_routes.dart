@@ -25,10 +25,15 @@ Router documentRoutes({required DocumentService documents}) {
     final rows = await documents.invoices(
       status: request.url.queryParameters['status'],
     );
+    // One query for every line on the page, grouped here — not one pair of
+    // queries per row, awaited in turn.
+    final lines = await documents.invoiceLinesFor([
+      for (final invoice in rows) invoice.id,
+    ]);
     return jsonResponse({
       'invoices': [
         for (final invoice in rows)
-          invoiceJson(invoice, (await documents.invoice(invoice.id)).lines),
+          invoiceJson(invoice, lines[invoice.id] ?? const []),
       ],
     });
   });
@@ -140,10 +145,13 @@ Router documentRoutes({required DocumentService documents}) {
     final rows = await documents.receipts(
       status: request.url.queryParameters['status'],
     );
+    final lines = await documents.receiptLinesFor([
+      for (final receipt in rows) receipt.id,
+    ]);
     return jsonResponse({
       'receipts': [
         for (final receipt in rows)
-          receiptJson(receipt, (await documents.receipt(receipt.id)).lines),
+          receiptJson(receipt, lines[receipt.id] ?? const []),
       ],
     });
   });
@@ -213,13 +221,13 @@ Router documentRoutes({required DocumentService documents}) {
     final rows = await documents.purchaseOrders(
       status: request.url.queryParameters['status'],
     );
+    final lines = await documents.purchaseOrderLinesFor([
+      for (final order in rows) order.id,
+    ]);
     return jsonResponse({
       'purchaseOrders': [
         for (final order in rows)
-          purchaseOrderJson(
-            order,
-            (await documents.purchaseOrder(order.id)).lines,
-          ),
+          purchaseOrderJson(order, lines[order.id] ?? const []),
       ],
     });
   });
@@ -293,10 +301,13 @@ Router documentRoutes({required DocumentService documents}) {
     final rows = await documents.salesOrders(
       status: request.url.queryParameters['status'],
     );
+    final lines = await documents.salesOrderLinesFor([
+      for (final order in rows) order.id,
+    ]);
     return jsonResponse({
       'salesOrders': [
         for (final order in rows)
-          salesOrderJson(order, (await documents.salesOrder(order.id)).lines),
+          salesOrderJson(order, lines[order.id] ?? const []),
       ],
     });
   });
@@ -368,10 +379,12 @@ Router documentRoutes({required DocumentService documents}) {
   router.get('/transfers', (Request request) async {
     request.require('inventory.transfer');
     final rows = await documents.transfers();
+    final lines = await documents.transferLinesFor([
+      for (final t in rows) t.id,
+    ]);
     return jsonResponse({
       'transfers': [
-        for (final t in rows)
-          transferJson(t, (await documents.transfer(t.id)).lines),
+        for (final t in rows) transferJson(t, lines[t.id] ?? const []),
       ],
     });
   });

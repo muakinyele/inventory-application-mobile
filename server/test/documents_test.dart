@@ -762,6 +762,115 @@ void main() {
     });
   });
 
+  // THE LIST ENDPOINTS WERE N+1: each fetched its rows and then, per row,
+  // called the single-document reader — which re-selects the row and queries
+  // its lines, awaited in turn. 1 + 200 x 2 round trips to answer one request,
+  // five such lists fetched in parallel at startup. They batch now, and the
+  // risk a batch carries is grouping: lines landing on the wrong document.
+  group('a list and its lines', () {
+    test('every receipt keeps its own lines, in order', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 500);
+
+      for (var r = 0; r < 3; r++) {
+        await server.post(
+          '/documents/receipts',
+          accessToken: s.accessToken,
+          body: {
+            'status': 'issued',
+            'movesStock': true,
+            'lines': [
+              // A different count per receipt, and a name that says which
+              // receipt and which line it belongs to.
+              for (var l = 0; l <= r; l++)
+                {
+                  'itemId': id,
+                  'itemName': 'R$r-L$l',
+                  'quantity': 1,
+                  'unitPrice': 2.0,
+                },
+            ],
+          },
+        );
+      }
+
+      final listed = await server.get(
+        '/documents/receipts',
+        accessToken: s.accessToken,
+      );
+      final rows = listed.json['receipts'] as List;
+      expect(rows, hasLength(3));
+
+      // Newest first, so receipt 2 (three lines) leads.
+      for (final row in rows) {
+        final lines = (row as Map)['lines'] as List;
+        final names = [for (final l in lines) (l as Map)['itemName'] as String];
+        final receipt = names.first.split('-').first;
+        expect(names, [
+          for (var l = 0; l < names.length; l++) '$receipt-L$l',
+        ], reason: 'lines belong to one receipt and keep their order');
+      }
+
+      expect(
+        [for (final r in rows) ((r as Map)['lines'] as List).length]..sort(),
+        [1, 2, 3],
+      );
+    });
+
+    test(
+      'a document with no lines comes back with none, not somebody else\'s',
+      () async {
+        final s = await admin();
+        final id = await item(s, quantity: 50);
+
+        await server.post(
+          '/documents/receipts',
+          accessToken: s.accessToken,
+          body: {
+            'status': 'issued',
+            'movesStock': true,
+            'lines': [
+              {
+                'itemId': id,
+                'itemName': 'Only one',
+                'quantity': 1,
+                'unitPrice': 2.0,
+              },
+            ],
+          },
+        );
+        await server.post(
+          '/documents/receipts',
+          accessToken: s.accessToken,
+          body: {'status': 'issued', 'movesStock': false, 'lines': <Object?>[]},
+        );
+
+        final listed = await server.get(
+          '/documents/receipts',
+          accessToken: s.accessToken,
+        );
+        final counts = [
+          for (final r in listed.json['receipts'] as List)
+            ((r as Map)['lines'] as List).length,
+        ]..sort();
+
+        expect(counts, [0, 1]);
+      },
+    );
+
+    test('an empty list asks for no lines at all', () async {
+      final s = await admin();
+
+      final listed = await server.get(
+        '/documents/receipts',
+        accessToken: s.accessToken,
+      );
+
+      expect(listed.statusCode, 200);
+      expect(listed.json['receipts'], isEmpty);
+    });
+  });
+
   group('refunds', () {
     Future<(String, String)> issuedReceipt(TestSession s, String itemId) async {
       final created = await server.post(
