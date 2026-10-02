@@ -9,6 +9,7 @@ import '../models/item.dart';
 import '../state/auth_controller.dart';
 import '../state/inventory_controller.dart';
 import 'widgets/app_sidebar.dart';
+import 'widgets/shell_drawer.dart';
 import 'widgets/inventory_status_banner.dart';
 import 'widgets/confirm_dialog.dart';
 
@@ -229,11 +230,19 @@ class _AppShellState extends State<AppShell> {
           onToggleSection: _toggleSection,
         ),
       ),
-      body: Column(
-        children: [
-          const InventoryStatusBanner(),
-          Expanded(child: navigationShell),
-        ],
+      // The Builder is what makes this work: its context sits BELOW this
+      // Scaffold, so `Scaffold.of` finds the one that actually has the drawer
+      // rather than whichever Scaffold the page builds for itself.
+      body: Builder(
+        builder: (shellContext) => ShellDrawer(
+          open: () => Scaffold.of(shellContext).openDrawer(),
+          child: Column(
+            children: [
+              const InventoryStatusBanner(),
+              Expanded(child: navigationShell),
+            ],
+          ),
+        ),
       ),
       bottomNavigationBar: _PhoneTabs(
         currentIndex: navigationShell.currentIndex,

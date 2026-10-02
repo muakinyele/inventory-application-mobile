@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/design.dart';
 import '../../core/palette.dart';
+import 'shell_drawer.dart';
 
 /// The standard page top: an optional back or menu affordance, a large bold
 /// title with optional subtitle, and right-aligned actions that wrap under the
@@ -25,6 +26,10 @@ class PageHeader extends StatelessWidget {
     final p = context.palette;
     final wide = MediaQuery.sizeOf(context).width >= Breakpoints.sidebar;
 
+    // Null when the sidebar is already on screen, or when there is no shell
+    // above this page — a widget test, a document opened on its own.
+    final openDrawer = wide ? null : ShellDrawer.of(context);
+
     final heading = Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
@@ -38,16 +43,17 @@ class PageHeader extends StatelessWidget {
               style: IconButton.styleFrom(foregroundColor: p.ink),
             ),
           )
-        else if (!wide)
+        // Only when there is a drawer to open. A menu button that cannot
+        // open anything is worse than no button: it takes the tap and does
+        // nothing, which is exactly what it did before.
+        else if (openDrawer != null)
           Padding(
             padding: const EdgeInsets.only(right: Insets.xs),
-            child: Builder(
-              builder: (context) => IconButton(
-                onPressed: Scaffold.of(context).openDrawer,
-                icon: const Icon(Icons.menu_rounded),
-                tooltip: 'Open navigation',
-                style: IconButton.styleFrom(foregroundColor: p.ink),
-              ),
+            child: IconButton(
+              onPressed: openDrawer,
+              icon: const Icon(Icons.menu_rounded),
+              tooltip: 'Open navigation',
+              style: IconButton.styleFrom(foregroundColor: p.ink),
             ),
           ),
         Expanded(

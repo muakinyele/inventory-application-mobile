@@ -2579,6 +2579,11 @@ class InventoryController extends ChangeNotifier {
         'taxRate': next.taxRate.toString(),
         'taxLabel': next.taxLabel,
         'receiptFooter': next.receiptFooter,
+        // THE LOGO WAS NEVER SENT. It was set on `_settings` and shown
+        // immediately, so it looked saved — and it was, in memory. Nothing
+        // wrote it to the server and nothing read it back, so it survived
+        // until the next load and then was simply gone.
+        'companyLogo': next.companyLogo,
       });
       // Reported, not printed. The categories, locations and units live here
       // as well as on their own screens, and a caller that is told nothing

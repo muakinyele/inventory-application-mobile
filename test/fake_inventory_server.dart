@@ -29,6 +29,15 @@ class FakeInventoryServer {
   /// save does not land — which is where the quiet bugs live.
   bool failNextWrite = false;
 
+  /// What the workspace's preferences hold, so a test can stage what a load
+  /// should bring back.
+  Map<String, String> preferences = const {};
+
+  /// The last preferences written, so a test can assert that a setting
+  /// actually LEFT — the company logo looked saved for months because nobody
+  /// checked this.
+  Map<String, dynamic>? lastPreferences;
+
   String _id(Map<String, dynamic> body, String fallbackPrefix) {
     final sent = body['id'];
     if (sent is String && sent.isNotEmpty) return sent;
@@ -74,7 +83,7 @@ class FakeInventoryServer {
         '/api/inventory/customers' => {'customers': <Object?>[]},
         '/api/inventory/categories' => {'categories': <Object?>[]},
         '/api/inventory/lookups' => {'lookups': <Object?>[]},
-        '/api/inventory/preferences' => {'preferences': <String, String>{}},
+        '/api/inventory/preferences' => {'preferences': preferences},
         '/api/documents/invoices' => {'invoices': <Object?>[]},
         '/api/documents/receipts' => {'receipts': <Object?>[]},
         '/api/documents/purchase-orders' => {'purchaseOrders': <Object?>[]},
@@ -85,6 +94,16 @@ class FakeInventoryServer {
     }
 
     if (request.method == 'DELETE') return http.Response('', 204);
+
+    if (request.method == 'PATCH' && path == '/api/inventory/preferences') {
+      final sent = (body['preferences'] as Map?)?.cast<String, dynamic>() ?? {};
+      lastPreferences = sent;
+      preferences = {
+        ...preferences,
+        for (final e in sent.entries) e.key: '${e.value ?? ''}',
+      };
+      return _ok({'preferences': preferences});
+    }
 
     // The category write answers with what it stored, as the real route does.
     // Anything less makes a client that adopts the reply look broken here and
