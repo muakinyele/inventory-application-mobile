@@ -424,7 +424,23 @@ class _StockpileAppState extends State<StockpileApp> {
   ///
   /// Read in `initState`, before that gap, so what the address bar said at
   /// entry survives the wait.
-  late final String? _entryLocation = _locationFromBrowser();
+  ///
+  /// ASSIGNED EAGERLY, NOT AS A `late final` INITIALISER. That form is lazy —
+  /// it runs on first READ, which is inside `_routerFor`, i.e. after the
+  /// restore — and by then the plain `MaterialApp` shown during the wait has
+  /// already replaced the URL with the bare origin, because a non-Router app
+  /// on web does not keep a route. So the lazy version read '/' and still
+  /// landed on the dashboard, but only for someone with a session to restore:
+  /// signed out there is no round trip, the splash never renders, and it
+  /// appeared to work. Which is exactly how it passed on staging and failed in
+  /// production.
+  String? _entryLocation;
+
+  @override
+  void initState() {
+    super.initState();
+    _entryLocation = _locationFromBrowser();
+  }
 
   /// The route in the address bar, or null when there is no address bar.
   ///
