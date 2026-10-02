@@ -80,6 +80,26 @@ class _InvoiceEditorPageState extends State<InvoiceEditorPage> {
 
   bool get _fromSale => _order != null;
 
+  /// Whether the customer is settled by the sale and must not be changed.
+  ///
+  /// NOT THE SAME AS "came from a sale". A sale can be raised without a
+  /// customer — a walk-in that was later put on account — and invoicing one of
+  /// those used to leave this field disabled AND empty: no customer shown, no
+  /// way to pick one, and a credit invoice issued with nobody to bill. Locked
+  /// only when the sale actually named somebody.
+  bool get _customerFixedBySale => _order?.customerId != null;
+
+  /// The sale's customer, when they are no longer in the picker.
+  ///
+  /// Null when there is nothing to add — no customer, or one still listed.
+  String? _missingSaleCustomer(InventoryController controller) {
+    final id = _customerId;
+    if (id == null) return null;
+    if (controller.customers.any((c) => c.id == id)) return null;
+    final name = _order?.customerName ?? '';
+    return name.isEmpty ? 'This sale\'s customer' : name;
+  }
+
   List<InvoiceLine> _buildLines() => [
     for (final line in _lines)
       if (line.itemId != null && line.quantity > 0)
@@ -143,7 +163,10 @@ class _InvoiceEditorPageState extends State<InvoiceEditorPage> {
       );
       return;
     }
-    if (_customerId == null && !_fromSale) {
+    // However it was raised. An invoice is a claim on money and somebody has
+    // to owe it — a sale with no customer behind it does not change that, and
+    // skipping the check for those is what let one be issued with no debtor.
+    if (_customerId == null) {
       _notify(
         'A credit sale needs a customer — that is who owes the money.',
         tone: MessageTone.warning,
@@ -262,8 +285,10 @@ class _InvoiceEditorPageState extends State<InvoiceEditorPage> {
                     isExpanded: true,
                     decoration: InputDecoration(
                       labelText: 'Customer',
-                      helperText: _fromSale
+                      helperText: _customerFixedBySale
                           ? 'Taken from the sale'
+                          : _fromSale
+                          ? 'That sale had no customer — choose who to bill'
                           : 'Priced at ${tier.label.toLowerCase()} rates',
                     ),
                     items: [
@@ -275,15 +300,33 @@ class _InvoiceEditorPageState extends State<InvoiceEditorPage> {
                             '${customer.name} · ${customer.priceTier.label}',
                           ),
                         ),
+                      // THE SALE'S OWN CUSTOMER, when they are no longer in
+                      // the picker — archived since the sale was raised. A
+                      // selected value with no matching item renders blank and
+                      // asserts in debug, so the invoice would show no
+                      // customer at all for a sale that plainly has one. The
+                      // name comes off the sale, which carries it as text for
+                      // exactly this reason.
+                      if (_missingSaleCustomer(controller) case final name?)
+                        DropdownMenuItem(
+                          value: _customerId,
+                          child: Text('$name · no longer listed'),
+                        ),
                     ],
-                    onChanged: _fromSale
+                    onChanged: _customerFixedBySale
                         ? null
                         : (value) => setState(() {
                             _customerId = value;
-                            _reprice(
-                              controller.items,
-                              controller.priceTierFor(value),
-                            );
+                            // Not repriced when the lines came from a sale:
+                            // they were quoted at that sale's tier, and
+                            // rewriting them here would change what the
+                            // customer was told they owed.
+                            if (!_fromSale) {
+                              _reprice(
+                                controller.items,
+                                controller.priceTierFor(value),
+                              );
+                            }
                           }),
                   ),
                   const SizedBox(height: Insets.md),

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
@@ -397,9 +398,13 @@ String? _guard(AuthController auth, GoRouterState state) {
 }
 
 class StockpileApp extends StatefulWidget {
-  const StockpileApp({super.key, this.initialLocation = '/'});
+  const StockpileApp({super.key, this.initialLocation});
 
-  final String initialLocation;
+  /// Where to start, when the caller knows better than the browser does.
+  ///
+  /// Null in the app itself, so the address bar wins; the widget tests pass
+  /// one because there is no address bar to read.
+  final String? initialLocation;
 
   @override
   State<StockpileApp> createState() => _StockpileAppState();
@@ -408,6 +413,30 @@ class StockpileApp extends StatefulWidget {
 class _StockpileAppState extends State<StockpileApp> {
   GoRouter? _router;
 
+  /// Where the browser was pointing when the app started.
+  ///
+  /// REFRESHING ANY PAGE LANDED ON THE DASHBOARD, and this is why. The router
+  /// is built only once the session has been restored — an async gap of a
+  /// round trip — and by then the platform's own idea of the initial route is
+  /// no longer available to go_router, so it fell back to the '/' it had been
+  /// handed. Every reload therefore threw away the page you were on, and any
+  /// link into the app deeper than the dashboard arrived at the dashboard.
+  ///
+  /// Read in `initState`, before that gap, so what the address bar said at
+  /// entry survives the wait.
+  late final String? _entryLocation = _locationFromBrowser();
+
+  /// The route in the address bar, or null when there is no address bar.
+  ///
+  /// The app uses the default hash strategy, so the route is the fragment:
+  /// `https://host/#/invoices/new?sale=x` is `/invoices/new?sale=x`.
+  static String? _locationFromBrowser() {
+    if (!kIsWeb) return null;
+    final fragment = Uri.base.fragment;
+    if (fragment.isEmpty || fragment == '/') return null;
+    return fragment.startsWith('/') ? fragment : '/$fragment';
+  }
+
   /// Built once the session has been restored, and only then.
   ///
   /// Deferring it is what stops the guard evaluating against a controller that
@@ -415,7 +444,9 @@ class _StockpileAppState extends State<StockpileApp> {
   /// returning user to the sign-in screen for a frame before bouncing them
   /// back.
   GoRouter _routerFor(AuthController? auth) => _router ??= createRouter(
-    initialLocation: widget.initialLocation,
+    // An explicit one wins — that is a test saying where to start. Otherwise
+    // the address bar, and only then the dashboard.
+    initialLocation: widget.initialLocation ?? _entryLocation ?? '/',
     auth: auth,
   );
 
