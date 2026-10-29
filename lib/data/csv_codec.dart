@@ -1,5 +1,6 @@
 import '../models/item.dart';
 import '../models/movement.dart';
+import '../models/party.dart';
 import '../models/receipt.dart';
 
 const _itemColumns = [
@@ -405,4 +406,101 @@ ReceiptImportResult csvToReceipts(String text) {
   ];
 
   return ReceiptImportResult(receipts, errors);
+}
+
+const _customerColumns = [
+  'name',
+  'contactName',
+  'phone',
+  'email',
+  'address',
+  'priceTier',
+  'notes',
+];
+
+/// Customers as a sheet, in the same columns [csvToCustomers] reads back.
+String customersToCsv(List<Customer> customers) {
+  final rows = customers.map(
+    (c) => <Object?>[
+      c.name,
+      c.contactName,
+      c.phone,
+      c.email,
+      c.address,
+      c.priceTier.name,
+      c.notes,
+    ].map(_escape).join(','),
+  );
+  return [_customerColumns.join(','), ...rows].join('\n');
+}
+
+class CustomerImportResult {
+  const CustomerImportResult(this.customers, this.errors);
+  final List<Customer> customers;
+  final List<String> errors;
+}
+
+/// Maps a sheet to customers by header name, like [csvToItems]: only "name"
+/// is required. The price tier reads "distributor" (any case) as distributor
+/// and anything else as retailer.
+CustomerImportResult csvToCustomers(String text) {
+  final rows = parseCsv(text);
+  if (rows.length < 2) {
+    return const CustomerImportResult([], ['The file has no data rows.']);
+  }
+  final header = rows.first
+      .map((h) => h.trim().toLowerCase().replaceAll(RegExp(r'[\s_-]'), ''))
+      .toList();
+  int col(String name) => header.indexOf(name);
+
+  final iName = col('name');
+  if (iName == -1) {
+    return const CustomerImportResult([], [
+      'No "name" column found. That column is required.',
+    ]);
+  }
+  final iContact = [
+    col('contactname'),
+    col('contact'),
+  ].firstWhere((i) => i != -1, orElse: () => -1);
+  final iPhone = col('phone');
+  final iEmail = col('email');
+  final iAddress = col('address');
+  final iTier = [
+    col('pricetier'),
+    col('tier'),
+  ].firstWhere((i) => i != -1, orElse: () => -1);
+  final iNotes = col('notes');
+
+  String cell(List<String> row, int i) =>
+      (i == -1 || i >= row.length) ? '' : row[i].trim();
+
+  final now = DateTime.now();
+  final customers = <Customer>[];
+  final errors = <String>[];
+  for (var r = 1; r < rows.length; r++) {
+    final row = rows[r];
+    final name = cell(row, iName);
+    if (name.isEmpty) {
+      errors.add('Row ${r + 1}: skipped, no name.');
+      continue;
+    }
+    customers.add(
+      Customer(
+        id: '',
+        name: name,
+        contactName: cell(row, iContact),
+        phone: cell(row, iPhone),
+        email: cell(row, iEmail),
+        address: cell(row, iAddress),
+        priceTier: cell(row, iTier).toLowerCase().startsWith('dist')
+            ? PriceTier.distributor
+            : PriceTier.retailer,
+        notes: cell(row, iNotes),
+        createdAt: now,
+        updatedAt: now,
+      ),
+    );
+  }
+  return CustomerImportResult(customers, errors);
 }

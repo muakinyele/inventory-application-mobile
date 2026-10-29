@@ -60,7 +60,7 @@ void main() {
   test('importDrafts adds items and learns their categories', () async {
     final c = await newController();
 
-    final count = c.importDrafts(const [
+    final outcome = await c.importDrafts(const [
       ItemDraft(
         name: 'Imported',
         sku: 'I-1',
@@ -78,7 +78,8 @@ void main() {
       ),
     ]);
 
-    expect(count, 1);
+    expect(outcome.imported, 1);
+    expect(outcome.failed, 0);
     expect(c.items.single.name, 'Imported');
     expect(c.settings.categories, contains('Imported Goods'));
     expect(c.settings.units, contains('box'));

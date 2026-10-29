@@ -1475,70 +1475,90 @@ class InventoryController extends ChangeNotifier {
     }
   }
 
-  int importDrafts(List<ItemDraft> drafts) {
-    if (drafts.isEmpty) return 0;
+  /// Imports items from a CSV, creating each one on the server.
+  ///
+  /// THIS USED TO SAVE NOTHING. It put the items on this screen only, with
+  /// made-up movements, and never told the server — so they were gone on the
+  /// next reload, and since the screen began re-reading the server every half
+  /// minute, gone within half a minute. Each item is now created like one
+  /// added by hand, so its opening quantity arrives with a movement and a
+  /// location, and only what the server stored is shown.
+  ///
+  /// A few at a time, so a long file is not one request after another, and
+  /// with the background refresh held off until it is done. Returns how many
+  /// were saved, how many were not, and the first reason one was refused.
+  Future<({int imported, int failed, String? reason})> importDrafts(
+    List<ItemDraft> drafts,
+  ) async {
+    if (drafts.isEmpty) return (imported: 0, failed: 0, reason: null);
     final now = DateTime.now();
-    final imported = drafts
-        .map(
-          (d) => Item(
-            id: _uid(),
-            name: d.name,
-            sku: d.sku,
-            barcode: d.barcode,
-            category: d.category,
-            location: d.location,
-            quantity: d.quantity,
-            reorderLevel: d.reorderLevel,
-            unit: d.unit,
-            unitCost: d.unitCost,
-            retailerPrice: d.retailerPrice,
-            distributorPrice: d.distributorPrice,
-            supplier: d.supplier,
-            notes: d.notes,
-            createdAt: now,
-            updatedAt: now,
-          ),
-        )
-        .toList();
+    final saved = <Item>[];
+    var failed = 0;
+    String? reason;
 
-    final movements = imported
-        .map(
-          (i) => _movement(
-            i,
-            MovementKind.create,
-            0,
-            i.quantity,
-            'Imported from CSV',
-          ),
-        )
-        .toList();
+    _writesInFlight++;
+    try {
+      const batch = 8;
+      for (var start = 0; start < drafts.length; start += batch) {
+        final chunk = drafts.skip(start).take(batch);
+        final results = await Future.wait([
+          for (final d in chunk)
+            _api
+                .createItem(
+                  Item(
+                    id: _uid(),
+                    name: d.name,
+                    sku: d.sku,
+                    barcode: d.barcode,
+                    category: d.category,
+                    location: d.location,
+                    quantity: d.quantity,
+                    reorderLevel: d.reorderLevel,
+                    unit: d.unit,
+                    unitCost: d.unitCost,
+                    retailerPrice: d.retailerPrice,
+                    distributorPrice: d.distributorPrice,
+                    supplier: d.supplier,
+                    notes: d.notes,
+                    createdAt: now,
+                    updatedAt: now,
+                  ),
+                )
+                .then<Item?>((item) => item)
+                .catchError((Object error) {
+                  failed++;
+                  reason ??= reasonFor(error, 'The server refused it.');
+                  debugPrint('Stockpile: could not import ${d.name}: $error');
+                  return null;
+                }),
+        ]);
+        saved.addAll(results.whereType<Item>());
+      }
 
-    _items = [...imported, ..._items];
-    _movements = [...movements, ..._movements].take(maxMovements).toList();
-    // Imported rows carry one location each, so each lands whole in its bin.
-    final importedBins = <String, Map<String, int>>{};
-    for (final i in imported) {
-      if (i.quantity == 0) continue;
-      importedBins[i.id] = {stockBin(i.location): i.quantity};
+      if (saved.isNotEmpty) {
+        final ids = {for (final i in saved) i.id};
+        _items = [...saved, ..._items.where((i) => !ids.contains(i.id))];
+        var learned = false;
+        for (final item in saved) {
+          if (_learnOptions(item)) learned = true;
+        }
+        // The pickers once for the whole file, not once per row.
+        if (learned) await _persistSettingsTo(replaceCategories: false);
+        // The items are as the server stored them already. Their opening
+        // movements and locations are the server's too: re-read those.
+        try {
+          _movements = await _api.movements(limit: maxMovements);
+          _levels = Map.of(await _api.allStock());
+        } catch (error) {
+          debugPrint('Stockpile: could not refresh stock after import: $error');
+        }
+      }
+      lastWriteError = null;
+    } finally {
+      _writesInFlight--;
+      notifyListeners();
     }
-    _levels = {..._levels, ...importedBins};
-
-    final categories = {..._settings.categories};
-    final locations = {..._settings.locations};
-    final units = {..._settings.units};
-    for (final i in imported) {
-      if (i.category.isNotEmpty) categories.add(i.category);
-      if (i.location.isNotEmpty) locations.add(i.location);
-      if (i.unit.isNotEmpty) units.add(i.unit);
-    }
-    _settings = _settings.copyWith(
-      categories: categories.toList(),
-      locations: locations.toList(),
-      units: units.toList(),
-    );
-    notifyListeners();
-
-    return imported.length;
+    return (imported: saved.length, failed: failed, reason: reason);
   }
 
   // --- Suppliers -----------------------------------------------------------
@@ -1557,30 +1577,53 @@ class InventoryController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Unlinks the supplier from its items before removing it, so no item is
-  /// left pointing at a record that no longer exists. The item keeps the
-  /// supplier's name as free text, so history stays readable.
-  void deleteSupplier(String id) {
-    final supplier = supplierById(id);
-    if (supplier == null) return;
-
-    final now = DateTime.now();
-    final touched = _items
-        .where((i) => i.supplierId == id)
-        .map(
-          (i) => i.copyWith(
-            supplier: supplier.name,
-            clearSupplierId: true,
-            updatedAt: now,
-          ),
-        )
-        .toList();
-    _applyTouched(touched);
-    _suppliers = _suppliers.where((s) => s.id != id).toList();
-    notifyListeners();
-  }
-
   // --- Customers -----------------------------------------------------------
+
+  /// Imports customers from a CSV, creating each on the server. One whose
+  /// name is already a customer is skipped rather than added twice. Returns
+  /// how many were saved, skipped and refused, with the first refusal.
+  Future<({int imported, int skipped, int failed, String? reason})>
+  importCustomers(List<Customer> drafts) async {
+    final known = {for (final c in _customers) c.name.trim().toLowerCase()};
+    final saved = <Customer>[];
+    var skipped = 0;
+    var failed = 0;
+    String? reason;
+
+    _writesInFlight++;
+    try {
+      for (final draft in drafts) {
+        final key = draft.name.trim().toLowerCase();
+        if (!known.add(key)) {
+          skipped++;
+          continue;
+        }
+        try {
+          // Blank id: the server assigns one, as for a customer added by hand.
+          saved.add(await _api.saveCustomer(draft));
+        } catch (error) {
+          failed++;
+          reason ??= reasonFor(error, 'The server refused it.');
+          debugPrint('Stockpile: could not import ${draft.name}: $error');
+        }
+      }
+      if (saved.isNotEmpty) {
+        _customers = [
+          ..._customers,
+          ...saved,
+        ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      }
+    } finally {
+      _writesInFlight--;
+      notifyListeners();
+    }
+    return (
+      imported: saved.length,
+      skipped: skipped,
+      failed: failed,
+      reason: reason,
+    );
+  }
 
   Future<Customer> createCustomer(Customer draft) async {
     return _saveCustomerOnServer(_api, draft);
@@ -1593,12 +1636,6 @@ class InventoryController extends ChangeNotifier {
     final updated = draft.copyWith(updatedAt: DateTime.now());
     _customers = _customers.map((c) => c.id == id ? updated : c).toList()
       ..sort(_customerOrder);
-    notifyListeners();
-  }
-
-  void deleteCustomer(String id) {
-    if (customerById(id) == null) return;
-    _customers = _customers.where((c) => c.id != id).toList();
     notifyListeners();
   }
 
@@ -1693,14 +1730,6 @@ class InventoryController extends ChangeNotifier {
         updatedAt: now,
       ),
     );
-  }
-
-  void deletePurchaseOrder(String id) {
-    final existing = purchaseOrderById(id);
-    // Anything that has moved stock stays on file; only paperwork is deletable.
-    if (existing == null || existing.unitsReceived > 0) return;
-    _purchaseOrders = _purchaseOrders.where((o) => o.id != id).toList();
-    notifyListeners();
   }
 
   /// Books stock in against an order.
@@ -1971,14 +2000,6 @@ class InventoryController extends ChangeNotifier {
     }
     notifyListeners();
     return result;
-  }
-
-  void deleteSalesOrder(String id) {
-    final existing = salesOrderById(id);
-    // Anything that has moved stock stays on file; only paperwork is deletable.
-    if (existing == null || existing.unitsFulfilled > 0) return;
-    _salesOrders = _salesOrders.where((o) => o.id != id).toList();
-    notifyListeners();
   }
 
   /// The most that can be sent on a line right now: what is still outstanding,
@@ -2337,16 +2358,6 @@ class InventoryController extends ChangeNotifier {
     }
   }
 
-  /// Removes a voided receipt from the file. Only a void is ever deletable:
-  /// a live receipt is the customer's proof of purchase, and one with refunds
-  /// against it carries history that has to stay.
-  void deleteReceipt(String id) {
-    final receipt = receiptById(id);
-    if (receipt == null || receipt.status != ReceiptStatus.voided) return;
-    _receipts = _receipts.where((r) => r.id != id).toList();
-    notifyListeners();
-  }
-
   // --- Invoices ------------------------------------------------------------
 
   Invoice? invoiceById(String id) {
@@ -2614,16 +2625,6 @@ class InventoryController extends ChangeNotifier {
     }
   }
 
-  /// Removes a cancelled invoice from the file. Only a cancellation is ever
-  /// deletable: a live invoice is a claim on money, and one with payments
-  /// against it carries history that has to stay.
-  void deleteInvoice(String id) {
-    final invoice = invoiceById(id);
-    if (invoice == null || invoice.status != InvoiceStatus.cancelled) return;
-    _invoices = _invoices.where((i) => i.id != id).toList();
-    notifyListeners();
-  }
-
   // --- Stock by location ---------------------------------------------------
 
   /// One item's stock broken down by bin, fullest first. The values always
@@ -2729,16 +2730,6 @@ class InventoryController extends ChangeNotifier {
       next[itemId] = kept;
     }
     _levels = next;
-  }
-
-  /// Rebuilds every breakdown from the items themselves. Used for a reset, a
-  /// restore or a CSV import, where the incoming data carries one location.
-  void _rebuildBins(List<Item> items) {
-    _levels = {
-      for (final item in items)
-        if (item.quantity != 0)
-          item.id: {stockBin(item.location): item.quantity},
-    };
   }
 
   // --- Transfers -----------------------------------------------------------
@@ -3056,11 +3047,39 @@ class InventoryController extends ChangeNotifier {
     return true;
   }
 
-  void loadSampleData() => _replace(
-    items: seedItems(),
-    movements: seedMovements(),
-    settings: const AppSettings(),
-  );
+  /// Adds the sample catalogue to the workspace, for real.
+  ///
+  /// IT USED TO SAVE NOTHING, AND RESET THE SETTINGS. It replaced the items
+  /// on this screen with the samples and the settings with the defaults — the
+  /// company name, logo and bank details included — and told the server
+  /// nothing. The samples were gone on the next refresh, and any settings
+  /// change made meanwhile would have saved the defaults over the real ones.
+  ///
+  /// Now each sample is created on the server like an import, the settings
+  /// are left alone, and a sample whose name is already in the catalogue is
+  /// skipped, so pressing it twice does not add everything twice.
+  Future<({int imported, int failed, String? reason})> loadSampleData() {
+    final existing = {for (final i in _items) i.name.trim().toLowerCase()};
+    return importDrafts([
+      for (final i in seedItems())
+        if (!existing.contains(i.name.trim().toLowerCase()))
+          ItemDraft(
+            name: i.name,
+            sku: i.sku,
+            barcode: i.barcode,
+            category: i.category,
+            location: i.location,
+            quantity: i.quantity,
+            reorderLevel: i.reorderLevel,
+            unit: i.unit,
+            unitCost: i.unitCost,
+            retailerPrice: i.retailerPrice,
+            distributorPrice: i.distributorPrice,
+            supplier: i.supplier,
+            notes: i.notes,
+          ),
+    ]);
+  }
 
   /// Empties the workspace's inventory.
   ///
@@ -3133,25 +3152,6 @@ class InventoryController extends ChangeNotifier {
     // a set the server does not have — and the next save would write those
     // defaults back, undoing part of the erase.
     await reload();
-  }
-
-  void _replace({
-    required List<Item> items,
-    required List<Movement> movements,
-    required AppSettings settings,
-  }) {
-    _items = List.of(items);
-    _movements = List.of(movements);
-    _suppliers = const [];
-    _customers = const [];
-    _purchaseOrders = const [];
-    _salesOrders = const [];
-    _receipts = const [];
-    _invoices = const [];
-    _transfers = const [];
-    _rebuildBins(_items);
-    _settings = settings;
-    notifyListeners();
   }
 
   // --- Internals -----------------------------------------------------------

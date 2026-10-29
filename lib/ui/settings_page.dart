@@ -483,6 +483,125 @@ class _SettingsPageState extends State<SettingsPage> {
     return match?.group(0) ?? 'Check your connection and try again.';
   }
 
+  /// Adds the sample items to the shared workspace, after saying so: it is
+  /// permanent, and everyone signed in will see them.
+  Future<void> _loadSample() async {
+    final controller = context.read<InventoryController>();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Load sample catalogue'),
+        content: const Text(
+          'This adds the sample items to your workspace, for everyone signed '
+          'in, with their opening stock. Items whose name you already have '
+          'are skipped. Your settings are not changed.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Not now'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Add the samples'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _busyRow = 'sample');
+    final outcome = await controller.loadSampleData();
+    if (!mounted) return;
+    setState(() => _busyRow = null);
+    _notify(
+      outcome.imported == 0 && outcome.failed == 0
+          ? 'The sample items are already in your catalogue.'
+          : [
+              'Added ${number(outcome.imported)} sample '
+                  '${outcome.imported == 1 ? 'item' : 'items'}',
+              if (outcome.failed > 0)
+                '${outcome.failed} could not be saved'
+                    '${outcome.reason == null ? '' : ': ${outcome.reason}'}',
+            ].join(', '),
+      tone: outcome.failed > 0 ? MessageTone.warning : MessageTone.success,
+    );
+  }
+
+  Future<void> _exportCustomers(BuildContext buttonContext) async {
+    final controller = context.read<InventoryController>();
+    if (controller.customers.isEmpty) {
+      _notify('No customers to export yet.', tone: MessageTone.warning);
+      return;
+    }
+    await const ExportService().shareText(
+      filename: 'customers.csv',
+      contents: customersToCsv(controller.customers),
+      mimeType: 'text/csv',
+      originRect: shareOriginOf(buttonContext),
+    );
+    if (mounted) {
+      _notify('${number(controller.customers.length)} customers exported');
+    }
+  }
+
+  Future<void> _importCustomers() async {
+    final controller = context.read<InventoryController>();
+    final file = await FilePicker.pickFile(
+      type: FileType.custom,
+      allowedExtensions: const ['csv'],
+    );
+    if (file == null) return;
+
+    String text;
+    try {
+      text = utf8.decode(await file.readAsBytes(), allowMalformed: true);
+    } catch (_) {
+      if (mounted) {
+        _notify('That file could not be read.', tone: MessageTone.failure);
+      }
+      return;
+    }
+
+    final result = csvToCustomers(text);
+    if (result.customers.isEmpty) {
+      if (mounted) {
+        _notify(
+          result.errors.firstOrNull ?? 'No rows could be imported.',
+          tone: MessageTone.failure,
+        );
+      }
+      return;
+    }
+
+    setState(() => _busyRow = 'customers-import');
+    final outcome = await controller.importCustomers(result.customers);
+    if (!mounted) return;
+    setState(() => _busyRow = null);
+
+    final parts = [
+      'Imported ${number(outcome.imported)} '
+          '${outcome.imported == 1 ? 'customer' : 'customers'}',
+      if (outcome.skipped > 0)
+        '${outcome.skipped} already on file '
+            '${outcome.skipped == 1 ? 'was' : 'were'} skipped',
+      if (result.errors.isNotEmpty)
+        '${result.errors.length} unreadable '
+            '${result.errors.length == 1 ? 'row' : 'rows'}',
+      if (outcome.failed > 0)
+        '${outcome.failed} could not be saved'
+            '${outcome.reason == null ? '' : ': ${outcome.reason}'}',
+    ];
+    _notify(
+      parts.join(', '),
+      tone: outcome.imported == 0 && outcome.skipped == 0
+          ? MessageTone.failure
+          : (outcome.failed == 0 && result.errors.isEmpty
+                ? MessageTone.success
+                : MessageTone.warning),
+    );
+  }
+
   Future<void> _importCsv() async {
     final controller = context.read<InventoryController>();
     final file = await FilePicker.pickFile(
@@ -513,13 +632,29 @@ class _SettingsPageState extends State<SettingsPage> {
       return;
     }
 
-    final count = controller.importDrafts(result.items);
+    setState(() => _busyRow = 'items-import');
+    final outcome = await controller.importDrafts(result.items);
     if (!mounted) return;
+    setState(() => _busyRow = null);
+
+    // What the server actually stored, not what the file held.
+    final parts = [
+      'Imported ${number(outcome.imported)} '
+          '${outcome.imported == 1 ? 'item' : 'items'}',
+      if (result.errors.isNotEmpty)
+        'skipped ${result.errors.length} unreadable '
+            '${result.errors.length == 1 ? 'row' : 'rows'}',
+      if (outcome.failed > 0)
+        '${outcome.failed} could not be saved'
+            '${outcome.reason == null ? '' : ': ${outcome.reason}'}',
+    ];
     _notify(
-      result.errors.isEmpty
-          ? 'Imported ${number(count)} items'
-          : 'Imported ${number(count)} items, skipped ${result.errors.length}',
-      tone: result.errors.isEmpty ? MessageTone.success : MessageTone.warning,
+      parts.join(', '),
+      tone: outcome.imported == 0
+          ? MessageTone.failure
+          : (result.errors.isEmpty && outcome.failed == 0
+                ? MessageTone.success
+                : MessageTone.warning),
     );
   }
 
@@ -812,7 +947,23 @@ class _SettingsPageState extends State<SettingsPage> {
                   _MenuRow(
                     icon: Icons.upload_outlined,
                     label: 'Import items (CSV)',
+                    busy: _isBusy('items-import'),
                     onTap: _importCsv,
+                  ),
+                  Divider(color: p.line, height: 1),
+                  Builder(
+                    builder: (rowContext) => _MenuRow(
+                      icon: Icons.download_outlined,
+                      label: 'Export customers (CSV)',
+                      onTap: () => _exportCustomers(rowContext),
+                    ),
+                  ),
+                  Divider(color: p.line, height: 1),
+                  _MenuRow(
+                    icon: Icons.upload_outlined,
+                    label: 'Import customers (CSV)',
+                    busy: _isBusy('customers-import'),
+                    onTap: _importCustomers,
                   ),
                   Divider(color: p.line, height: 1),
                   Builder(
@@ -868,11 +1019,8 @@ class _SettingsPageState extends State<SettingsPage> {
                   _MenuRow(
                     icon: Icons.refresh,
                     label: 'Load sample catalogue',
-                    onTap: () {
-                      controller.loadSampleData();
-                      _companyName.text = controller.settings.companyName;
-                      _notify('Sample catalogue loaded');
-                    },
+                    busy: _isBusy('sample'),
+                    onTap: _loadSample,
                   ),
                   Divider(color: p.line, height: 1),
                   _MenuRow(
@@ -885,9 +1033,10 @@ class _SettingsPageState extends State<SettingsPage> {
                   Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      'A CSV import needs a "name" column; sku, quantity, '
-                      'unitCost and the rest are optional. Export a file first '
-                      'to see the shape.',
+                      'A CSV import needs a "name" column; for items, sku, '
+                      'quantity, unitCost and the rest are optional, and for '
+                      'customers, phone, email, address and priceTier. Export '
+                      'a file first to see the shape.',
                       style: TextStyle(fontSize: 12, color: p.inkMuted),
                     ),
                   ),

@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:stockpile/core/theme.dart';
 import 'package:stockpile/data/auth_api.dart';
+import 'package:stockpile/state/new_version.dart';
 import 'package:stockpile/state/inventory_controller.dart';
 import 'package:stockpile/ui/widgets/inventory_status_banner.dart';
 
@@ -75,6 +76,24 @@ void main() {
       await _pumpBanner(tester, controller);
 
       expect(find.textContaining('has not reached the server'), findsOneWidget);
+    });
+
+    testWidgets('a newer deployed build is announced, with a reload', (
+      tester,
+    ) async {
+      // A fix deployed while a tab was open did not reach that tab: it went
+      // on running the old code until somebody happened to reload.
+      final controller = await newController();
+      newVersionReady.value = true;
+      addTearDown(() => newVersionReady.value = false);
+
+      await _pumpBanner(tester, controller);
+
+      expect(
+        find.textContaining('A new version of Stockpile is ready'),
+        findsOne,
+      );
+      expect(find.text('Reload'), findsOne);
     });
 
     testWidgets('says why, when the server gave a reason', (tester) async {

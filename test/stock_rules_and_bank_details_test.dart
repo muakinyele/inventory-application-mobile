@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:stockpile/app.dart';
+import 'package:stockpile/data/csv_codec.dart';
+import 'package:stockpile/data/seed_data.dart';
 import 'package:stockpile/data/invoice_document.dart';
 import 'package:stockpile/data/sales_order_document.dart';
 import 'package:stockpile/data/snapshot.dart';
@@ -9,6 +11,7 @@ import 'package:stockpile/models/app_settings.dart';
 import 'package:stockpile/models/invoice.dart';
 import 'package:stockpile/models/item.dart';
 import 'package:stockpile/models/movement.dart';
+import 'package:stockpile/models/party.dart';
 import 'package:stockpile/models/sales_order.dart';
 import 'package:stockpile/state/inventory_controller.dart';
 
@@ -159,6 +162,178 @@ void main() {
     await tester.tap(find.text('Chic Choc').last);
     await tester.pumpAndSettle();
     expect(find.textContaining('5 in stock ·'), findsOne);
+  });
+
+  group('importing items', () {
+    ItemDraft row(String name) => ItemDraft(
+      name: name,
+      sku: '',
+      barcode: '',
+      category: 'Biscuits',
+      location: 'Main Warehouse',
+      quantity: 12,
+      reorderLevel: 0,
+      unit: 'pack',
+      unitCost: 100,
+      retailerPrice: 150,
+      distributorPrice: 130,
+      supplier: '',
+      notes: '',
+    );
+
+    test('creates every row on the server, not only on screen', () async {
+      // It used to save nothing: the items were gone on the next reload, and
+      // within half a minute once the screen re-read the server.
+      final server = FakeInventoryServer();
+      final c = InventoryController(
+        await fakeInventoryApi(server),
+        Snapshot.empty,
+        loadedDocuments: {...DocumentSet.values},
+      );
+
+      final outcome = await c.importDrafts([row('Wafer'), row('Malto')]);
+
+      expect(outcome.imported, 2);
+      expect(
+        server.calls.where((call) => call == 'POST /api/inventory/items'),
+        hasLength(2),
+      );
+      expect(c.items.map((i) => i.name), containsAll(['Wafer', 'Malto']));
+    });
+
+    test('a row the server refuses is reported, not shown', () async {
+      final server = FakeInventoryServer()..failNextWrite = true;
+      final c = InventoryController(
+        await fakeInventoryApi(server),
+        Snapshot.empty,
+        loadedDocuments: {...DocumentSet.values},
+      );
+
+      final outcome = await c.importDrafts([row('Wafer')]);
+
+      expect(outcome.imported, 0);
+      expect(outcome.failed, 1);
+      expect(outcome.reason, isNotNull);
+      expect(c.items, isEmpty);
+    });
+  });
+
+  group('the sample catalogue', () {
+    test('is saved to the server, and leaves the settings alone', () async {
+      // It replaced the screen's items and settings and saved nothing: gone
+      // on the next refresh, with the company details reset meanwhile.
+      final server = FakeInventoryServer();
+      final c = InventoryController(
+        await fakeInventoryApi(server),
+        Snapshot(
+          items: const [],
+          movements: const [],
+          suppliers: const [],
+          customers: const [],
+          purchaseOrders: const [],
+          salesOrders: const [],
+          receipts: const [],
+          invoices: const [],
+          transfers: const [],
+          levels: const {},
+          settings: _bank,
+        ),
+        loadedDocuments: {...DocumentSet.values},
+      );
+
+      final outcome = await c.loadSampleData();
+
+      expect(outcome.imported, seedItems().length);
+      expect(
+        server.calls.where((call) => call == 'POST /api/inventory/items'),
+        hasLength(seedItems().length),
+      );
+      expect(c.settings.companyName, 'Chedra Olympas');
+      expect(c.settings.accountNumber, '1012345678');
+    });
+
+    test('pressing it twice adds nothing the second time', () async {
+      final c = await seededController(items: seedItems());
+
+      final outcome = await c.loadSampleData();
+
+      expect(outcome.imported, 0);
+    });
+  });
+
+  group('customers as a spreadsheet', () {
+    Customer customer(String name, {PriceTier tier = PriceTier.retailer}) =>
+        Customer(
+          id: 'c-$name',
+          name: name,
+          contactName: 'Ada',
+          phone: '+234 802 000 0000',
+          email: '${name.toLowerCase()}@example.com',
+          address: '12 Broad St, Lagos',
+          priceTier: tier,
+          notes: 'Pays on Fridays, "usually"',
+          createdAt: DateTime(2026, 10, 1),
+          updatedAt: DateTime(2026, 10, 1),
+        );
+
+    test('export then import gives the same customers back', () {
+      final csv = customersToCsv([
+        customer('Acme'),
+        customer('Bolu Stores', tier: PriceTier.distributor),
+      ]);
+
+      final back = csvToCustomers(csv);
+
+      expect(back.errors, isEmpty);
+      expect(back.customers.map((c) => c.name), ['Acme', 'Bolu Stores']);
+      expect(back.customers[1].priceTier, PriceTier.distributor);
+      expect(back.customers[0].notes, 'Pays on Fridays, "usually"');
+      expect(back.customers[0].address, '12 Broad St, Lagos');
+    });
+
+    test('a sheet without a name column is refused, and says so', () {
+      final result = csvToCustomers('phone,email\n0802,a@b.com');
+      expect(result.customers, isEmpty);
+      expect(result.errors.single, contains('"name"'));
+    });
+
+    test(
+      'importing creates each on the server and skips ones on file',
+      () async {
+        final server = FakeInventoryServer();
+        final c = InventoryController(
+          await fakeInventoryApi(server),
+          Snapshot(
+            items: const [],
+            movements: const [],
+            suppliers: const [],
+            customers: [customer('Acme')],
+            purchaseOrders: const [],
+            salesOrders: const [],
+            receipts: const [],
+            invoices: const [],
+            transfers: const [],
+            levels: const {},
+            settings: const AppSettings(),
+          ),
+          loadedDocuments: {...DocumentSet.values},
+        );
+
+        final outcome = await c.importCustomers(
+          csvToCustomers(
+            customersToCsv([customer('acme'), customer('Bolu Stores')]),
+          ).customers,
+        );
+
+        expect(outcome.imported, 1);
+        expect(outcome.skipped, 1, reason: '"acme" is already Acme');
+        expect(
+          server.calls.where((call) => call == 'POST /api/inventory/customers'),
+          hasLength(1),
+        );
+        expect(c.customers.map((x) => x.name), contains('Bolu Stores'));
+      },
+    );
   });
 
   group('a payment whose receipt never saved', () {

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../data/auth_api.dart';
+import '../../state/new_version.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/design.dart';
@@ -23,6 +24,24 @@ class InventoryStatusBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // A newer build comes first: until it is loaded, a fix already deployed
+    // is not running in this tab.
+    return ValueListenableBuilder<bool>(
+      valueListenable: newVersionReady,
+      builder: (context, ready, _) => ready
+          ? _Strip(
+              icon: Icons.system_update_alt_rounded,
+              tone: context.palette.accent,
+              message:
+                  'A new version of Stockpile is ready. Reload to use it; '
+                  'anything already saved stays.',
+              action: (label: 'Reload', onPressed: reloadToNewVersion),
+            )
+          : _status(context),
+    );
+  }
+
+  Widget _status(BuildContext context) {
     final controller = context.watch<InventoryController>();
 
     final conflict = controller.stockConflict;

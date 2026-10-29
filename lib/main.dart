@@ -10,6 +10,7 @@ import 'data/snapshot.dart';
 import 'state/auth_controller.dart';
 import 'state/inventory_controller.dart';
 import 'state/live_refresh.dart';
+import 'state/new_version.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -39,6 +40,8 @@ Future<void> main() async {
 
     // Picks up what other devices and people change, without a reload.
     LiveRefresh(inventory);
+    // And tells the user when a newer build has been deployed.
+    watchForNewVersion();
 
     runApp(
       MultiProvider(
