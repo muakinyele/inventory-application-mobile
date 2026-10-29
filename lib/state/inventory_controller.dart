@@ -1227,7 +1227,6 @@ class InventoryController extends ChangeNotifier {
     String cashier = '',
     DateTime? paidAt,
   }) async {
-
     final Invoice settled;
     final double taken;
     try {
