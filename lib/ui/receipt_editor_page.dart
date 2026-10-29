@@ -202,10 +202,16 @@ class _ReceiptEditorPageState extends State<ReceiptEditorPage> {
     );
 
     if (receipt == null) {
-      _notify(
+      // The server's own reason where it gave one — chiefly "not enough in
+      // stock", which the seller needs to see named, not guessed at.
+      final reason = _controller.reasonFor(
+        _controller.lastWriteError,
         'Nothing could be receipted — check the quantities.',
-        tone: MessageTone.failure,
       );
+      // Said here, with its reason; the banner for a lost background save
+      // would only repeat it, wrongly claiming something was left unsaved.
+      _controller.clearWriteError();
+      _notify(reason, tone: MessageTone.failure);
       return;
     }
     // Awaited: routing away takes the dialog down with the page it sits on.

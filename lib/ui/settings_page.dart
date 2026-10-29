@@ -55,6 +55,9 @@ class _SettingsPageState extends State<SettingsPage> {
   late final TextEditingController _taxLabel;
   late final TextEditingController _taxRate;
   late final TextEditingController _receiptFooter;
+  late final TextEditingController _bankName;
+  late final TextEditingController _accountName;
+  late final TextEditingController _accountNumber;
 
   @override
   void initState() {
@@ -71,6 +74,9 @@ class _SettingsPageState extends State<SettingsPage> {
       text: settings.taxRate == 0 ? '' : _trimZeroes(settings.taxRate * 100),
     );
     _receiptFooter = TextEditingController(text: settings.receiptFooter);
+    _bankName = TextEditingController(text: settings.bankName);
+    _accountName = TextEditingController(text: settings.accountName);
+    _accountNumber = TextEditingController(text: settings.accountNumber);
   }
 
   @override
@@ -82,6 +88,9 @@ class _SettingsPageState extends State<SettingsPage> {
     _taxLabel.dispose();
     _taxRate.dispose();
     _receiptFooter.dispose();
+    _bankName.dispose();
+    _accountName.dispose();
+    _accountNumber.dispose();
     super.dispose();
   }
 
@@ -733,6 +742,60 @@ class _SettingsPageState extends State<SettingsPage> {
                 ],
               ),
             ),
+            // Administrators only: this is where customers are told to send
+            // money, so it is not something anyone with the app can change.
+            if (context.watch<AuthController?>()?.can('settings.manage') ??
+                false) ...[
+              const SizedBox(height: 14),
+              SectionCard(
+                title: 'Payment details',
+                child: Column(
+                  children: [
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'The account customers pay into. Printed on every '
+                        'invoice and sales order, and included when one is '
+                        'shared. Leave the account number blank to print '
+                        'none.',
+                        style: TextStyle(fontSize: 12.5, color: p.inkMuted),
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    TextField(
+                      controller: _bankName,
+                      textCapitalization: TextCapitalization.words,
+                      decoration: const InputDecoration(labelText: 'Bank name'),
+                      onChanged: (value) => controller.updateSettings(
+                        settings.copyWith(bankName: value),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _accountName,
+                      textCapitalization: TextCapitalization.words,
+                      decoration: const InputDecoration(
+                        labelText: 'Account name',
+                      ),
+                      onChanged: (value) => controller.updateSettings(
+                        settings.copyWith(accountName: value),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _accountNumber,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Account number',
+                      ),
+                      onChanged: (value) => controller.updateSettings(
+                        settings.copyWith(accountNumber: value.trim()),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: 14),
             SectionCard(
               title: 'Data',

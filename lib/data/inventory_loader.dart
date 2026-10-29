@@ -82,6 +82,9 @@ Future<AppSettings> _settingsFrom(
     receiptFooter: prefs['receiptFooter'] ?? 'Thank you for your custom.',
     // The other half of the same omission: written now, so it has to be read.
     companyLogo: prefs['companyLogo'] ?? '',
+    bankName: prefs['bankName'] ?? '',
+    accountName: prefs['accountName'] ?? '',
+    accountNumber: prefs['accountNumber'] ?? '',
     // Deliberately still per-device: which theme this screen uses is not a
     // property of the workspace, and syncing it would change one person's
     // display because another changed theirs.

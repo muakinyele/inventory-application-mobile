@@ -1039,6 +1039,18 @@ class DocumentService {
         );
       }
 
+      // A NEW ORDER CANNOT PROMISE STOCK THAT IS NOT THERE. Checked when an
+      // order is raised and while it is still a draft (so confirming one is
+      // checked too). An order confirmed before this rule existed is left
+      // alone: it can still be billed.
+      final status = header.status.present
+          ? header.status.value
+          : (existing?.status ?? 'draft');
+      if ((existing == null || existing.status == 'draft') &&
+          status != 'cancelled') {
+        await _refuseOutOfStock(lines);
+      }
+
       if (existing == null) {
         await db
             .into(db.salesOrders)
@@ -1378,6 +1390,39 @@ class DocumentService {
           db.invoices,
         )..where((t) => t.id.equals(invoice.id))).getSingle(),
     ];
+  }
+
+  /// Refuses an order whose lines ask for more of an item than is in stock,
+  /// naming every item that is short and by how much.
+  Future<void> _refuseOutOfStock(List<SalesOrderLinesCompanion> lines) async {
+    final wanted = <String, int>{};
+    final names = <String, String>{};
+    for (final line in lines) {
+      if (!line.itemId.present || !line.quantityOrdered.present) continue;
+      final id = line.itemId.value;
+      wanted[id] = (wanted[id] ?? 0) + line.quantityOrdered.value;
+      if (line.itemName.present) names[id] = line.itemName.value;
+    }
+    final short = <String>[];
+    for (final entry in wanted.entries) {
+      final item = await (db.select(
+        db.items,
+      )..where((t) => t.id.equals(entry.key))).getSingleOrNull();
+      final onHand = item?.quantity ?? 0;
+      if (entry.value > onHand) {
+        final name = item?.name ?? names[entry.key] ?? 'An item';
+        short.add(
+          onHand <= 0
+              ? '$name is out of stock (${entry.value} ordered)'
+              : '$name has only $onHand in stock (${entry.value} ordered)',
+        );
+      }
+    }
+    if (short.isEmpty) return;
+    throw ApiError.badRequest(
+      'This order asks for more than is in stock. ${short.join('; ')}. '
+      'Lower the quantities or restock first.',
+    );
   }
 
   /// Despatches goods against a sales order: stock out, and the line's
@@ -1803,14 +1848,42 @@ class DocumentService {
       db.preferences,
     )..where((t) => t.key.equals(key))).getSingleOrNull();
 
-    final next = (int.tryParse(row?.value ?? '') ?? 0) + 1;
+    // SKIPS ANY NUMBER ALREADY IN USE. Documents can arrive with their own
+    // reference — an import, a restore — without moving this counter, and
+    // then every new one was handed a number that existed: RC-0001 again,
+    // refused by the unique index, so no receipt could be issued and no
+    // invoice payment recorded. The counter is a hint; the table is the truth.
+    var next = (int.tryParse(row?.value ?? '') ?? 0) + 1;
+    String reference() => '$prefix${next.toString().padLeft(4, '0')}';
+    while (await _referenceTaken(kind, reference())) {
+      next++;
+    }
     await db
         .into(db.preferences)
         .insertOnConflictUpdate(
           PreferencesCompanion.insert(key: key, value: '$next'),
         );
 
-    return '$prefix${next.toString().padLeft(4, '0')}';
+    return reference();
+  }
+
+  Future<bool> _referenceTaken(String kind, String reference) async {
+    final Object? row = switch (kind) {
+      'receipt' => await (db.select(
+        db.receipts,
+      )..where((t) => t.reference.equals(reference))).getSingleOrNull(),
+      'invoice' => await (db.select(
+        db.invoices,
+      )..where((t) => t.reference.equals(reference))).getSingleOrNull(),
+      'sales_order' => await (db.select(
+        db.salesOrders,
+      )..where((t) => t.reference.equals(reference))).getSingleOrNull(),
+      'purchase_order' => await (db.select(
+        db.purchaseOrders,
+      )..where((t) => t.reference.equals(reference))).getSingleOrNull(),
+      _ => null,
+    };
+    return row != null;
   }
 }
 

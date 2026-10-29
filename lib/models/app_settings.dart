@@ -14,6 +14,9 @@ class AppSettings {
     this.taxLabel = 'VAT',
     this.receiptFooter = 'Thank you for your custom.',
     this.companyLogo = '',
+    this.bankName = '',
+    this.accountName = '',
+    this.accountNumber = '',
     this.categories = defaultCategories,
     this.locations = defaultLocations,
     this.units = defaultUnits,
@@ -71,6 +74,23 @@ class AppSettings {
   final String companyLogo;
 
   bool get hasCompanyLogo => companyLogo.isNotEmpty;
+
+  /// Where a customer pays, printed on invoices and sales orders. Set by an
+  /// administrator in Settings → Payment details.
+  final String bankName;
+  final String accountName;
+  final String accountNumber;
+
+  /// Whether there is anything to print: an account number at least.
+  bool get hasBankDetails => accountNumber.trim().isNotEmpty;
+
+  /// The payment details as lines, for a document or a message.
+  List<String> get bankLines => [
+    if (bankName.trim().isNotEmpty) 'Bank: ${bankName.trim()}',
+    if (accountName.trim().isNotEmpty) 'Account name: ${accountName.trim()}',
+    if (accountNumber.trim().isNotEmpty)
+      'Account number: ${accountNumber.trim()}',
+  ];
   final List<String> categories;
   final List<String> locations;
   final List<String> units;
@@ -100,6 +120,9 @@ class AppSettings {
     String? taxLabel,
     String? receiptFooter,
     String? companyLogo,
+    String? bankName,
+    String? accountName,
+    String? accountNumber,
     List<String>? categories,
     List<String>? locations,
     List<String>? units,
@@ -118,6 +141,9 @@ class AppSettings {
       // Passing '' is how the logo is removed; there is no separate flag
       // because empty already means "none" everywhere else.
       companyLogo: companyLogo ?? this.companyLogo,
+      bankName: bankName ?? this.bankName,
+      accountName: accountName ?? this.accountName,
+      accountNumber: accountNumber ?? this.accountNumber,
       categories: categories ?? this.categories,
       locations: locations ?? this.locations,
       units: units ?? this.units,
@@ -136,6 +162,9 @@ class AppSettings {
     'taxLabel': taxLabel,
     'receiptFooter': receiptFooter,
     'companyLogo': companyLogo,
+    'bankName': bankName,
+    'accountName': accountName,
+    'accountNumber': accountNumber,
     'categories': categories,
     'locations': locations,
     'units': units,
@@ -168,6 +197,9 @@ class AppSettings {
           ? json['receiptFooter'] as String
           : 'Thank you for your custom.',
       companyLogo: _text(json['companyLogo']),
+      bankName: _text(json['bankName']),
+      accountName: _text(json['accountName']),
+      accountNumber: _text(json['accountNumber']),
       categories: _list(json['categories'], defaultCategories),
       locations: _list(json['locations'], defaultLocations),
       units: _list(json['units'], defaultUnits),

@@ -218,6 +218,11 @@ class InventoryService {
     await put('receipts', db.receipts, Receipt.fromJson);
     await put('receiptLines', db.receiptLines, ReceiptLine.fromJson);
 
+    // A backup from before stock was kept per location carries item totals
+    // and no locations. Left like that, the first sale of each item took its
+    // stock from empty locations and drove it negative.
+    await alignAllStockBins();
+
     return written;
   });
 
@@ -393,6 +398,11 @@ class InventoryService {
     String? documentId,
   }) async {
     return db.transaction(() async {
+      // The total is what everybody sees and what the check below reads; the
+      // locations are where stock is actually taken from. When they disagree
+      // the locations are brought in line first, or a sale passes the check
+      // against the total and is then taken from locations that hold nothing.
+      await alignStockBins(itemId);
       final item = await requireItem(itemId);
 
       if (expectedQuantity != null && expectedQuantity != item.quantity) {
@@ -418,7 +428,8 @@ class InventoryService {
       // change it deliberately.
       if (after < 0) {
         throw ApiError.badRequest(
-          'That would leave ${item.name} at $after. Stock cannot go negative.',
+          'Not enough ${item.name} in stock: ${item.quantity} on hand, '
+          '${-delta} needed.',
         );
       }
 
@@ -592,14 +603,142 @@ class InventoryService {
       owed -= take;
     }
 
-    // Anything still owed has nowhere to come from. The caller has already
-    // refused a change that would take the total below zero, so this can only
-    // mean the bins hold less than the total claims — a disagreement worth
-    // recording against the named bin rather than losing.
+    // Anything still owed has nowhere to come from. This used to be written
+    // to the named location as a negative, which is how a count of 5 sold
+    // for 5 came out at -5: the total said 5, the locations held nothing.
+    // Locations are aligned with the total before any change now, so this is
+    // refused rather than recorded.
     if (owed > 0) {
-      await _writeStockLevel(itemId, bin, -owed);
+      final item = await requireItem(itemId);
+      throw ApiError.badRequest(
+        'There is not enough ${item.name} in stock: $owed short across its '
+        'locations.',
+      );
     }
   }
+
+  /// Makes an item's locations add up to its total, by putting the difference
+  /// in 'Unassigned'. The total does not change, and nothing is recorded as
+  /// moved: no stock arrived or left, it was only missing from the locations.
+  ///
+  /// Returns the difference it filled.
+  Future<int> alignStockBins(String itemId) async {
+    final item = await requireItem(itemId);
+    final sum = db.stockLevels.quantity.sum();
+    final row =
+        await (db.selectOnly(db.stockLevels)
+              ..addColumns([sum])
+              ..where(db.stockLevels.itemId.equals(itemId)))
+            .getSingle();
+    final held = row.read(sum) ?? 0;
+    final gap = item.quantity - held;
+    if (gap != 0) await _writeStockLevel(itemId, unassigned, gap);
+    return gap;
+  }
+
+  /// [alignStockBins] for every item. Returns how many needed it.
+  Future<int> alignAllStockBins() async {
+    var fixed = 0;
+    for (final item in await db.select(db.items).get()) {
+      if (await alignStockBins(item.id) != 0) fixed++;
+    }
+    return fixed;
+  }
+
+  /// Items whose stock was driven below zero in a location by the old
+  /// behaviour above, with the count their own movements say they should
+  /// have.
+  ///
+  /// The movements record what each sale and delivery meant to do, from the
+  /// count everybody could see, so replaying them from the first one gives
+  /// the intended count. The damage happened only in the locations.
+  Future<List<StockDamage>> scanStockDamage() async {
+    final negative = await (db.select(
+      db.stockLevels,
+    )..where((t) => t.quantity.isSmallerThanValue(0))).get();
+    final ids = {for (final row in negative) row.itemId};
+    final found = <StockDamage>[];
+    for (final id in ids) {
+      final item = await (db.select(
+        db.items,
+      )..where((t) => t.id.equals(id))).getSingleOrNull();
+      if (item == null) continue;
+      final history =
+          await (db.select(db.movements)
+                ..where((t) => t.itemId.equals(id))
+                ..orderBy([
+                  (t) => OrderingTerm(expression: t.at),
+                  (t) => OrderingTerm(expression: t.id),
+                ]))
+              .get();
+      final intended = history.isEmpty
+          ? item.quantity
+          : history.first.before +
+                history.fold<int>(0, (sum, m) => sum + (m.after - m.before));
+      found.add(
+        StockDamage(
+          itemId: id,
+          name: item.name,
+          current: item.quantity,
+          intended: intended < 0 ? 0 : intended,
+          locations: {
+            for (final row in await (db.select(
+              db.stockLevels,
+            )..where((t) => t.itemId.equals(id))).get())
+              row.location: row.quantity,
+          },
+        ),
+      );
+    }
+    found.sort((a, b) => a.name.compareTo(b.name));
+    return found;
+  }
+
+  /// Puts one damaged item right: no location below zero, and the total its
+  /// movements say it should have, recorded as an adjustment so the history
+  /// shows what was corrected and why.
+  Future<StockDamage?> repairStockDamage({
+    required String itemId,
+    required String actorId,
+  }) => db.transaction(() async {
+    final damage = [
+      for (final d in await scanStockDamage())
+        if (d.itemId == itemId) d,
+    ];
+    if (damage.isEmpty) return null;
+    final d = damage.single;
+
+    await (db.update(db.stockLevels)..where(
+          (t) => t.itemId.equals(itemId) & t.quantity.isSmallerThanValue(0),
+        ))
+        .write(const StockLevelsCompanion(quantity: Value(0)));
+    // Recompute the total from the locations as they now stand, then move it
+    // to the intended count.
+    await _writeStockLevel(itemId, unassigned, 0);
+    final now = await requireItem(itemId);
+    final gap = d.intended - now.quantity;
+    if (gap != 0) await _moveStock(itemId, unassigned, gap);
+
+    await db
+        .into(db.movements)
+        .insert(
+          MovementsCompanion.insert(
+            id: newId(),
+            itemId: itemId,
+            itemName: d.name,
+            kind: 'adjustment',
+            before: d.current,
+            after: d.intended,
+            at: DateTime.now().toUtc(),
+            note: Value(
+              'Repair: corrected from ${d.current} to ${d.intended}. Sold '
+              'while its locations held no stock, which drove it negative.',
+            ),
+            actor: Value(actorId),
+          ),
+        );
+    return d;
+  });
 
   /// Adds [delta] to one bin and keeps [Items.quantity] equal to the sum.
   ///
@@ -823,4 +962,34 @@ class InventoryService {
       );
     }
   });
+}
+
+/// An item the old location bug drove negative, as the scan finds it.
+class StockDamage {
+  const StockDamage({
+    required this.itemId,
+    required this.name,
+    required this.current,
+    required this.intended,
+    required this.locations,
+  });
+
+  final String itemId;
+  final String name;
+
+  /// What the item reads now.
+  final int current;
+
+  /// What its own movements say it should read.
+  final int intended;
+
+  final Map<String, int> locations;
+
+  Map<String, Object?> toJson() => {
+    'itemId': itemId,
+    'name': name,
+    'current': current,
+    'intended': intended,
+    'locations': locations,
+  };
 }

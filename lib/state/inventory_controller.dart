@@ -1227,7 +1227,6 @@ class InventoryController extends ChangeNotifier {
     String cashier = '',
     DateTime? paidAt,
   }) async {
-    final now = DateTime.now();
 
     final Invoice settled;
     final double taken;
@@ -1246,6 +1245,51 @@ class InventoryController extends ChangeNotifier {
       notifyListeners();
       return null;
     }
+
+    return _writePaymentReceipt(
+      invoice,
+      taken,
+      method: method,
+      notes: notes,
+      cashier: cashier,
+      paidAt: paidAt,
+    );
+  }
+
+  /// Money recorded on an invoice that no receipt accounts for: a payment
+  /// whose receipt failed to save. Zero when every payment has its receipt.
+  double unreceiptedPayment(String invoiceId) {
+    final invoice = invoiceById(invoiceId);
+    if (invoice == null || invoice.status == InvoiceStatus.cancelled) return 0;
+    final receipted = paymentsForInvoice(
+      invoiceId,
+    ).fold(0.0, (sum, p) => sum + p.amount);
+    final gap = invoice.amountPaid - receipted;
+    return gap > 0.005 ? gap : 0;
+  }
+
+  /// Issues the receipt for money already recorded on an invoice whose
+  /// receipt never saved. Takes no new payment. Returns null on failure.
+  Future<Receipt?> issueMissingPaymentReceipt(
+    String invoiceId, {
+    PaymentMethod method = PaymentMethod.cash,
+  }) async {
+    final invoice = invoiceById(invoiceId);
+    final gap = unreceiptedPayment(invoiceId);
+    if (invoice == null || gap <= 0) return null;
+    return _writePaymentReceipt(invoice, gap, method: method);
+  }
+
+  /// The receipt for [taken] paid against [invoice].
+  Future<Receipt?> _writePaymentReceipt(
+    Invoice invoice,
+    double taken, {
+    PaymentMethod method = PaymentMethod.cash,
+    String notes = '',
+    String cashier = '',
+    DateTime? paidAt,
+  }) async {
+    final now = DateTime.now();
 
     // The receipt carries the invoice's own lines so it prints as a proper
     // document rather than a bare figure, at zero cost of goods: the cost was
@@ -1772,22 +1816,71 @@ class InventoryController extends ChangeNotifier {
 
   /// Confirms the sale. Nothing moves in stock — this only opens it for
   /// despatch.
-  void confirmSalesOrder(String id) {
+  /// Confirms the sale on the server, and says why when it is refused —
+  /// chiefly when it asks for more than is in stock.
+  ///
+  /// Shown confirmed at once, and put back to draft if the server refuses, so
+  /// a refusal is never left looking like a confirmed sale. Returns null on
+  /// success, or the reason.
+  Future<String?> confirmSalesOrder(String id) async {
     final existing = salesOrderById(id);
     if (existing == null ||
         existing.status != SalesStatus.draft ||
         existing.lines.isEmpty) {
-      return;
+      return null;
     }
     final now = DateTime.now();
-    _replaceSalesOrder(
-      existing.copyWith(
-        status: SalesStatus.confirmed,
-        confirmedAt: now,
-        updatedAt: now,
-      ),
+    final updated = existing.copyWith(
+      status: SalesStatus.confirmed,
+      confirmedAt: now,
+      updatedAt: now,
     );
+    _salesOrders = _salesOrders.map((o) => o.id == id ? updated : o).toList();
+    notifyListeners();
+
+    try {
+      final saved = await _api.saveSalesOrder(updated);
+      _salesOrders = _salesOrders.map((o) => o.id == id ? saved : o).toList();
+      lastWriteError = null;
+      notifyListeners();
+      return null;
+    } catch (error) {
+      _salesOrders = _salesOrders
+          .map((o) => o.id == id ? existing : o)
+          .toList();
+      lastWriteError = error;
+      debugPrint('Stockpile: could not confirm the sale: $error');
+      notifyListeners();
+      return reasonFor(error, 'The sale could not be confirmed.');
+    }
   }
+
+  /// The same rule the server applies to a new or draft order, so the seller
+  /// is told before saving: no line may ask for more than is in stock.
+  /// Returns one reason per item that is short; empty when it can go ahead.
+  List<String> outOfStockReasons(List<SalesOrderLine> lines) {
+    final wanted = <String, int>{};
+    final names = <String, String>{};
+    for (final line in lines) {
+      wanted[line.itemId] = (wanted[line.itemId] ?? 0) + line.quantityOrdered;
+      names[line.itemId] = line.itemName;
+    }
+    return [
+      for (final entry in wanted.entries)
+        if (entry.value > (byId(entry.key)?.quantity ?? 0))
+          (byId(entry.key)?.quantity ?? 0) <= 0
+              ? '${byId(entry.key)?.name ?? names[entry.key]} is out of stock '
+                    '(${entry.value} ordered)'
+              : '${byId(entry.key)!.name} has only '
+                    '${byId(entry.key)!.quantity} in stock '
+                    '(${entry.value} ordered)',
+    ];
+  }
+
+  /// The message to show for a refused write: the server's own reason where
+  /// it gave one.
+  String reasonFor(Object? error, String fallback) =>
+      error is AuthApiException ? error.message : fallback;
 
   /// Cancels a sale at any stage, fully sent included, and puts back the
   /// stock it sent.
@@ -2042,6 +2135,28 @@ class InventoryController extends ChangeNotifier {
       if (left > 0) out.add((line, left));
     }
     return out;
+  }
+
+  /// Each order line with what is still to be billed on it.
+  List<(SalesOrderLine, int)> leftToBillOn(SalesOrder order) =>
+      _leftToBill(order);
+
+  /// The stock movements a sale caused, oldest first: its old despatches,
+  /// and what its receipts and invoices took or gave back. Only as far back
+  /// as the movements this device has loaded.
+  List<Movement> stockTakenBySale(String salesOrderId) {
+    final documents = {
+      salesOrderId,
+      for (final r in _receipts)
+        if (r.salesOrderId == salesOrderId) r.id,
+      for (final i in _invoices)
+        if (i.salesOrderId == salesOrderId) i.id,
+    };
+    final found = [
+      for (final m in _movements)
+        if (m.documentId != null && documents.contains(m.documentId)) m,
+    ]..sort((a, b) => a.at.compareTo(b.at));
+    return found;
   }
 
   /// Quantities already billed against a sale, per item.
@@ -2919,6 +3034,9 @@ class InventoryController extends ChangeNotifier {
         // wrote it to the server and nothing read it back, so it survived
         // until the next load and then was simply gone.
         'companyLogo': next.companyLogo,
+        'bankName': next.bankName,
+        'accountName': next.accountName,
+        'accountNumber': next.accountNumber,
       });
       // Reported, not printed. The categories, locations and units live here
       // as well as on their own screens, and a caller that is told nothing

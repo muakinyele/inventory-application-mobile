@@ -1503,7 +1503,7 @@ void main() {
       // The constraint a delivery does not have: another device may have sold
       // the last of it since this order was opened.
       final s = await admin();
-      final id = await item(s, quantity: 2);
+      final id = await item(s, quantity: 10);
 
       final created = await server.post(
         '/documents/sales-orders',
@@ -1516,6 +1516,12 @@ void main() {
       );
       final orderId = created.json['salesOrder']['id'] as String;
       final lineId = created.json['salesOrder']['lines'][0]['id'] as String;
+      // Ordered while there were ten; someone else sells eight meanwhile.
+      await server.post(
+        '/inventory/stock/adjust',
+        accessToken: s.accessToken,
+        body: {'itemId': id, 'delta': -8, 'kind': 'sale'},
+      );
 
       final sent = await server.post(
         '/documents/sales-orders/$orderId/despatch',
@@ -1637,8 +1643,14 @@ void main() {
 
     test('a send with nothing on the shelf moves nothing', () async {
       final s = await admin();
-      final id = await item(s, quantity: 0);
+      final id = await item(s, quantity: 5);
       final (orderId, lineId) = await confirmed(s, id, ordered: 5);
+      // The shelf empties after the order was taken.
+      await server.post(
+        '/inventory/stock/adjust',
+        accessToken: s.accessToken,
+        body: {'itemId': id, 'delta': -5, 'kind': 'sale'},
+      );
 
       final sent = await server.post(
         '/documents/sales-orders/$orderId/despatch',
@@ -2405,6 +2417,196 @@ void main() {
 
       expect((await invoice(s, orderId, id, 2)).statusCode, 400);
       expect(await quantityOf(s, id), 20);
+    });
+  });
+
+  group('a new order cannot promise stock that is not there', () {
+    test(
+      'an order for more than is in stock is refused, and says why',
+      () async {
+        final s = await admin();
+        final id = await item(s, quantity: 5);
+
+        final created = await server.post(
+          '/documents/sales-orders',
+          accessToken: s.accessToken,
+          body: {
+            'status': 'confirmed',
+            'lines': [
+              {'itemId': id, 'itemName': 'Widget', 'quantityOrdered': 6},
+            ],
+          },
+        );
+
+        expect(created.statusCode, 400);
+        expect(
+          created.json['error']['message'],
+          contains('Widget has only 5 in stock (6 ordered)'),
+        );
+        expect(await quantityOf(s, id), 5);
+      },
+    );
+
+    test('an out-of-stock item is named as such', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 0);
+
+      final created = await server.post(
+        '/documents/sales-orders',
+        accessToken: s.accessToken,
+        body: {
+          'lines': [
+            {'itemId': id, 'itemName': 'Widget', 'quantityOrdered': 1},
+          ],
+        },
+      );
+
+      expect(created.statusCode, 400);
+      expect(created.json['error']['message'], contains('out of stock'));
+    });
+
+    test(
+      'ordering exactly what is there is fine, and leaves it there',
+      () async {
+        final s = await admin();
+        final id = await item(s, quantity: 5);
+
+        final created = await server.post(
+          '/documents/sales-orders',
+          accessToken: s.accessToken,
+          body: {
+            'status': 'confirmed',
+            'lines': [
+              {'itemId': id, 'itemName': 'Widget', 'quantityOrdered': 5},
+            ],
+          },
+        );
+
+        expect(created.statusCode, 201);
+        expect(await quantityOf(s, id), 5, reason: 'an order is not a sale');
+      },
+    );
+
+    test('an order confirmed before the stock ran out can still be billed '
+        'from what is left', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 5);
+      final created = await server.post(
+        '/documents/sales-orders',
+        accessToken: s.accessToken,
+        body: {
+          'status': 'confirmed',
+          'lines': [
+            {'itemId': id, 'itemName': 'Widget', 'quantityOrdered': 5},
+          ],
+        },
+      );
+      final orderId = created.json['salesOrder']['id'] as String;
+
+      final receipt = await server.post(
+        '/documents/receipts',
+        accessToken: s.accessToken,
+        body: {
+          'salesOrderId': orderId,
+          'movesStock': true,
+          'amountPaid': 20,
+          'lines': [
+            {
+              'itemId': id,
+              'itemName': 'Widget',
+              'quantity': 5,
+              'unitPrice': 4.0,
+            },
+          ],
+        },
+      );
+
+      expect(receipt.statusCode, 201);
+      expect(await quantityOf(s, id), 0, reason: '5 sold from 5 is 0');
+    });
+
+    test(
+      'billing what is no longer on the shelf is refused, and says why',
+      () async {
+        final s = await admin();
+        final id = await item(s, quantity: 5);
+        final created = await server.post(
+          '/documents/sales-orders',
+          accessToken: s.accessToken,
+          body: {
+            'status': 'confirmed',
+            'lines': [
+              {'itemId': id, 'itemName': 'Widget', 'quantityOrdered': 5},
+            ],
+          },
+        );
+        final orderId = created.json['salesOrder']['id'] as String;
+        await server.post(
+          '/inventory/stock/adjust',
+          accessToken: s.accessToken,
+          body: {'itemId': id, 'delta': -3, 'kind': 'sale'},
+        );
+
+        final invoice = await server.post(
+          '/documents/invoices',
+          accessToken: s.accessToken,
+          body: {
+            'salesOrderId': orderId,
+            'movesStock': true,
+            'lines': [
+              {
+                'itemId': id,
+                'itemName': 'Widget',
+                'quantity': 5,
+                'unitPrice': 4.0,
+              },
+            ],
+          },
+        );
+
+        expect(invoice.statusCode, 400);
+        expect(
+          invoice.json['error']['message'],
+          contains('Not enough Widget in stock: 2 on hand, 5 needed'),
+        );
+        expect(await quantityOf(s, id), 2);
+      },
+    );
+  });
+
+  group('reference numbers', () {
+    test('a number already in use is skipped, not handed out again', () async {
+      // Receipts imported with their own numbers never moved the counter, so
+      // every new receipt was RC-0001 again and was refused: no receipt could
+      // be issued and no invoice payment recorded.
+      final s = await admin();
+      final id = await item(s, quantity: 20);
+      Future<ApiResponse> receipt({String reference = ''}) => server.post(
+        '/documents/receipts',
+        accessToken: s.accessToken,
+        body: {
+          if (reference.isNotEmpty) 'reference': reference,
+          'movesStock': false,
+          'amountPaid': 4.0,
+          'lines': [
+            {
+              'itemId': id,
+              'itemName': 'Widget',
+              'quantity': 1,
+              'unitPrice': 4.0,
+            },
+          ],
+        },
+      );
+
+      expect((await receipt(reference: 'RC-0001')).statusCode, 201);
+      expect((await receipt(reference: 'RC-0002')).statusCode, 201);
+
+      final issued = await receipt();
+
+      expect(issued.statusCode, 201);
+      expect(issued.json['receipt']['reference'], 'RC-0003');
+      expect((await receipt()).json['receipt']['reference'], 'RC-0004');
     });
   });
 

@@ -3,6 +3,7 @@ import 'package:drift/drift.dart';
 import 'auth/token_store.dart';
 import 'auth/tokens.dart';
 import 'db/database.dart';
+import 'inventory/inventory_service.dart';
 import 'rbac/permissions.dart';
 
 /// Brings a database up to date with the permission catalogue and the roles
@@ -19,6 +20,9 @@ class Bootstrap {
   Future<void> run() async {
     await _syncPermissions();
     await _syncSystemRoles();
+    // Items restored with a total and no per-location stock: give the total a
+    // location. No total changes. Safe on every boot; a no-op once aligned.
+    await InventoryService(db).alignAllStockBins();
   }
 
   Future<void> _syncPermissions() async {

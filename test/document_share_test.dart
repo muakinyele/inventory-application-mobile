@@ -76,7 +76,7 @@ void main() {
 
       expect(find.text('View'), findsWidgets);
       expect(find.text('Download PDF'), findsOneWidget);
-      expect(find.text('Send'), findsOneWidget);
+      expect(find.text('Share'), findsOneWidget);
     });
 
     testWidgets('sending offers the file and the message separately', (
@@ -90,7 +90,7 @@ void main() {
         await seededController(receipts: [_receipt], customers: [_customer()]),
       );
 
-      await tester.tap(find.text('Send'));
+      await tester.tap(find.text('Share'));
       await tester.pumpAndSettle();
 
       expect(find.text('THE DOCUMENT'), findsOneWidget);
@@ -107,7 +107,7 @@ void main() {
         await seededController(receipts: [_receipt], customers: [_customer()]),
       );
 
-      await tester.tap(find.text('Send'));
+      await tester.tap(find.text('Share'));
       await tester.pumpAndSettle();
 
       expect(
@@ -125,7 +125,7 @@ void main() {
         await seededController(receipts: [_receipt], customers: [_customer()]),
       );
 
-      await tester.tap(find.text('Send'));
+      await tester.tap(find.text('Share'));
       await tester.pumpAndSettle();
 
       expect(find.text('To +234 802 123 4567'), findsOneWidget);
@@ -137,7 +137,7 @@ void main() {
     ) async {
       await _pump(tester, await seededController(receipts: [_receipt]));
 
-      await tester.tap(find.text('Send'));
+      await tester.tap(find.text('Share'));
       await tester.pumpAndSettle();
 
       expect(find.text('Pick a contact in WhatsApp'), findsOneWidget);
@@ -149,7 +149,7 @@ void main() {
       // casing — Signal, Slack, a note, a printed sheet.
       await _pump(tester, await seededController(receipts: [_receipt]));
 
-      await tester.tap(find.text('Send'));
+      await tester.tap(find.text('Share'));
       await tester.pumpAndSettle();
 
       expect(find.text('Copy the details'), findsOneWidget);

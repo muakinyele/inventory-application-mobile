@@ -2,6 +2,7 @@ import 'package:flutter/material.dart' hide Durations;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:stockpile/core/theme.dart';
+import 'package:stockpile/data/auth_api.dart';
 import 'package:stockpile/state/inventory_controller.dart';
 import 'package:stockpile/ui/widgets/inventory_status_banner.dart';
 
@@ -74,6 +75,21 @@ void main() {
       await _pumpBanner(tester, controller);
 
       expect(find.textContaining('has not reached the server'), findsOneWidget);
+    });
+
+    testWidgets('says why, when the server gave a reason', (tester) async {
+      final controller = await newController();
+      controller.lastWriteError = const AuthApiException(
+        code: 'bad_request',
+        message: 'Not enough Chic Choc in stock: 0 on hand, 5 needed.',
+      );
+
+      await _pumpBanner(tester, controller);
+
+      expect(
+        find.textContaining('Not enough Chic Choc in stock'),
+        findsOneWidget,
+      );
     });
 
     testWidgets('can be dismissed, and stays dismissed', (tester) async {

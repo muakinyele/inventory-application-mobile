@@ -226,6 +226,14 @@ class FakeInventoryServer {
       _salesOrders[order['id'] as String] = order;
       return _ok(answer);
     }
+    // Saving an existing order answers with what it was sent, as stored.
+    if (request.method == 'PATCH' &&
+        path.startsWith('/api/documents/sales-orders/')) {
+      final id = path.split('/')[4];
+      final order = {...?_salesOrders[id], ...body, 'id': id};
+      _salesOrders[id] = order;
+      return _ok({'salesOrder': order});
+    }
     // Cancelling answers with the order marked cancelled. What stock comes
     // back is the server's arithmetic and is tested there.
     if (path.startsWith('/api/documents/sales-orders/') &&

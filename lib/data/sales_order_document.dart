@@ -9,7 +9,8 @@ import '../models/app_settings.dart';
 import '../models/item.dart';
 import '../models/party.dart';
 import '../models/sales_order.dart';
-import 'receipt_document.dart' show companyLogoBlock, loadReportFonts;
+import 'receipt_document.dart'
+    show bankDetailsBlock, companyLogoBlock, loadReportFonts;
 
 /// Renders a sales order as the document a customer is sent.
 ///
@@ -339,10 +340,14 @@ class SalesOrderDocument {
   }
 
   pw.Widget _notes(pw.Font semiBold) {
-    if (order.notes.trim().isEmpty) return pw.SizedBox();
+    final payInto = order.status != SalesStatus.cancelled;
+    if (order.notes.trim().isEmpty) {
+      return payInto ? bankDetailsBlock(settings, semiBold) : pw.SizedBox();
+    }
     return pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
       children: [
+        if (payInto) bankDetailsBlock(settings, semiBold),
         pw.Text(
           'NOTES',
           style: pw.TextStyle(
@@ -394,6 +399,11 @@ class SalesOrderDocument {
         '${settings.taxLabel}: ${_money(_tax)}',
       ],
       'Order total: ${_money(_grandTotal)}',
+      if (settings.hasBankDetails && order.status != SalesStatus.cancelled) ...[
+        '',
+        'Pay into:',
+        ...settings.bankLines,
+      ],
       if (order.notes.trim().isNotEmpty) ...['', order.notes.trim()],
     ];
     return lines.join('\n');

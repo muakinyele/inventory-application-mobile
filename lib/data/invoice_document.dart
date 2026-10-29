@@ -9,7 +9,8 @@ import '../core/formatters.dart';
 import '../models/app_settings.dart';
 import '../models/invoice.dart';
 import '../models/receipt.dart';
-import 'receipt_document.dart' show companyLogoBlock, loadReportFonts;
+import 'receipt_document.dart'
+    show bankDetailsBlock, companyLogoBlock, loadReportFonts;
 
 /// Renders an invoice as the document a customer is sent.
 ///
@@ -360,11 +361,17 @@ class InvoiceDocument {
       if (invoice.terms.isNotEmpty) ('PAYMENT TERMS', invoice.terms),
       if (invoice.notes.isNotEmpty) ('NOTES', invoice.notes),
     ];
-    if (blocks.isEmpty) return pw.SizedBox();
+    // Where to pay, while there is something to pay.
+    final payInto =
+        invoice.status != InvoiceStatus.cancelled && !invoice.isSettled;
+    if (blocks.isEmpty && !(payInto && settings.hasBankDetails)) {
+      return pw.SizedBox();
+    }
 
     return pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
       children: [
+        if (payInto) bankDetailsBlock(settings, semiBold),
         for (final (label, body) in blocks)
           pw.Padding(
             padding: const pw.EdgeInsets.only(bottom: 8),

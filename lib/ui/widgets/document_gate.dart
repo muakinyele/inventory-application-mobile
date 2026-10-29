@@ -80,8 +80,17 @@ class _DocumentGateState extends State<DocumentGate> {
     if (controller.documentsReady(widget.need)) return widget.builder(context);
 
     final failure = controller.documentError(widget.need);
-    if (failure != null && !controller.documentsLoading(widget.need)) {
+    final loading = controller.documentsLoading(widget.need);
+    if (failure != null && !loading) {
       return _DocumentLoadFailed(error: failure, onRetry: _load);
+    }
+
+    // Not there, not failed, and nothing fetching it: forgotten by a reload
+    // after this gate had already finished waiting. Nothing else would ask
+    // again, so this spun for ever with everything it needed fetched once.
+    // Asked once more; a failure shows the error above, so it cannot loop.
+    if (!loading) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _load());
     }
 
     return const Scaffold(body: Center(child: CircularProgressIndicator()));

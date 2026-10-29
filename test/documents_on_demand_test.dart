@@ -347,5 +347,24 @@ void main() {
       await tester.pumpAndSettle();
       expect(documentReads(server), hasLength(1));
     });
+
+    testWidgets('a reload after the page opened does not leave it spinning', (
+      tester,
+    ) async {
+      // A reload forgets every document. The gate had finished waiting, so
+      // nothing asked again: an invoice opened just as the app reloaded spun
+      // for ever with everything it needed already fetched once.
+      final (controller, server) = await freshController();
+      await tester.pumpWidget(gated(controller, {DocumentSet.invoices}));
+      await tester.pumpAndSettle();
+      expect(find.text('the page'), findsOneWidget);
+
+      await controller.reload();
+      await tester.pumpAndSettle();
+
+      expect(find.text('the page'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(documentReads(server), hasLength(2), reason: 'asked again once');
+    });
   });
 }

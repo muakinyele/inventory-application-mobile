@@ -6,6 +6,7 @@ import '../core/design.dart';
 import '../core/formatters.dart';
 import '../core/palette.dart';
 import '../models/invoice.dart';
+import '../models/movement.dart';
 import '../models/party.dart';
 import '../models/receipt.dart';
 import '../models/sales_order.dart';
@@ -52,6 +53,10 @@ class SalesOrderDetailPage extends StatelessWidget {
     final margin = order.marginRate;
     final receipts = controller.receiptsForSalesOrder(order.id);
     final invoices = controller.invoicesForSalesOrder(order.id);
+    final leftToBill = {
+      for (final (line, left) in controller.leftToBillOn(order)) line.id: left,
+    };
+    final taken = controller.stockTakenBySale(order.id);
 
     return Scaffold(
       backgroundColor: p.plane,
@@ -74,7 +79,19 @@ class SalesOrderDetailPage extends StatelessWidget {
                   ),
                 if (order.status == SalesStatus.draft)
                   FilledButton.icon(
-                    onPressed: () => controller.confirmSalesOrder(order.id),
+                    onPressed: () async {
+                      final refused = await controller.confirmSalesOrder(
+                        order.id,
+                      );
+                      if (refused != null) controller.clearWriteError();
+                      if (refused != null && context.mounted) {
+                        await showAppMessage(
+                          context,
+                          refused,
+                          tone: MessageTone.failure,
+                        );
+                      }
+                    },
                     icon: const Icon(Icons.check_rounded, size: 18),
                     label: const Text('Confirm sale'),
                   ),
@@ -170,7 +187,8 @@ class SalesOrderDetailPage extends StatelessWidget {
                       line: line,
                       currency: currency,
                       onHand: controller.byId(line.itemId)?.quantity,
-                      showStock: order.status.isOpen,
+                      showStock: order.status != SalesStatus.cancelled,
+                      leftToBill: leftToBill[line.id] ?? 0,
                     ),
                   ],
                   if (order.lines.isEmpty)
@@ -181,6 +199,20 @@ class SalesOrderDetailPage extends StatelessWidget {
                 ],
               ),
             ),
+            if (taken.isNotEmpty) ...[
+              const SizedBox(height: Insets.lg),
+              SectionCard(
+                title: 'Stock taken by this sale',
+                child: Column(
+                  children: [
+                    for (final (index, m) in taken.indexed) ...[
+                      if (index > 0) Divider(color: p.line, height: Insets.lg),
+                      _TakenRow(movement: m),
+                    ],
+                  ],
+                ),
+              ),
+            ],
             if (receipts.isNotEmpty) ...[
               const SizedBox(height: Insets.lg),
               SectionCard(
@@ -312,6 +344,8 @@ class SalesOrderDetailPage extends StatelessWidget {
     // Awaited: the server returns the stock and can refuse, for instance when
     // the sale has been paid for.
     final refused = await controller.cancelSalesOrder(order.id);
+    // Reported below with its reason; nothing on screen was left unsaved.
+    if (refused != null) controller.clearWriteError();
     if (!context.mounted) return;
     await showAppMessage(
       context,
@@ -611,11 +645,76 @@ class _Fact extends StatelessWidget {
   }
 }
 
+/// One movement of stock this sale caused: which item, which document took
+/// it, how many, and the stock balance it left.
+class _TakenRow extends StatelessWidget {
+  const _TakenRow({required this.movement});
+
+  final Movement movement;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    final change = movement.after - movement.before;
+    return Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                movement.itemName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: p.ink,
+                ),
+              ),
+              Text(
+                '${movement.note.isEmpty ? 'Stock change' : movement.note} · '
+                '${dateTimeLabel(movement.at)}',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 12.5, color: p.inkMuted),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: Insets.md),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              change > 0
+                  ? '+${number(change)} back'
+                  : '${number(-change)} taken',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: change > 0 ? p.goodText : p.ink,
+              ),
+            ),
+            Text(
+              'Balance ${number(movement.after)}',
+              style: TextStyle(fontSize: 12.5, color: p.inkMuted),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
 class _LineRow extends StatelessWidget {
   const _LineRow({
     required this.line,
     required this.currency,
     required this.onHand,
+    this.leftToBill = 0,
     required this.showStock,
   });
 
@@ -624,10 +723,13 @@ class _LineRow extends StatelessWidget {
   final int? onHand;
   final bool showStock;
 
+  /// Still to be billed on this line, and so still to leave the shelf.
+  final int leftToBill;
+
   @override
   Widget build(BuildContext context) {
     final p = context.palette;
-    final short = showStock && line.outstanding > (onHand ?? 0);
+    final short = showStock && leftToBill > (onHand ?? 0);
 
     return Row(
       children: [
@@ -648,8 +750,9 @@ class _LineRow extends StatelessWidget {
               ),
               Text(
                 '${number(line.quantityOrdered)} ordered · '
-                '${number(line.quantityFulfilled)} sent'
-                '${line.outstanding > 0 ? ' · ${number(line.outstanding)} outstanding' : ''}',
+                '${number(line.quantityFulfilled)} taken from stock · '
+                '${number(leftToBill)} still to bill'
+                '${showStock && onHand != null ? ' · ${number(onHand!)} in stock now' : ''}',
                 style: TextStyle(fontSize: 12.5, color: p.inkMuted),
               ),
               if (short)
@@ -666,7 +769,10 @@ class _LineRow extends StatelessWidget {
                       const SizedBox(width: 4),
                       Flexible(
                         child: Text(
-                          'Only ${number(onHand ?? 0)} on the shelf',
+                          (onHand ?? 0) <= 0
+                              ? 'Out of stock: ${number(leftToBill)} cannot be billed'
+                              : 'Only ${number(onHand ?? 0)} in stock for '
+                                    '${number(leftToBill)} still to bill',
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontSize: 12,
