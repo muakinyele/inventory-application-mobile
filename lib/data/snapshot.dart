@@ -59,3 +59,10 @@ class Snapshot {
     settings: AppSettings(),
   );
 }
+
+/// The document collections that are fetched on demand rather than at sign-in.
+///
+/// Named as a set so a screen can ask for exactly what it shows: the sales
+/// order detail needs receipts and invoices, the receipts page needs only
+/// receipts, and neither should wait for the other's.
+enum DocumentSet { invoices, receipts, purchaseOrders, salesOrders, transfers }

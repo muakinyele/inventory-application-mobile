@@ -178,6 +178,28 @@ Router inventoryRoutes({
   // ------------------------------------------------------------------
   // History
   // ------------------------------------------------------------------
+  // Items the old per-location bug drove negative: read-only scan, then a
+  // repair per item or for all. Administration, because it changes counts.
+  router.get('/repairs/stock', (Request request) async {
+    request.require('settings.manage');
+    return jsonResponse({
+      'items': [for (final d in await inventory.scanStockDamage()) d.toJson()],
+    });
+  });
+
+  router.post('/repairs/stock', (Request request) async {
+    final caller = request.require('settings.manage');
+    final repaired = <Map<String, Object?>>[];
+    for (final d in await inventory.scanStockDamage()) {
+      final done = await inventory.repairStockDamage(
+        itemId: d.itemId,
+        actorId: caller.user.id,
+      );
+      if (done != null) repaired.add(done.toJson());
+    }
+    return jsonResponse({'repaired': repaired});
+  });
+
   router.get('/movements', (Request request) async {
     request.require('activity.view');
     final q = request.url.queryParameters;

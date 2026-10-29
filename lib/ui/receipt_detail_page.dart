@@ -107,7 +107,9 @@ class _ReceiptDetailPageState extends State<ReceiptDetailPage> {
                       ? null
                       : () => _share(controller, receipt),
                   icon: const Icon(Icons.ios_share_rounded, size: 18),
-                  label: const Text('Send'),
+                  // "Share", like the sales order: this hands the document to
+                  // another app or a message, it does not send anything itself.
+                  label: const Text('Share'),
                 ),
                 Builder(
                   builder: (buttonContext) => TextButton.icon(

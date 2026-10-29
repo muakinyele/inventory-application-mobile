@@ -4,12 +4,14 @@ import 'package:flutter/foundation.dart';
 
 import '../core/ids.dart';
 
+import '../data/auth_api.dart' show AuthApiException;
 import '../data/csv_codec.dart';
 import '../data/inventory_api.dart';
 import '../data/inventory_loader.dart';
 import '../data/snapshot.dart';
 import '../data/seed_data.dart';
 import '../models/app_settings.dart';
+import '../models/cancelled_sale_issue.dart';
 import '../models/invoice.dart';
 import '../models/item.dart';
 import '../models/movement.dart';
@@ -41,19 +43,29 @@ enum InventoryLoad {
 /// remember to record. Category edits deliberately append nothing — the ledger
 /// records stock, not metadata.
 class InventoryController extends ChangeNotifier {
-  InventoryController(this._api, Snapshot initial)
-    : _items = List.of(initial.items),
-      _movements = List.of(initial.movements),
-      _suppliers = List.of(initial.suppliers),
-      _customers = List.of(initial.customers),
-      _purchaseOrders = List.of(initial.purchaseOrders),
-      _salesOrders = List.of(initial.salesOrders),
-      _receipts = List.of(initial.receipts),
-      _invoices = List.of(initial.invoices),
-      _transfers = List.of(initial.transfers),
-      _levels = Map.of(initial.levels),
-      _sequences = Map.of(initial.sequences),
-      _settings = initial.settings;
+  /// [loadedDocuments] says which document collections [initial] already
+  /// carries, so they are not fetched again.
+  ///
+  /// Empty from a real sign-in, because the snapshot no longer brings
+  /// documents down; a test that seeds them says so, and without that the
+  /// first screen to open would fetch over the top of its own fixture.
+  InventoryController(
+    this._api,
+    Snapshot initial, {
+    Set<DocumentSet> loadedDocuments = const {},
+  }) : _loadedDocuments = {...loadedDocuments},
+       _items = List.of(initial.items),
+       _movements = List.of(initial.movements),
+       _suppliers = List.of(initial.suppliers),
+       _customers = List.of(initial.customers),
+       _purchaseOrders = List.of(initial.purchaseOrders),
+       _salesOrders = List.of(initial.salesOrders),
+       _receipts = List.of(initial.receipts),
+       _invoices = List.of(initial.invoices),
+       _transfers = List.of(initial.transfers),
+       _levels = Map.of(initial.levels),
+       _sequences = Map.of(initial.sequences),
+       _settings = initial.settings;
 
   static const maxMovements = 500;
 
@@ -99,6 +111,106 @@ class InventoryController extends ChangeNotifier {
   Map<String, Map<String, int>> _levels;
   Map<String, int> _sequences;
   AppSettings _settings;
+
+  // --- Documents, fetched when something needs them ------------------------
+  //
+  // THEY USED TO COME DOWN AT SIGN-IN, all five lists with all their lines,
+  // before the dashboard could draw — and the dashboard reads none of them. A
+  // workspace with a year of trading waited on its whole history to see
+  // today's stock.
+  //
+  // Now a screen says what it needs and waits only for that. The flags below
+  // are per collection rather than one "documents loaded" bit, because the
+  // receipts page should not pay for purchase orders.
+
+  final Set<DocumentSet> _loadedDocuments;
+  final Map<DocumentSet, Future<void>> _documentLoads = {};
+  final Map<DocumentSet, Object> _documentErrors = {};
+
+  /// Whether every collection in [wanted] is already here.
+  bool documentsReady(Set<DocumentSet> wanted) =>
+      wanted.every(_loadedDocuments.contains);
+
+  /// Whether a fetch for any of [wanted] is in flight.
+  bool documentsLoading(Set<DocumentSet> wanted) =>
+      wanted.any(_documentLoads.containsKey);
+
+  /// What went wrong fetching any of [wanted], if anything did.
+  ///
+  /// A screen waiting on documents has to be able to tell "still coming" from
+  /// "this failed", because they look identical from behind a spinner and only
+  /// one of them is worth waiting for.
+  Object? documentError(Set<DocumentSet> wanted) {
+    for (final kind in wanted) {
+      final failure = _documentErrors[kind];
+      if (failure != null) return failure;
+    }
+    return null;
+  }
+
+  /// Fetches any of [wanted] that are not loaded yet, and waits for them.
+  ///
+  /// Safe to call on every build: a collection already loaded returns at once,
+  /// and one being fetched is awaited rather than fetched again — two screens
+  /// asking for receipts at the same moment make one request.
+  Future<void> ensureDocuments(Set<DocumentSet> wanted) async {
+    final pending = <Future<void>>[];
+    for (final kind in wanted) {
+      if (_loadedDocuments.contains(kind)) continue;
+      // Clear the last failure first: the screen reads this to decide between
+      // a spinner and an error, and a retry that still showed the old error
+      // would look like it had failed again before it had even been tried.
+      _documentErrors.remove(kind);
+      pending.add(_documentLoads[kind] ??= _fetchDocuments(kind));
+    }
+    if (pending.isEmpty) return;
+    await Future.wait(pending);
+  }
+
+  Future<void> _fetchDocuments(DocumentSet kind) async {
+    try {
+      switch (kind) {
+        case DocumentSet.invoices:
+          _invoices = await _api.invoices();
+        case DocumentSet.receipts:
+          _receipts = await _api.receipts();
+        case DocumentSet.purchaseOrders:
+          _purchaseOrders = await _api.purchaseOrders();
+        case DocumentSet.salesOrders:
+          _salesOrders = await _api.salesOrders();
+        case DocumentSet.transfers:
+          _transfers = await _api.transfers();
+      }
+      _loadedDocuments.add(kind);
+      _documentErrors.remove(kind);
+      lastWriteError = null;
+    } catch (error) {
+      // Left unloaded so the next screen that needs it tries again, rather
+      // than showing an empty list for the rest of the session as though the
+      // workspace had none.
+      debugPrint('Stockpile: could not load ${kind.name}: $error');
+      _documentErrors[kind] = error;
+    } finally {
+      _documentLoads.remove(kind);
+      notifyListeners();
+    }
+  }
+
+  /// Forgets what has been fetched, so the next screen asks again.
+  ///
+  /// Used after anything that replaces the workspace wholesale — a restore, an
+  /// erase, a reload — where keeping the old lists would show documents that
+  /// no longer exist.
+  void _forgetDocuments() {
+    _loadedDocuments.clear();
+    _documentLoads.clear();
+    _documentErrors.clear();
+    _purchaseOrders = const [];
+    _salesOrders = const [];
+    _receipts = const [];
+    _invoices = const [];
+    _transfers = const [];
+  }
 
   /// Set when a write fails, so the screen can surface it rather than letting
   /// the UI silently diverge from what the server holds.
@@ -351,9 +463,10 @@ class InventoryController extends ChangeNotifier {
     final order = salesOrderId == null ? null : salesOrderById(salesOrderId);
     final customer = customerById(customerId ?? order?.customerId);
 
-    // An invoice raised against a sales order does not move stock a second
-    // time: that order's despatch already did.
-    final movesStock = order == null;
+    // Billing is what takes the goods, sales order or not. The server works
+    // out, for an order, which units the old despatch already sent and takes
+    // only the rest.
+    const movesStock = true;
 
     final billed = <InvoiceLine>[];
     for (final line in lines) {
@@ -404,6 +517,9 @@ class InventoryController extends ChangeNotifier {
       final saved = await _api.saveInvoice(draft);
       _invoices = [saved, ..._invoices.where((i) => i.id != saved.id)];
       if (saved.movesStock) await _refreshStockView();
+      if (saved.salesOrderId != null) {
+        await _refreshSalesOrder(saved.salesOrderId!);
+      }
       lastWriteError = null;
       notifyListeners();
       return saved;
@@ -437,7 +553,8 @@ class InventoryController extends ChangeNotifier {
     final now = DateTime.now();
     final order = salesOrderId == null ? null : salesOrderById(salesOrderId);
     final customer = customerById(customerId ?? order?.customerId);
-    final movesStock = order == null;
+    // As for an invoice: the receipt is what takes the goods.
+    const movesStock = true;
 
     final sold = <ReceiptLine>[];
     for (final line in lines) {
@@ -486,6 +603,9 @@ class InventoryController extends ChangeNotifier {
       final saved = await _api.saveReceipt(draft);
       _receipts = [saved, ..._receipts.where((r) => r.id != saved.id)];
       if (saved.movesStock) await _refreshStockView();
+      if (saved.salesOrderId != null) {
+        await _refreshSalesOrder(saved.salesOrderId!);
+      }
       lastWriteError = null;
       notifyListeners();
       return saved;
@@ -1044,6 +1164,10 @@ class InventoryController extends ChangeNotifier {
 
     try {
       final snapshot = await loadSharedSnapshot(_api);
+      // The snapshot carries no documents now, so anything fetched earlier is
+      // dropped rather than left behind pointing at a workspace that may have
+      // changed underneath it.
+      _forgetDocuments();
       _items = List.of(snapshot.items);
       _movements = List.of(snapshot.movements);
       _suppliers = List.of(snapshot.suppliers);
@@ -1069,6 +1193,7 @@ class InventoryController extends ChangeNotifier {
   /// Signing out on a shared device has to leave nothing of the workspace on
   /// screen for whoever signs in next.
   void forgetSharedData() {
+    _forgetDocuments();
     _items = [];
     _movements = [];
     _suppliers = [];
@@ -1102,8 +1227,6 @@ class InventoryController extends ChangeNotifier {
     String cashier = '',
     DateTime? paidAt,
   }) async {
-    final now = DateTime.now();
-
     final Invoice settled;
     final double taken;
     try {
@@ -1121,6 +1244,51 @@ class InventoryController extends ChangeNotifier {
       notifyListeners();
       return null;
     }
+
+    return _writePaymentReceipt(
+      invoice,
+      taken,
+      method: method,
+      notes: notes,
+      cashier: cashier,
+      paidAt: paidAt,
+    );
+  }
+
+  /// Money recorded on an invoice that no receipt accounts for: a payment
+  /// whose receipt failed to save. Zero when every payment has its receipt.
+  double unreceiptedPayment(String invoiceId) {
+    final invoice = invoiceById(invoiceId);
+    if (invoice == null || invoice.status == InvoiceStatus.cancelled) return 0;
+    final receipted = paymentsForInvoice(
+      invoiceId,
+    ).fold(0.0, (sum, p) => sum + p.amount);
+    final gap = invoice.amountPaid - receipted;
+    return gap > 0.005 ? gap : 0;
+  }
+
+  /// Issues the receipt for money already recorded on an invoice whose
+  /// receipt never saved. Takes no new payment. Returns null on failure.
+  Future<Receipt?> issueMissingPaymentReceipt(
+    String invoiceId, {
+    PaymentMethod method = PaymentMethod.cash,
+  }) async {
+    final invoice = invoiceById(invoiceId);
+    final gap = unreceiptedPayment(invoiceId);
+    if (invoice == null || gap <= 0) return null;
+    return _writePaymentReceipt(invoice, gap, method: method);
+  }
+
+  /// The receipt for [taken] paid against [invoice].
+  Future<Receipt?> _writePaymentReceipt(
+    Invoice invoice,
+    double taken, {
+    PaymentMethod method = PaymentMethod.cash,
+    String notes = '',
+    String cashier = '',
+    DateTime? paidAt,
+  }) async {
+    final now = DateTime.now();
 
     // The receipt carries the invoice's own lines so it prints as a proper
     // document rather than a bare figure, at zero cost of goods: the cost was
@@ -1647,34 +1815,162 @@ class InventoryController extends ChangeNotifier {
 
   /// Confirms the sale. Nothing moves in stock — this only opens it for
   /// despatch.
-  void confirmSalesOrder(String id) {
+  /// Confirms the sale on the server, and says why when it is refused —
+  /// chiefly when it asks for more than is in stock.
+  ///
+  /// Shown confirmed at once, and put back to draft if the server refuses, so
+  /// a refusal is never left looking like a confirmed sale. Returns null on
+  /// success, or the reason.
+  Future<String?> confirmSalesOrder(String id) async {
     final existing = salesOrderById(id);
     if (existing == null ||
         existing.status != SalesStatus.draft ||
         existing.lines.isEmpty) {
-      return;
+      return null;
     }
     final now = DateTime.now();
-    _replaceSalesOrder(
-      existing.copyWith(
-        status: SalesStatus.confirmed,
-        confirmedAt: now,
-        updatedAt: now,
-      ),
+    final updated = existing.copyWith(
+      status: SalesStatus.confirmed,
+      confirmedAt: now,
+      updatedAt: now,
     );
+    _salesOrders = _salesOrders.map((o) => o.id == id ? updated : o).toList();
+    notifyListeners();
+
+    try {
+      final saved = await _api.saveSalesOrder(updated);
+      _salesOrders = _salesOrders.map((o) => o.id == id ? saved : o).toList();
+      lastWriteError = null;
+      notifyListeners();
+      return null;
+    } catch (error) {
+      _salesOrders = _salesOrders
+          .map((o) => o.id == id ? existing : o)
+          .toList();
+      lastWriteError = error;
+      debugPrint('Stockpile: could not confirm the sale: $error');
+      notifyListeners();
+      return reasonFor(error, 'The sale could not be confirmed.');
+    }
   }
 
-  void cancelSalesOrder(String id) {
+  /// The same rule the server applies to a new or draft order, so the seller
+  /// is told before saving: no line may ask for more than is in stock.
+  /// Returns one reason per item that is short; empty when it can go ahead.
+  List<String> outOfStockReasons(List<SalesOrderLine> lines) {
+    final wanted = <String, int>{};
+    final names = <String, String>{};
+    for (final line in lines) {
+      wanted[line.itemId] = (wanted[line.itemId] ?? 0) + line.quantityOrdered;
+      names[line.itemId] = line.itemName;
+    }
+    return [
+      for (final entry in wanted.entries)
+        if (entry.value > (byId(entry.key)?.quantity ?? 0))
+          (byId(entry.key)?.quantity ?? 0) <= 0
+              ? '${byId(entry.key)?.name ?? names[entry.key]} is out of stock '
+                    '(${entry.value} ordered)'
+              : '${byId(entry.key)!.name} has only '
+                    '${byId(entry.key)!.quantity} in stock '
+                    '(${entry.value} ordered)',
+    ];
+  }
+
+  /// The message to show for a refused write: the server's own reason where
+  /// it gave one.
+  String reasonFor(Object? error, String fallback) =>
+      error is AuthApiException ? error.message : fallback;
+
+  /// Cancels a sale at any stage, fully sent included, and puts back the
+  /// stock it sent.
+  ///
+  /// The server does the work: it returns the stock from the order's own
+  /// despatch movements and cancels any unpaid invoice billing the order. It
+  /// refuses when money has been taken against the sale. This adopts its
+  /// answer and re-reads the stock rather than computing either here.
+  ///
+  /// Returns null on success, or the reason it was refused.
+  Future<String?> cancelSalesOrder(String id, {String reason = ''}) async {
     final existing = salesOrderById(id);
-    if (existing == null || existing.status == SalesStatus.fulfilled) return;
-    final now = DateTime.now();
-    _replaceSalesOrder(
-      existing.copyWith(
-        status: SalesStatus.cancelled,
-        closedAt: now,
-        updatedAt: now,
-      ),
-    );
+    if (existing == null) return 'That sale no longer exists.';
+    if (existing.status == SalesStatus.cancelled) return null;
+
+    try {
+      final result = await _api.cancelSalesOrder(id, reason: reason);
+      _salesOrders = _salesOrders
+          .map((o) => o.id == id ? result.order : o)
+          .toList();
+      final cancelled = {for (final i in result.invoices) i.id: i};
+      if (cancelled.isNotEmpty) {
+        _invoices = _invoices.map((i) => cancelled[i.id] ?? i).toList();
+      }
+      if (existing.unitsFulfilled > 0 || cancelled.isNotEmpty) {
+        await _refreshStockView();
+      }
+      lastWriteError = null;
+      notifyListeners();
+      return null;
+    } catch (error) {
+      lastWriteError = error;
+      debugPrint('Stockpile: could not cancel the sale: $error');
+      notifyListeners();
+      return error is AuthApiException
+          ? error.message
+          : 'The sale could not be cancelled, so nothing was changed.';
+    }
+  }
+
+  /// Live invoices billing a sale, for flagging one that outlived its
+  /// cancelled order.
+  List<Invoice> liveInvoicesForSalesOrder(String salesOrderId) => [
+    for (final i in _invoices)
+      if (i.salesOrderId == salesOrderId && i.status != InvoiceStatus.cancelled)
+        i,
+  ];
+
+  /// Cancelled sales still needing repair. Throws on failure so the screen
+  /// can say so rather than showing a clean result it never got.
+  Future<List<CancelledSaleIssue>> scanCancelledSales() =>
+      _api.scanCancelledSales();
+
+  /// Finishes one cancelled sale on the server. Returns null on success, or
+  /// the reason it was refused.
+  Future<String?> repairCancelledSale(String salesOrderId) async {
+    try {
+      final result = await _api.repairCancelledSale(salesOrderId);
+      _salesOrders = _salesOrders
+          .map((o) => o.id == salesOrderId ? result.order : o)
+          .toList();
+      final cancelled = {for (final i in result.invoices) i.id: i};
+      _invoices = _invoices.map((i) => cancelled[i.id] ?? i).toList();
+      await _refreshStockView();
+      lastWriteError = null;
+      notifyListeners();
+      return null;
+    } catch (error) {
+      debugPrint('Stockpile: could not repair the sale: $error');
+      return error is AuthApiException
+          ? error.message
+          : 'The sale could not be repaired, so nothing was changed.';
+    }
+  }
+
+  /// Repairs every fixable cancelled sale, then re-reads stock and the
+  /// documents it touched.
+  Future<
+    ({List<String> repaired, List<({String reference, String reason})> skipped})
+  >
+  repairAllCancelledSales() async {
+    final result = await _api.repairAllCancelledSales();
+    await _refreshStockView();
+    if (_loadedDocuments.contains(DocumentSet.invoices)) {
+      await _fetchDocuments(DocumentSet.invoices);
+    }
+    if (_loadedDocuments.contains(DocumentSet.salesOrders)) {
+      await _fetchDocuments(DocumentSet.salesOrders);
+    }
+    notifyListeners();
+    return result;
   }
 
   void deleteSalesOrder(String id) {
@@ -1805,19 +2101,107 @@ class InventoryController extends ChangeNotifier {
   /// sent, priced as it was quoted. Nothing despatched, nothing to receipt.
   List<ReceiptLine> receiptLinesForSalesOrder(SalesOrder order) {
     return [
-      for (final line in order.lines)
-        if (line.quantityFulfilled > 0)
-          ReceiptLine(
-            id: _uid(),
-            itemId: line.itemId,
-            itemName: line.itemName,
-            sku: byId(line.itemId)?.sku ?? '',
-            unit: byId(line.itemId)?.unit ?? 'pcs',
-            quantity: line.quantityFulfilled,
-            unitPrice: line.unitPrice,
-            costOfGoods: line.costOfGoods,
-          ),
+      for (final (line, left) in _leftToBill(order))
+        ReceiptLine(
+          id: _uid(),
+          itemId: line.itemId,
+          itemName: line.itemName,
+          sku: byId(line.itemId)?.sku ?? '',
+          unit: byId(line.itemId)?.unit ?? 'pcs',
+          quantity: left,
+          unitPrice: line.unitPrice,
+        ),
     ];
+  }
+
+  /// Each order line with what is still to be billed on it: ordered, less
+  /// what live receipts and invoices for the sale already cover. A receipt
+  /// for a payment on one of those invoices is not counted again.
+  ///
+  /// Billing is what takes the goods off the shelf, so this is also what is
+  /// still to be delivered.
+  List<(SalesOrderLine, int)> _leftToBill(SalesOrder order) {
+    final billed = billedOnSalesOrder(order.id);
+    final out = <(SalesOrderLine, int)>[];
+    for (final line in order.lines) {
+      final already = billed[line.itemId] ?? 0;
+      // Billed quantities fill the earliest line for the item first.
+      final take = already < line.quantityOrdered
+          ? already
+          : line.quantityOrdered;
+      billed[line.itemId] = already - take;
+      final left = line.quantityOrdered - take;
+      if (left > 0) out.add((line, left));
+    }
+    return out;
+  }
+
+  /// Each order line with what is still to be billed on it.
+  List<(SalesOrderLine, int)> leftToBillOn(SalesOrder order) =>
+      _leftToBill(order);
+
+  /// The stock movements a sale caused, oldest first: its old despatches,
+  /// and what its receipts and invoices took or gave back. Only as far back
+  /// as the movements this device has loaded.
+  List<Movement> stockTakenBySale(String salesOrderId) {
+    final documents = {
+      salesOrderId,
+      for (final r in _receipts)
+        if (r.salesOrderId == salesOrderId) r.id,
+      for (final i in _invoices)
+        if (i.salesOrderId == salesOrderId) i.id,
+    };
+    final found = [
+      for (final m in _movements)
+        if (m.documentId != null && documents.contains(m.documentId)) m,
+    ]..sort((a, b) => a.at.compareTo(b.at));
+    return found;
+  }
+
+  /// Quantities already billed against a sale, per item.
+  Map<String, int> billedOnSalesOrder(String salesOrderId) {
+    final billed = <String, int>{};
+    for (final r in _receipts) {
+      if (r.salesOrderId != salesOrderId || r.invoiceId != null) continue;
+      if (!r.status.countsAsSale) continue;
+      for (final line in r.lines) {
+        billed[line.itemId] = (billed[line.itemId] ?? 0) + line.quantity;
+      }
+    }
+    for (final i in _invoices) {
+      if (i.salesOrderId != salesOrderId || !i.status.countsAsSale) continue;
+      for (final line in i.lines) {
+        billed[line.itemId] = (billed[line.itemId] ?? 0) + line.quantity;
+      }
+    }
+    return billed;
+  }
+
+  /// Units a sale's old despatch sent that no receipt or invoice has billed
+  /// yet, per item. They are already off the shelf, so billing them needs no
+  /// stock.
+  Map<String, int> sentNotBilled(SalesOrder order) {
+    final billed = billedOnSalesOrder(order.id);
+    final sent = <String, int>{};
+    for (final line in order.lines) {
+      sent[line.itemId] = (sent[line.itemId] ?? 0) + line.quantityFulfilled;
+    }
+    return {
+      for (final e in sent.entries)
+        if (e.value - (billed[e.key] ?? 0) > 0)
+          e.key: e.value - (billed[e.key] ?? 0),
+    };
+  }
+
+  /// Re-reads one sales order after a document changed what it has
+  /// delivered: its sent counts and status are the server's to set.
+  Future<void> _refreshSalesOrder(String id) async {
+    try {
+      final fresh = await _api.salesOrder(id);
+      _salesOrders = _salesOrders.map((o) => o.id == id ? fresh : o).toList();
+    } catch (error) {
+      debugPrint('Stockpile: could not refresh sales order $id: $error');
+    }
   }
 
   /// Issues a receipt.
@@ -1978,6 +2362,66 @@ class InventoryController extends ChangeNotifier {
   List<Invoice> invoicesForSalesOrder(String salesOrderId) =>
       _invoices.where((i) => i.salesOrderId == salesOrderId).toList();
 
+  /// Where a sale stands for money, from the receipts and invoices raised
+  /// against it. A sales order holds no money itself: "paid now" is a receipt,
+  /// "pay later" an invoice whose payments each become a receipt.
+  ///
+  /// [paid] counts receipts only. An invoice payment is a receipt carrying
+  /// both the invoice and the order, so adding the invoice's own amountPaid
+  /// as well would count that money twice.
+  ({double paid, double owed, double unbilled, Invoice? collectable})
+  paymentsForSalesOrder(String salesOrderId) {
+    final order = salesOrderById(salesOrderId);
+    final receipts = receiptsForSalesOrder(
+      salesOrderId,
+    ).where((r) => r.status.countsAsSale).toList();
+    final invoices = invoicesForSalesOrder(
+      salesOrderId,
+    ).where((i) => i.status.countsAsSale).toList();
+
+    var paid = 0.0;
+    var owed = 0.0;
+    for (final r in receipts) {
+      if (r.invoiceId != null) {
+        paid += r.amountPaid;
+      } else {
+        // A counter sale: what it came to after refunds, capped at what was
+        // handed over, so change given back is not counted as income.
+        paid += r.amountPaid < r.netTotal ? r.amountPaid : r.netTotal;
+        owed += r.balanceDue;
+      }
+    }
+    for (final i in invoices) {
+      owed += i.balanceDue;
+    }
+
+    // What is still to be billed (and so still to be delivered), at the rate
+    // a receipt or invoice from it charges.
+    final leftValue = order == null
+        ? 0.0
+        : _leftToBill(
+            order,
+          ).fold(0.0, (sum, entry) => sum + entry.$2 * entry.$1.unitPrice);
+    final unbilled = order?.status == SalesStatus.cancelled
+        ? 0.0
+        : leftValue * (1 + _settings.taxRate.clamp(0, 1));
+
+    Invoice? collectable;
+    for (final i in invoices) {
+      if (i.status.isCollectable && i.balanceDue > 0) {
+        collectable = i;
+        break;
+      }
+    }
+
+    return (
+      paid: paid,
+      owed: owed,
+      unbilled: unbilled > 0.005 ? unbilled : 0,
+      collectable: collectable,
+    );
+  }
+
   /// Invoices still owed money, soonest due first. What the business is
   /// waiting to be paid.
   List<Invoice> get openInvoices {
@@ -2021,18 +2465,16 @@ class InventoryController extends ChangeNotifier {
   /// have actually gone out.
   List<InvoiceLine> invoiceLinesForSalesOrder(SalesOrder order) {
     return [
-      for (final line in order.lines)
-        if (line.quantityFulfilled > 0)
-          InvoiceLine(
-            id: _uid(),
-            itemId: line.itemId,
-            itemName: line.itemName,
-            sku: byId(line.itemId)?.sku ?? '',
-            unit: byId(line.itemId)?.unit ?? 'pcs',
-            quantity: line.quantityFulfilled,
-            unitPrice: line.unitPrice,
-            costOfGoods: line.costOfGoods,
-          ),
+      for (final (line, left) in _leftToBill(order))
+        InvoiceLine(
+          id: _uid(),
+          itemId: line.itemId,
+          itemName: line.itemName,
+          sku: byId(line.itemId)?.sku ?? '',
+          unit: byId(line.itemId)?.unit ?? 'pcs',
+          quantity: left,
+          unitPrice: line.unitPrice,
+        ),
     ];
   }
 
@@ -2153,7 +2595,14 @@ class InventoryController extends ChangeNotifier {
       // The stock and the movements are the server's answer too: a
       // cancellation that moved stock changed counts this device now has to
       // re-read rather than recalculate.
-      if (invoice.movesStock) await _refreshStockView();
+      // Also when it bills a cancelled sale: the server then returns that
+      // sale's stock too, if it was never put back.
+      final order = invoice.salesOrderId == null
+          ? null
+          : salesOrderById(invoice.salesOrderId!);
+      if (invoice.movesStock || order?.status == SalesStatus.cancelled) {
+        await _refreshStockView();
+      }
       lastWriteError = null;
       notifyListeners();
       return true;
@@ -2584,6 +3033,9 @@ class InventoryController extends ChangeNotifier {
         // wrote it to the server and nothing read it back, so it survived
         // until the next load and then was simply gone.
         'companyLogo': next.companyLogo,
+        'bankName': next.bankName,
+        'accountName': next.accountName,
+        'accountNumber': next.accountNumber,
       });
       // Reported, not printed. The categories, locations and units live here
       // as well as on their own screens, and a caller that is told nothing
@@ -2751,10 +3203,99 @@ class InventoryController extends ChangeNotifier {
   /// failed write must not block or crash the interaction. The error is kept
   /// so a screen can surface it.
   void _persist(Future<void> Function() write) {
-    write().then((_) => lastWriteError = null).catchError((Object error) {
-      lastWriteError = error;
-      debugPrint('Stockpile: database write failed: $error');
-    });
+    _writesInFlight++;
+    write()
+        .then((_) => lastWriteError = null)
+        .catchError((Object error) {
+          lastWriteError = error;
+          debugPrint('Stockpile: database write failed: $error');
+        })
+        .whenComplete(() => _writesInFlight--);
+  }
+
+  // --- Keeping up with other devices ---------------------------------------
+
+  /// Saves sent but not yet answered. A refresh waits for them, so it cannot
+  /// replace an edit with the copy from before it.
+  int _writesInFlight = 0;
+
+  /// Bumped on every change this controller announces. A refresh that sees it
+  /// move while it was fetching throws its answer away: something changed
+  /// here in the meantime, and the fetched copy may predate it.
+  int _changeEpoch = 0;
+
+  bool _refreshing = false;
+
+  /// When the last background refresh landed.
+  DateTime? lastRefreshedAt;
+
+  @override
+  void notifyListeners() {
+    _changeEpoch++;
+    super.notifyListeners();
+  }
+
+  /// Re-reads what other people may have changed: items, stock by bin,
+  /// movements, customers, suppliers, and every document list already opened.
+  ///
+  /// Quiet: nothing is blanked while it runs, and a failure keeps what is on
+  /// screen. Skipped while a save is in flight or another refresh is running.
+  /// Settings are left alone, so a form being typed into is not reset.
+  Future<void> refreshFromServer() async {
+    if (load != InventoryLoad.ready || _refreshing || _writesInFlight > 0) {
+      return;
+    }
+    _refreshing = true;
+    final startedAt = _changeEpoch;
+    try {
+      final kinds = _loadedDocuments.toSet();
+      final core = await Future.wait([
+        _api.allItems(),
+        _api.movements(limit: maxMovements),
+        _api.allStock(),
+        _api.suppliers(),
+        _api.customers(),
+      ]);
+      final docs = <DocumentSet, List<Object>>{};
+      for (final kind in kinds) {
+        docs[kind] = switch (kind) {
+          DocumentSet.invoices => await _api.invoices(),
+          DocumentSet.receipts => await _api.receipts(),
+          DocumentSet.purchaseOrders => await _api.purchaseOrders(),
+          DocumentSet.salesOrders => await _api.salesOrders(),
+          DocumentSet.transfers => await _api.transfers(),
+        };
+      }
+
+      if (_changeEpoch != startedAt || _writesInFlight > 0) return;
+
+      final page = core[0] as ({List<Item> items, int total});
+      _items = page.items;
+      _movements = (core[1] as List).cast();
+      _levels = Map.of((core[2] as Map).cast<String, Map<String, int>>());
+      _suppliers = (core[3] as List).cast();
+      _customers = (core[4] as List).cast();
+      for (final entry in docs.entries) {
+        switch (entry.key) {
+          case DocumentSet.invoices:
+            _invoices = entry.value.cast();
+          case DocumentSet.receipts:
+            _receipts = entry.value.cast();
+          case DocumentSet.purchaseOrders:
+            _purchaseOrders = entry.value.cast();
+          case DocumentSet.salesOrders:
+            _salesOrders = entry.value.cast();
+          case DocumentSet.transfers:
+            _transfers = entry.value.cast();
+        }
+      }
+      lastRefreshedAt = DateTime.now();
+      notifyListeners();
+    } catch (error) {
+      debugPrint('Stockpile: background refresh failed: $error');
+    } finally {
+      _refreshing = false;
+    }
   }
 
   String _uid() => _ids.next();

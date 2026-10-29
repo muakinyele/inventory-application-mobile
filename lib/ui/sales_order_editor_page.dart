@@ -88,6 +88,21 @@ class _SalesOrderEditorPageState extends State<SalesOrderEditorPage> {
     }
 
     final existing = _existing;
+
+    // A new order, or a draft, cannot promise stock that is not there. The
+    // server refuses it too; checked here so the reason comes before saving.
+    if (existing == null || existing.status == SalesStatus.draft) {
+      final short = controller.outOfStockReasons(lines);
+      if (short.isNotEmpty) {
+        await _notify(
+          'This order asks for more than is in stock. ${short.join('; ')}. '
+          'Lower the quantities or restock first.',
+          tone: MessageTone.failure,
+        );
+        return;
+      }
+    }
+
     final id = existing == null
         ? (await controller.createSalesOrder(
             customerId: _customerId,
@@ -109,9 +124,28 @@ class _SalesOrderEditorPageState extends State<SalesOrderEditorPage> {
       );
     }
 
-    if (confirm) controller.confirmSalesOrder(id);
+    if (id.isEmpty) {
+      // The server refused it; nothing was saved.
+      final reason = controller.reasonFor(
+        controller.lastWriteError,
+        'The sale could not be saved.',
+      );
+      // Said here with its reason, so the "not saved" banner is not left up.
+      controller.clearWriteError();
+      await _notify(reason, tone: MessageTone.failure);
+      return;
+    }
+
+    final refused = confirm ? await controller.confirmSalesOrder(id) : null;
+    if (refused != null) controller.clearWriteError();
+    if (!mounted) return;
     // Awaited: routing away takes the dialog down with the page it sits on.
-    await _notify(confirm ? 'Sale confirmed' : 'Draft saved');
+    await _notify(
+      refused != null
+          ? 'Saved as a draft, not confirmed. $refused'
+          : (confirm ? 'Sale confirmed' : 'Draft saved'),
+      tone: refused != null ? MessageTone.warning : MessageTone.success,
+    );
     if (!mounted) return;
     context.go('/sales-orders/$id');
   }
@@ -182,7 +216,8 @@ class _SalesOrderEditorPageState extends State<SalesOrderEditorPage> {
               title: _existing == null
                   ? 'New Sale'
                   : 'Edit ${_existing!.reference}',
-              subtitle: 'Nothing leaves stock until the sale is sent',
+              subtitle:
+                  'Nothing leaves stock until it is receipted or invoiced',
               showBack: true,
             ),
             SectionCard(
@@ -405,9 +440,17 @@ class _LineEditor extends StatelessWidget {
           initialValue: picked == null ? null : line.itemId,
           isExpanded: true,
           decoration: const InputDecoration(labelText: 'Item', isDense: true),
+          // Each item with what is in stock now, so the seller sees what can
+          // be sold before picking it. An item with none cannot be picked: a
+          // new order may not promise stock that is not there. One already on
+          // this line stays selectable, so an existing draft still shows it.
           items: [
             for (final item in items)
-              DropdownMenuItem(value: item.id, child: Text(item.name)),
+              DropdownMenuItem(
+                value: item.id,
+                enabled: item.quantity > 0 || item.id == line.itemId,
+                child: _ItemWithStock(item: item),
+              ),
           ],
           onChanged: (value) {
             line.itemId = value;
@@ -432,7 +475,14 @@ class _LineEditor extends StatelessWidget {
             isDense: true,
             helperText: switch ((line.fulfilled > 0, short)) {
               (true, _) => '${number(line.fulfilled)} already sent',
-              (false, true) => 'Only ${number(picked!.quantity)} in stock',
+              (false, true) =>
+                picked!.quantity <= 0
+                    ? 'Out of stock'
+                    : 'Only ${number(picked.quantity)} in stock',
+              // What this line leaves on the shelf once it is billed.
+              _ when picked != null =>
+                '${number(picked.quantity)} in stock · '
+                    '${number(picked.quantity - line.quantity)} left',
               _ => null,
             },
             helperStyle: short
@@ -519,6 +569,43 @@ class _LineEditor extends StatelessWidget {
           ],
         );
       },
+    );
+  }
+}
+
+/// An item as the picker lists it: its name, and what is in stock now in its
+/// own unit, or "Out of stock" in red.
+class _ItemWithStock extends StatelessWidget {
+  const _ItemWithStock({required this.item});
+
+  final Item item;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    final none = item.quantity <= 0;
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            item.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(color: none ? p.inkMuted : null),
+          ),
+        ),
+        const SizedBox(width: Insets.sm),
+        Text(
+          none
+              ? 'Out of stock'
+              : '${number(item.quantity)} ${item.unit} in stock',
+          style: TextStyle(
+            fontSize: 12.5,
+            fontWeight: FontWeight.w600,
+            color: none ? p.critical : p.inkSecondary,
+          ),
+        ),
+      ],
     );
   }
 }

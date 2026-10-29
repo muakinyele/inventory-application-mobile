@@ -33,6 +33,61 @@ const double logoMaxHeight = 46;
 const double logoMaxWidth = 170;
 
 /// The letterhead logo block, or an empty box when there is no logo.
+/// Where to pay, from Settings → Payment details, for an invoice or a sales
+/// order. Empty when no account number is set.
+pw.Widget bankDetailsBlock(AppSettings settings, pw.Font semiBold) {
+  if (!settings.hasBankDetails) return pw.SizedBox.shrink();
+  pw.Widget row(String label, String value) => pw.Padding(
+    padding: const pw.EdgeInsets.only(top: 2),
+    child: pw.Row(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: [
+        pw.SizedBox(
+          width: 86,
+          child: pw.Text(
+            label,
+            style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700),
+          ),
+        ),
+        pw.Expanded(
+          child: pw.Text(
+            value,
+            style: pw.TextStyle(font: semiBold, fontSize: 9.5),
+          ),
+        ),
+      ],
+    ),
+  );
+  return pw.Container(
+    width: double.infinity,
+    padding: const pw.EdgeInsets.all(10),
+    margin: const pw.EdgeInsets.only(bottom: 8),
+    decoration: pw.BoxDecoration(
+      border: pw.Border.all(color: PdfColors.grey300),
+      borderRadius: pw.BorderRadius.circular(6),
+    ),
+    child: pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: [
+        pw.Text(
+          'PAY INTO',
+          style: pw.TextStyle(
+            font: semiBold,
+            fontSize: 7.5,
+            color: PdfColors.grey600,
+          ),
+        ),
+        pw.SizedBox(height: 3),
+        if (settings.bankName.trim().isNotEmpty)
+          row('Bank', settings.bankName.trim()),
+        if (settings.accountName.trim().isNotEmpty)
+          row('Account name', settings.accountName.trim()),
+        row('Account number', settings.accountNumber.trim()),
+      ],
+    ),
+  );
+}
+
 pw.Widget companyLogoBlock(AppSettings settings) {
   final image = companyLogoImage(settings);
   if (image == null) return pw.SizedBox.shrink();

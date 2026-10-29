@@ -9,6 +9,7 @@ import '../data/export_service.dart';
 import '../data/invoice_document.dart';
 import '../models/invoice.dart';
 import '../models/receipt.dart';
+import '../models/sales_order.dart';
 import '../state/inventory_controller.dart';
 import 'document_view_page.dart';
 import 'widgets/app_message.dart';
@@ -20,9 +21,17 @@ import 'widgets/section_card.dart';
 import 'widgets/status_pill.dart';
 
 class InvoiceDetailPage extends StatefulWidget {
-  const InvoiceDetailPage({super.key, required this.invoiceId});
+  const InvoiceDetailPage({
+    super.key,
+    required this.invoiceId,
+    this.openPayment = false,
+  });
 
   final String invoiceId;
+
+  /// Opens "Record payment" as soon as the page shows. Set by `?pay=1`, which
+  /// is how a sales order's "Record payment" lands here in one tap.
+  final bool openPayment;
 
   @override
   State<InvoiceDetailPage> createState() => _InvoiceDetailPageState();
@@ -30,6 +39,22 @@ class InvoiceDetailPage extends StatefulWidget {
 
 class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
   bool _exporting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!widget.openPayment) return;
+    // After the first frame, so the dialog opens over the page rather than
+    // during its build.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final controller = context.read<InventoryController>();
+      final invoice = controller.invoiceById(widget.invoiceId);
+      if (invoice != null && invoice.status.isCollectable) {
+        _takePayment(controller, invoice);
+      }
+    });
+  }
 
   Future<void> _notify(
     String message, {
@@ -114,7 +139,9 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
                       ? null
                       : () => _share(invoice, payments),
                   icon: const Icon(Icons.ios_share_rounded, size: 18),
-                  label: const Text('Send'),
+                  // "Share", like the sales order: this hands the document to
+                  // another app or a message, it does not send anything itself.
+                  label: const Text('Share'),
                 ),
               ],
             ),
@@ -127,6 +154,40 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
                     : invoice.cancelledReason,
                 tone: p.critical,
                 wash: p.criticalWash,
+              ),
+              const SizedBox(height: Insets.lg),
+            ] else if (_billsCancelledSale(controller, invoice)) ...[
+              _Banner(
+                icon: Icons.warning_amber_rounded,
+                title: 'The sale this invoice bills was cancelled',
+                body: invoice.amountPaid > 0
+                    ? 'It has a payment against it. Refund the payment, then '
+                          'cancel this invoice.'
+                    : 'Cancel this invoice to close it out. Any stock the sale '
+                          'still has out goes back on the shelf.',
+                tone: p.warning,
+                wash: p.warningWash,
+              ),
+              const SizedBox(height: Insets.lg),
+            ] else if (controller.unreceiptedPayment(invoice.id) > 0) ...[
+              _Banner(
+                icon: Icons.receipt_long_outlined,
+                title: 'A payment has no receipt',
+                body:
+                    '${money(controller.unreceiptedPayment(invoice.id), currency)} '
+                    'is recorded on this invoice but no receipt was issued for '
+                    'it. Issue it now; no new payment is taken.',
+                tone: p.warning,
+                wash: p.warningWash,
+              ),
+              const SizedBox(height: Insets.sm),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: FilledButton.icon(
+                  onPressed: () => _issueMissingReceipt(controller, invoice),
+                  icon: const Icon(Icons.receipt_rounded, size: 18),
+                  label: const Text('Issue the missing receipt'),
+                ),
               ),
               const SizedBox(height: Insets.lg),
             ] else if (invoice.isOverdue) ...[
@@ -378,6 +439,11 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
         'Balance due: ${money(invoice.balanceDue, settings.currency)}'
       else
         'Settled in full — thank you.',
+      if (invoice.balanceDue > 0 && settings.hasBankDetails) ...[
+        '',
+        'Pay into:',
+        ...settings.bankLines,
+      ],
       if (settings.companyPhone.isNotEmpty) '',
       if (settings.companyPhone.isNotEmpty)
         'Questions? ${settings.companyPhone}',
@@ -507,10 +573,51 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
     );
     if (!mounted) return;
     if (receipt == null) {
-      _notify('That payment could not be recorded.', tone: MessageTone.failure);
+      final reason = controller.reasonFor(controller.lastWriteError, '');
+      controller.clearWriteError();
+      // The money goes on the invoice first, then the receipt is written. If
+      // only the receipt failed, saying the payment was not recorded would be
+      // wrong — the invoice already shows it paid.
+      final unreceipted = controller.unreceiptedPayment(invoice.id);
+      _notify(
+        unreceipted > 0
+            ? 'The payment of ${money(unreceipted, currency)} was recorded on '
+                  '${invoice.reference}, but its receipt could not be issued'
+                  '${reason.isEmpty ? '' : ': $reason'}. Use "Issue the '
+                  'missing receipt" on this page.'
+            : 'That payment could not be recorded'
+                  '${reason.isEmpty ? '.' : ': $reason'}',
+        tone: MessageTone.failure,
+      );
       return;
     }
     _notify('${receipt.reference} issued for ${money(amount, currency)}');
+  }
+
+  Future<void> _issueMissingReceipt(
+    InventoryController controller,
+    Invoice invoice,
+  ) async {
+    final currency = controller.settings.currency;
+    final gap = controller.unreceiptedPayment(invoice.id);
+    final receipt = await controller.issueMissingPaymentReceipt(invoice.id);
+    if (!mounted) return;
+    if (receipt == null) {
+      final reason = controller.reasonFor(
+        controller.lastWriteError,
+        'The receipt could not be issued.',
+      );
+      controller.clearWriteError();
+      _notify(reason, tone: MessageTone.failure);
+      return;
+    }
+    _notify('${receipt.reference} issued for ${money(gap, currency)}');
+  }
+
+  bool _billsCancelledSale(InventoryController controller, Invoice invoice) {
+    final orderId = invoice.salesOrderId;
+    if (orderId == null) return false;
+    return controller.salesOrderById(orderId)?.status == SalesStatus.cancelled;
   }
 
   Future<void> _cancel(InventoryController controller, Invoice invoice) async {
@@ -568,6 +675,8 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
     // reporting success before the request has been answered is what made the
     // old version look like it worked.
     final done = await controller.cancelInvoice(invoice.id, reason: text);
+    // A refusal is reported just below; nothing was left half-saved.
+    if (!done) controller.clearWriteError();
     if (mounted) {
       _notify(
         done

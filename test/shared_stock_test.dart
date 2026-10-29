@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart' hide Durations;
@@ -36,6 +37,20 @@ class _Server {
 
   /// What the fake server has recorded against the one invoice it knows about.
   double invoicePaid = 0;
+
+  /// What the one sales order has sent, so cancelling it can put that back.
+  int despatched = 0;
+
+  /// When set, item reads wait for it, so a test can change something
+  /// locally while a refresh is still fetching.
+  Completer<void>? holdItems;
+
+  /// Stock a sale cancelled the old way still has out.
+  int legacyOut = 0;
+
+  /// Makes the next sales order cancel refuse, as the server does when the
+  /// sale has been paid for.
+  bool refuseCancel = false;
 
   /// Whether the erase actually reached the server.
   bool erased = false;
@@ -226,6 +241,7 @@ class _Server {
       // have: only what is actually there can go.
       final went = asked > quantity ? quantity : asked;
       quantity -= went;
+      despatched += went;
       return _ok({
         'salesOrder': {
           'id': 'so-server-1',
@@ -246,6 +262,125 @@ class _Server {
           'createdAt': '2026-09-15T10:00:00.000Z',
           'updatedAt': '2026-09-15T10:05:00.000Z',
         },
+      });
+    }
+
+    // Repairs for sales cancelled the old way: stock still out.
+    if (route == 'GET /api/documents/repairs/cancelled-sales') {
+      return _ok({
+        'issues': [
+          if (legacyOut > 0)
+            {
+              'salesOrderId': 'so-server-1',
+              'salesOrderReference': 'SO-0021',
+              'customerName': 'A customer',
+              'stockOut': [
+                {'itemId': 'i1', 'itemName': 'Widget', 'quantity': legacyOut},
+              ],
+              'liveInvoices': [
+                {
+                  'id': 'inv-server-1',
+                  'reference': 'INV-0042',
+                  'amountPaid': 0,
+                },
+              ],
+              'paidBy': <Object?>[],
+              'fixable': true,
+            },
+        ],
+      });
+    }
+    if (route == 'POST /api/documents/repairs/cancelled-sales/so-server-1') {
+      quantity += legacyOut;
+      legacyOut = 0;
+      return _ok({
+        'salesOrder': {
+          'id': 'so-server-1',
+          'reference': 'SO-0021',
+          'status': 'cancelled',
+          'lines': <Object?>[],
+          'createdAt': '2026-09-15T10:00:00.000Z',
+          'updatedAt': '2026-09-15T10:10:00.000Z',
+        },
+        'invoices': [
+          {
+            'id': 'inv-server-1',
+            'reference': 'INV-0042',
+            'salesOrderId': 'so-server-1',
+            'status': 'cancelled',
+            'movesStock': false,
+            'lines': <Object?>[],
+            'issuedAt': '2026-09-15T10:00:00.000Z',
+            'createdAt': '2026-09-15T10:00:00.000Z',
+            'updatedAt': '2026-09-15T10:10:00.000Z',
+          },
+        ],
+      });
+    }
+    if (route == 'POST /api/documents/repairs/cancelled-sales') {
+      final fixed = legacyOut > 0;
+      quantity += legacyOut;
+      legacyOut = 0;
+      return _ok({
+        'repaired': [if (fixed) 'SO-0021'],
+        'skipped': [
+          {'reference': 'SO-0099', 'reason': 'Paid against (INV-0100).'},
+        ],
+      });
+    }
+
+    if (route.startsWith('POST /api/documents/sales-orders/') &&
+        route.endsWith('/cancel')) {
+      if (refuseCancel) {
+        return http.Response(
+          jsonEncode({
+            'error': {
+              'code': 'bad_request',
+              'message': 'Order SO-0021 has been paid against.',
+            },
+          }),
+          400,
+          headers: {'content-type': 'application/json'},
+        );
+      }
+      // Cancelling puts back what the order sent, and cancels the unpaid
+      // invoice billing it.
+      quantity += despatched;
+      final sent = despatched;
+      despatched = 0;
+      return _ok({
+        'salesOrder': {
+          'id': 'so-server-1',
+          'reference': 'SO-0021',
+          'status': 'cancelled',
+          'lines': [
+            {
+              'id': 'so-line-1',
+              'itemId': 'i1',
+              'itemName': 'Widget',
+              'quantityOrdered': 20,
+              'quantityFulfilled': sent,
+              'unitPrice': 4.0,
+              'costOfGoods': 0.0,
+              'position': 0,
+            },
+          ],
+          'createdAt': '2026-09-15T10:00:00.000Z',
+          'updatedAt': '2026-09-15T10:10:00.000Z',
+        },
+        'invoices': [
+          {
+            'id': 'inv-server-1',
+            'reference': 'INV-0042',
+            'salesOrderId': 'so-server-1',
+            'status': 'cancelled',
+            'movesStock': false,
+            'lines': <Object?>[],
+            'issuedAt': '2026-09-15T10:00:00.000Z',
+            'createdAt': '2026-09-15T10:00:00.000Z',
+            'updatedAt': '2026-09-15T10:10:00.000Z',
+          },
+        ],
       });
     }
 
@@ -380,6 +515,8 @@ class _Server {
     }
 
     if (route == 'GET /api/inventory/items') {
+      final hold = holdItems;
+      if (hold != null) await hold.future;
       // After an erase the server has nothing, and a reload has to see that.
       if (erased) return _ok({'items': <Object?>[], 'total': 0});
       return _ok({
@@ -1140,14 +1277,9 @@ void main() {
       expect(controller.invoiceById(invoice.id)!.status, InvoiceStatus.paid);
     });
 
-    test('a status change reaches the server', () async {
-      // Confirming, cancelling and closing all go through one helper. While it
-      // wrote only to the device, the change looked right until the next load
-      // and was never true for anybody else.
-      //
-      // Cancelling is the one used here because it has no precondition on the
-      // current status, so the test is about the write-through rather than
-      // about which transitions are legal.
+    test('a cancel reaches the server', () async {
+      // While it wrote only to the device, the change looked right until the
+      // next load and was never true for anybody else.
       final server = _Server();
       final controller = await _controller(server);
 
@@ -1164,15 +1296,194 @@ void main() {
       );
       server.calls.clear();
 
-      controller.cancelSalesOrder(order.id);
-      await Future<void>.delayed(Duration.zero);
+      final refused = await controller.cancelSalesOrder(order.id);
+
+      expect(refused, isNull);
+      expect(
+        server.calls,
+        contains('POST /api/documents/sales-orders/so-server-1/cancel'),
+      );
+      expect(
+        controller.salesOrderById(order.id)!.status,
+        SalesStatus.cancelled,
+      );
+    });
+
+    test('cancelling a sent sale puts its stock back', () async {
+      final server = _Server()..quantity = 30;
+      final controller = await _controller(server);
+
+      final order = await controller.createSalesOrder(
+        lines: const [
+          SalesOrderLine(
+            id: '',
+            itemId: 'i1',
+            itemName: 'Widget',
+            quantityOrdered: 20,
+            unitPrice: 4,
+          ),
+        ],
+      );
+      await controller.fulfilSalesOrder(order.id, {'so-line-1': 20});
+      expect(controller.byId('i1')!.quantity, 10);
+      expect(
+        controller.salesOrderById(order.id)!.status,
+        SalesStatus.fulfilled,
+      );
+
+      final refused = await controller.cancelSalesOrder(order.id);
+
+      expect(refused, isNull);
+      expect(controller.byId('i1')!.quantity, 30, reason: 'stock re-read');
+      expect(
+        controller.salesOrderById(order.id)!.status,
+        SalesStatus.cancelled,
+      );
+    });
+
+    test('a refused cancel says why and changes nothing', () async {
+      final server = _Server();
+      final controller = await _controller(server);
+
+      final order = await controller.createSalesOrder(
+        lines: const [
+          SalesOrderLine(
+            id: '',
+            itemId: 'i1',
+            itemName: 'Widget',
+            quantityOrdered: 2,
+            unitPrice: 4,
+          ),
+        ],
+      );
+      server.refuseCancel = true;
+
+      final refused = await controller.cancelSalesOrder(order.id);
+
+      expect(refused, contains('paid against'));
+      expect(
+        controller.salesOrderById(order.id)!.status,
+        isNot(SalesStatus.cancelled),
+      );
+    });
+
+    test('the scan reads what the server found', () async {
+      final server = _Server()..legacyOut = 3;
+      final controller = await _controller(server);
+
+      final issues = await controller.scanCancelledSales();
+
+      expect(issues.length, 1);
+      expect(issues[0].salesOrderReference, 'SO-0021');
+      expect(issues[0].unitsOut, 3);
+      expect(issues[0].liveInvoices.single.reference, 'INV-0042');
+      expect(issues[0].fixable, isTrue);
+      expect(controller.byId('i1')!.quantity, 10, reason: 'read-only');
+    });
+
+    test('repairing a sale re-reads the stock it put back', () async {
+      final server = _Server()..legacyOut = 3;
+      final controller = await _controller(server);
+
+      final refused = await controller.repairCancelledSale('so-server-1');
+
+      expect(refused, isNull);
+      expect(controller.byId('i1')!.quantity, 13);
+      expect(
+        server.calls,
+        contains('POST /api/documents/repairs/cancelled-sales/so-server-1'),
+      );
+    });
+
+    test('repair all reports what it fixed and what it left', () async {
+      final server = _Server()..legacyOut = 2;
+      final controller = await _controller(server);
+
+      final result = await controller.repairAllCancelledSales();
+
+      expect(result.repaired, ['SO-0021']);
+      expect(result.skipped.single.reference, 'SO-0099');
+      expect(controller.byId('i1')!.quantity, 12);
+    });
+
+    test('a background refresh picks up a change made elsewhere', () async {
+      final server = _Server();
+      final controller = await _controller(server);
+      controller.load = InventoryLoad.ready; // as after sign-in
+      expect(controller.byId('i1')!.quantity, 10);
+
+      server.quantity = 25; // another device sold or received stock
+      await controller.refreshFromServer();
+
+      expect(controller.byId('i1')!.quantity, 25);
+      expect(controller.lastRefreshedAt, isNotNull);
+    });
+
+    test('a refresh that overlaps a local change is thrown away', () async {
+      final server = _Server();
+      final controller = await _controller(server);
+      controller.load = InventoryLoad.ready; // as after sign-in
+
+      server
+        ..quantity = 25
+        ..holdItems = Completer<void>();
+      final refreshing = controller.refreshFromServer();
+
+      // A change here while the refresh is still fetching.
+      await controller.updateSettings(
+        controller.settings.copyWith(companyName: 'Changed here'),
+      );
+      server.holdItems!.complete();
+      await refreshing;
+
+      expect(controller.lastRefreshedAt, isNull, reason: 'answer discarded');
+      expect(controller.byId('i1')!.quantity, 10);
+
+      // The next tick catches up.
+      server.holdItems = null;
+      await controller.refreshFromServer();
+      expect(controller.byId('i1')!.quantity, 25);
+    });
+
+    test('billing a sale is what takes its goods', () async {
+      // The sales order is only an order. The receipt for it asks the server
+      // to take the stock, and the order is re-read for its new sent count.
+      final server = _Server();
+      final controller = await _controller(server);
+      final order = await controller.createSalesOrder(
+        lines: const [
+          SalesOrderLine(
+            id: '',
+            itemId: 'i1',
+            itemName: 'Widget',
+            quantityOrdered: 4,
+            unitPrice: 3,
+          ),
+        ],
+      );
+      expect(
+        controller.byId('i1')!.quantity,
+        10,
+        reason: 'ordering moves nothing',
+      );
+      server.calls.clear();
+
+      await controller.issueReceipt(
+        salesOrderId: order.id,
+        amountPaid: 12,
+        lines: controller.receiptLinesForSalesOrder(
+          controller.salesOrderById(order.id)!,
+        ),
+      );
 
       expect(
-        server.calls.any(
-          (c) => c.startsWith('PATCH /api/documents/sales-orders/'),
-        ),
+        server.lastBodyFor['POST /api/documents/receipts']!['movesStock'],
         isTrue,
-        reason: 'the status change was never sent',
+      );
+      expect(controller.byId('i1')!.quantity, 6);
+      expect(
+        server.calls,
+        contains('GET /api/documents/sales-orders/so-server-1'),
       );
     });
 

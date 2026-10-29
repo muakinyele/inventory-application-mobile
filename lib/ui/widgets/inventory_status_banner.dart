@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../data/auth_api.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/design.dart';
@@ -49,9 +51,13 @@ class InventoryStatusBanner extends StatelessWidget {
       return _Strip(
         icon: Icons.cloud_off_rounded,
         tone: context.palette.critical,
+        // With the server's reason where it gave one, so the banner says what
+        // went wrong rather than only that something did.
         message:
-            'The last change could not be saved. What is on screen has not '
-            'reached the server, and will be gone when this page reloads.',
+            'The last change could not be saved'
+            '${controller.lastWriteError is AuthApiException ? ': ${(controller.lastWriteError as AuthApiException).message}' : ''}. '
+            'What is on screen has not reached the server, and will be gone '
+            'when this page reloads.',
         action: (label: 'Dismiss', onPressed: controller.clearWriteError),
       );
     }

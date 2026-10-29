@@ -237,8 +237,13 @@ class ItemDetailPage extends StatelessWidget {
                           MovementTile(
                             movement: m,
                             title: m.note.isEmpty ? 'Updated' : m.note,
+                            // The change and the balance it left, so a sale
+                            // reads as what it took and what remains.
                             subtitle:
-                                '${dateTimeLabel(m.at)} · ${number(m.before)} → ${number(m.after)}',
+                                '${dateTimeLabel(m.at)} · '
+                                '${m.after - m.before > 0 ? '+' : ''}'
+                                '${number(m.after - m.before)} · '
+                                '${number(m.before)} → ${number(m.after)}',
                             showBalance: false,
                           ),
                         ],

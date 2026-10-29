@@ -16,17 +16,21 @@ import 'snapshot.dart';
 /// slowest one. The catalogue is the exception: it pages, because the server
 /// caps a page at 500 and asking once left a larger workspace with a
 /// silently partial list behind every total in the app.
+/// DOCUMENTS ARE NOT FETCHED HERE. Invoices, receipts, purchase orders, sales
+/// orders and transfers used to come down with everything else, which meant
+/// every sign-in paid for five document lists and all of their lines before
+/// the dashboard could draw — and the dashboard reads none of them. A
+/// workspace with a year of trading behind it waited on its whole history to
+/// see today's stock.
+///
+/// They are fetched when a screen first asks, through
+/// `InventoryController.ensureDocuments`.
 Future<Snapshot> loadSharedSnapshot(InventoryApi api) async {
   final results = await Future.wait([
     api.allItems(),
     api.movements(),
     api.suppliers(),
     api.customers(),
-    api.purchaseOrders(),
-    api.salesOrders(),
-    api.receipts(),
-    api.invoices(),
-    api.transfers(),
     api.allStock(),
     api.preferences(),
   ]);
@@ -38,17 +42,17 @@ Future<Snapshot> loadSharedSnapshot(InventoryApi api) async {
     movements: (results[1] as List).cast(),
     suppliers: (results[2] as List).cast(),
     customers: (results[3] as List).cast(),
-    purchaseOrders: (results[4] as List).cast(),
-    salesOrders: (results[5] as List).cast(),
-    receipts: (results[6] as List).cast(),
-    invoices: (results[7] as List).cast(),
-    transfers: (results[8] as List).cast(),
-    levels: (results[9] as Map).cast<String, Map<String, int>>(),
+    purchaseOrders: const [],
+    salesOrders: const [],
+    receipts: const [],
+    invoices: const [],
+    transfers: const [],
+    levels: (results[4] as Map).cast<String, Map<String, int>>(),
     // Sequences are the server's now: it allocates every document reference
     // inside the transaction that writes the document, so a client-side
     // counter would only ever be a stale second opinion.
     sequences: const {},
-    settings: await _settingsFrom(api, results[10] as Map<String, String>),
+    settings: await _settingsFrom(api, results[5] as Map<String, String>),
   );
 }
 
@@ -78,6 +82,9 @@ Future<AppSettings> _settingsFrom(
     receiptFooter: prefs['receiptFooter'] ?? 'Thank you for your custom.',
     // The other half of the same omission: written now, so it has to be read.
     companyLogo: prefs['companyLogo'] ?? '',
+    bankName: prefs['bankName'] ?? '',
+    accountName: prefs['accountName'] ?? '',
+    accountNumber: prefs['accountNumber'] ?? '',
     // Deliberately still per-device: which theme this screen uses is not a
     // property of the workspace, and syncing it would change one person's
     // display because another changed theirs.

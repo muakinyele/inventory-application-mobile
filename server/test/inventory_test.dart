@@ -1643,4 +1643,135 @@ void main() {
       expect(restore.statusCode, 403);
     });
   });
+
+  group('a total with nothing in its locations', () {
+    // A backup from before stock was kept per location: items carry a total,
+    // and there are no location rows.
+    Future<String> restoredWithoutLocations(
+      TestSession s, {
+      int quantity = 5,
+    }) async {
+      final created = await server.post(
+        '/inventory/items',
+        accessToken: s.accessToken,
+        body: {'name': 'Chic Choc', 'quantity': quantity, 'location': 'Main'},
+      );
+      final id = created.json['item']['id'] as String;
+      final backup = await server.get(
+        '/inventory/backup',
+        accessToken: s.accessToken,
+      );
+      final body = backup.json as Map<String, dynamic>;
+      (body['tables'] as Map<String, dynamic>)['stockLevels'] = <Object?>[];
+      final restored = await server.post(
+        '/inventory/restore',
+        accessToken: s.accessToken,
+        body: body,
+      );
+      expect(restored.statusCode, 200);
+      return id;
+    }
+
+    Future<int> quantity(TestSession s, String id) async =>
+        (await server.get(
+              '/inventory/items/$id',
+              accessToken: s.accessToken,
+            )).json['item']['quantity']
+            as int;
+
+    test('restoring gives the total a location', () async {
+      final s = await admin();
+      final id = await restoredWithoutLocations(s);
+
+      final stock = await server.get(
+        '/inventory/items/$id',
+        accessToken: s.accessToken,
+      );
+      final held = (stock.json['stock'] as List).fold<int>(
+        0,
+        (sum, row) => sum + (row['quantity'] as int),
+      );
+      expect(held, 5);
+    });
+
+    test('selling all of it leaves 0, not -5', () async {
+      final s = await admin();
+      final id = await restoredWithoutLocations(s);
+      // As if restored by an older server: locations wiped behind its back.
+      await server.customStatement(
+        "DELETE FROM stock_levels WHERE item_id = '$id'",
+      );
+
+      final sold = await server.post(
+        '/inventory/stock/adjust',
+        accessToken: s.accessToken,
+        body: {'itemId': id, 'delta': -5, 'kind': 'sale', 'location': 'Main'},
+      );
+
+      expect(sold.statusCode, 200);
+      expect(await quantity(s, id), 0);
+    });
+
+    test('selling more than there is is refused, not recorded', () async {
+      final s = await admin();
+      final id = await restoredWithoutLocations(s);
+
+      final sold = await server.post(
+        '/inventory/stock/adjust',
+        accessToken: s.accessToken,
+        body: {'itemId': id, 'delta': -6, 'kind': 'sale'},
+      );
+
+      expect(sold.statusCode, 400);
+      expect(await quantity(s, id), 5);
+    });
+
+    test('an item already driven negative is found and corrected', () async {
+      final s = await admin();
+      final id = await restoredWithoutLocations(s);
+      // The damage as it is on the live data: sold 5 from empty locations
+      // (movement says 5 -> 0, the item reads -5), then cancelled (+5 -> 0).
+      await server.customStatement(
+        "DELETE FROM stock_levels WHERE item_id = '$id'",
+      );
+      await server.customStatement(
+        "INSERT INTO stock_levels (item_id, location, quantity) VALUES "
+        "('$id', 'Main Warehouse', -5), ('$id', 'Unassigned', 5)",
+      );
+      await server.customStatement(
+        "UPDATE items SET quantity = 0 WHERE id = '$id'",
+      );
+      await server.customStatement(
+        "DELETE FROM movements WHERE item_id = '$id'",
+      );
+      await server.customStatement(
+        "INSERT INTO movements (id, item_id, item_name, kind, before, after, at, note, actor) VALUES "
+        "('m1', '$id', 'Chic Choc', 'sale', 5, 0, 1, 'Despatched on SO-0003', 'u'), "
+        "('m2', '$id', 'Chic Choc', 'cancellation', -5, 0, 2, 'Cancelled SO-0003', 'u')",
+      );
+
+      final scan = await server.get(
+        '/inventory/repairs/stock',
+        accessToken: s.accessToken,
+      );
+      expect(scan.json['items'].length, 1);
+      expect(scan.json['items'][0]['current'], 0);
+      expect(scan.json['items'][0]['intended'], 5);
+      expect(await quantity(s, id), 0, reason: 'the scan changes nothing');
+
+      final repair = await server.post(
+        '/inventory/repairs/stock',
+        accessToken: s.accessToken,
+        body: <String, Object?>{},
+      );
+      expect(repair.json['repaired'].length, 1);
+      expect(await quantity(s, id), 5);
+
+      final again = await server.get(
+        '/inventory/repairs/stock',
+        accessToken: s.accessToken,
+      );
+      expect(again.json['items'], isEmpty, reason: 'nothing left negative');
+    });
+  });
 }

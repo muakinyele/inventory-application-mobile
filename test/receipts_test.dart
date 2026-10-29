@@ -25,7 +25,9 @@ ReceiptLine receiptLine(
 
 void main() {
   group('issuing', () {
-    test('a sale with nothing sent has nothing to receipt', () async {
+    test('a confirmed sale offers all it still has to bill', () async {
+      // The order is only an order: nothing has to be sent before it can be
+      // billed, because billing is what takes the goods.
       final c = await newController();
       final item = await c.createItem(draft(quantity: 20));
       final order = await c.createSalesOrder(
@@ -40,7 +42,9 @@ void main() {
         ],
       );
 
-      expect(c.receiptLinesForSalesOrder(c.salesOrderById(order.id)!), isEmpty);
+      final lines = c.receiptLinesForSalesOrder(c.salesOrderById(order.id)!);
+      expect(lines.single.quantity, 6);
+      expect(lines.single.unitPrice, 500);
     });
   });
 

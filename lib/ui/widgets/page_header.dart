@@ -104,7 +104,20 @@ class PageHeader extends StatelessWidget {
               children: [
                 Expanded(child: heading),
                 const SizedBox(width: Insets.lg),
-                Wrap(spacing: Insets.sm, children: actions),
+                // Capped, so a page with many actions wraps them onto a
+                // second line instead of running off the edge. A Wrap with
+                // no width limit never wraps at all.
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: constraints.maxWidth * 0.6,
+                  ),
+                  child: Wrap(
+                    alignment: WrapAlignment.end,
+                    spacing: Insets.sm,
+                    runSpacing: Insets.sm,
+                    children: actions,
+                  ),
+                ),
               ],
             );
           }

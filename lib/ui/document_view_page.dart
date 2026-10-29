@@ -9,6 +9,7 @@ import '../core/design.dart';
 import '../core/palette.dart';
 import '../data/export_service.dart';
 import 'widgets/app_message.dart';
+import 'widgets/browser_pdf_pages.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/page_header.dart';
 
@@ -64,6 +65,10 @@ class _DocumentViewPageState extends State<DocumentViewPage> {
   @override
   void initState() {
     super.initState();
+    // Not asked in a browser: the plugin's browser setup is what hung the
+    // preview (see browser_pdf_pages_web.dart), and printing there is done by
+    // downloading the PDF and printing it from the browser's own viewer.
+    if (rendersPdfInBrowser) return;
     // Printing is a real printer or a system print dialog: present on the
     // phones and desktops, absent in a headless test. Ask before offering it.
     Printing.info()
@@ -117,21 +122,31 @@ class _DocumentViewPageState extends State<DocumentViewPage> {
               ),
             ),
             Expanded(
-              child: PdfPreviewCustom(
-                build: _render,
-                pageFormat: widget.pageFormat,
-                dpi: _dpi(media),
-                maxPageWidth: _maxPageWidth,
-                padding: EdgeInsets.symmetric(horizontal: gutter),
-                previewPageMargin: const EdgeInsets.only(bottom: Insets.lg),
-                scrollViewDecoration: BoxDecoration(color: p.surfaceSunken),
-                pdfPreviewPageDecoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(Radii.control),
-                  border: Border.all(color: p.line),
-                ),
-                onError: (context, error) => _CannotShow(error: error),
-              ),
+              child: rendersPdfInBrowser
+                  ? _BrowserPages(
+                      document: _render(widget.pageFormat),
+                      dpi: _dpi(media),
+                      gutter: gutter,
+                    )
+                  : PdfPreviewCustom(
+                      build: _render,
+                      pageFormat: widget.pageFormat,
+                      dpi: _dpi(media),
+                      maxPageWidth: _maxPageWidth,
+                      padding: EdgeInsets.symmetric(horizontal: gutter),
+                      previewPageMargin: const EdgeInsets.only(
+                        bottom: Insets.lg,
+                      ),
+                      scrollViewDecoration: BoxDecoration(
+                        color: p.surfaceSunken,
+                      ),
+                      pdfPreviewPageDecoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(Radii.control),
+                        border: Border.all(color: p.line),
+                      ),
+                      onError: (context, error) => _CannotShow(error: error),
+                    ),
             ),
           ],
         ),
@@ -193,6 +208,97 @@ class _DocumentViewPageState extends State<DocumentViewPage> {
     } finally {
       if (mounted) setState(() => _sharing = false);
     }
+  }
+}
+
+/// The pages as images, drawn in the browser by the copy of pdf.js the app
+/// serves itself.
+///
+/// Rendered once per document and dpi, and given a time limit: a renderer
+/// that never answered used to leave this page spinning with no way to tell
+/// that anything was wrong.
+class _BrowserPages extends StatefulWidget {
+  const _BrowserPages({
+    required this.document,
+    required this.dpi,
+    required this.gutter,
+  });
+
+  final Future<Uint8List> document;
+  final double dpi;
+  final double gutter;
+
+  @override
+  State<_BrowserPages> createState() => _BrowserPagesState();
+}
+
+class _BrowserPagesState extends State<_BrowserPages> {
+  late Future<List<Uint8List>> _pages = _rasterise();
+
+  Future<List<Uint8List>> _rasterise() async {
+    final bytes = await widget.document;
+    return rasterPdfInBrowser(
+      bytes,
+      dpi: widget.dpi,
+    ).timeout(const Duration(seconds: 30));
+  }
+
+  @override
+  void didUpdateWidget(_BrowserPages old) {
+    super.didUpdateWidget(old);
+    // A window resized enough to want a different sharpness re-renders; a
+    // rebuild for any other reason does not.
+    if ((old.dpi - widget.dpi).abs() > 24 || old.document != widget.document) {
+      _pages = _rasterise();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    return Container(
+      color: p.surfaceSunken,
+      child: FutureBuilder<List<Uint8List>>(
+        future: _pages,
+        builder: (context, snapshot) {
+          if (snapshot.hasError) return _CannotShow(error: snapshot.error!);
+          final pages = snapshot.data;
+          if (pages == null) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          return ListView.builder(
+            padding: EdgeInsets.fromLTRB(
+              widget.gutter,
+              Insets.lg,
+              widget.gutter,
+              Insets.lg,
+            ),
+            itemCount: pages.length,
+            itemBuilder: (context, index) => Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: _maxPageWidth),
+                child: Container(
+                  margin: const EdgeInsets.only(bottom: Insets.lg),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(Radii.control),
+                    border: Border.all(color: p.line),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: Image.memory(
+                    pages[index],
+                    fit: BoxFit.fitWidth,
+                    width: double.infinity,
+                    filterQuality: FilterQuality.medium,
+                    semanticLabel: 'Page ${index + 1} of ${pages.length}',
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
   }
 }
 

@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import 'core/theme.dart';
 import 'models/item.dart';
+import 'data/snapshot.dart';
 import 'state/auth_controller.dart';
 import 'state/inventory_controller.dart';
 import 'ui/account/account_page.dart';
@@ -16,6 +17,7 @@ import 'ui/admin/user_detail_page.dart';
 import 'ui/admin/users_page.dart';
 import 'ui/alerts_page.dart';
 import 'ui/app_shell.dart';
+import 'ui/widgets/document_gate.dart';
 import 'ui/auth/accept_invitation_page.dart';
 import 'ui/auth/forgot_password_page.dart';
 import 'ui/auth/login_page.dart';
@@ -52,6 +54,14 @@ StatefulShellBranch _branch(String path, Widget Function() build) {
     routes: [GoRoute(path: path, builder: (context, state) => build())],
   );
 }
+
+/// A page that reads documents, behind the gate that fetches them.
+///
+/// Declared at the route rather than inside each page, so what a screen costs
+/// to open is visible in one place — and so a page added later cannot forget
+/// to ask and silently render an empty list.
+Widget _withDocuments(Set<DocumentSet> need, Widget page) =>
+    DocumentGate(need: need, builder: (_) => page);
 
 /// Routes reachable without a session (§5).
 ///
@@ -173,7 +183,9 @@ GoRouter createRouter({
           routes: [
             GoRoute(
               path: '/transfers',
-              builder: (context, state) => const TransfersPage(),
+              builder: (context, state) => _withDocuments(const {
+                DocumentSet.transfers,
+              }, const TransfersPage()),
               routes: [
                 GoRoute(
                   path: 'new',
@@ -189,7 +201,9 @@ GoRouter createRouter({
           routes: [
             GoRoute(
               path: '/purchase-orders',
-              builder: (context, state) => const PurchaseOrdersPage(),
+              builder: (context, state) => _withDocuments(const {
+                DocumentSet.purchaseOrders,
+              }, const PurchaseOrdersPage()),
               routes: [
                 GoRoute(
                   path: 'new',
@@ -197,14 +211,20 @@ GoRouter createRouter({
                 ),
                 GoRoute(
                   path: ':id',
-                  builder: (context, state) => PurchaseOrderDetailPage(
-                    orderId: state.pathParameters['id']!,
+                  builder: (context, state) => _withDocuments(
+                    const {DocumentSet.purchaseOrders},
+                    PurchaseOrderDetailPage(
+                      orderId: state.pathParameters['id']!,
+                    ),
                   ),
                   routes: [
                     GoRoute(
                       path: 'edit',
-                      builder: (context, state) => PurchaseOrderEditorPage(
-                        orderId: state.pathParameters['id']!,
+                      builder: (context, state) => _withDocuments(
+                        const {DocumentSet.purchaseOrders},
+                        PurchaseOrderEditorPage(
+                          orderId: state.pathParameters['id']!,
+                        ),
                       ),
                     ),
                   ],
@@ -218,7 +238,9 @@ GoRouter createRouter({
           routes: [
             GoRoute(
               path: '/sales-orders',
-              builder: (context, state) => const SalesOrdersPage(),
+              builder: (context, state) => _withDocuments(const {
+                DocumentSet.salesOrders,
+              }, const SalesOrdersPage()),
               routes: [
                 GoRoute(
                   path: 'new',
@@ -226,14 +248,31 @@ GoRouter createRouter({
                 ),
                 GoRoute(
                   path: ':id',
-                  builder: (context, state) => SalesOrderDetailPage(
-                    orderId: state.pathParameters['id']!,
+                  builder: (context, state) => _withDocuments(
+                    const {
+                      DocumentSet.salesOrders,
+                      DocumentSet.receipts,
+                      DocumentSet.invoices,
+                    },
+                    SalesOrderDetailPage(orderId: state.pathParameters['id']!),
                   ),
                   routes: [
                     GoRoute(
                       path: 'edit',
-                      builder: (context, state) => SalesOrderEditorPage(
-                        orderId: state.pathParameters['id']!,
+                      builder: (context, state) => _withDocuments(
+                        const {DocumentSet.salesOrders},
+                        SalesOrderEditorPage(
+                          orderId: state.pathParameters['id']!,
+                        ),
+                      ),
+                    ),
+                    GoRoute(
+                      path: 'view',
+                      builder: (context, state) => _withDocuments(
+                        const {DocumentSet.salesOrders},
+                        SalesOrderDocumentPage(
+                          orderId: state.pathParameters['id']!,
+                        ),
                       ),
                     ),
                   ],
@@ -246,26 +285,35 @@ GoRouter createRouter({
           routes: [
             GoRoute(
               path: '/receipts',
-              builder: (context, state) => const ReceiptsPage(),
+              builder: (context, state) => _withDocuments(const {
+                DocumentSet.receipts,
+              }, const ReceiptsPage()),
               routes: [
                 GoRoute(
                   path: 'new',
                   // `?sale=` raises the receipt against a sales order rather
                   // than as a counter sale, which fixes its lines to what
                   // that order actually sent.
-                  builder: (context, state) => ReceiptEditorPage(
-                    salesOrderId: state.uri.queryParameters['sale'],
+                  builder: (context, state) => _withDocuments(
+                    const {DocumentSet.salesOrders},
+                    ReceiptEditorPage(
+                      salesOrderId: state.uri.queryParameters['sale'],
+                    ),
                   ),
                 ),
                 GoRoute(
                   path: ':id',
-                  builder: (context, state) =>
-                      ReceiptDetailPage(receiptId: state.pathParameters['id']!),
+                  builder: (context, state) => _withDocuments(const {
+                    DocumentSet.receipts,
+                  }, ReceiptDetailPage(receiptId: state.pathParameters['id']!)),
                   routes: [
                     GoRoute(
                       path: 'view',
-                      builder: (context, state) => ReceiptDocumentPage(
-                        receiptId: state.pathParameters['id']!,
+                      builder: (context, state) => _withDocuments(
+                        const {DocumentSet.receipts},
+                        ReceiptDocumentPage(
+                          receiptId: state.pathParameters['id']!,
+                        ),
                       ),
                     ),
                   ],
@@ -278,26 +326,41 @@ GoRouter createRouter({
           routes: [
             GoRoute(
               path: '/invoices',
-              builder: (context, state) => const InvoicesPage(),
+              builder: (context, state) => _withDocuments(const {
+                DocumentSet.invoices,
+              }, const InvoicesPage()),
               routes: [
                 GoRoute(
                   path: 'new',
                   // `?sale=` bills a sales order rather than raising a
                   // standalone credit sale, which fixes the lines to what
                   // that order actually sent.
-                  builder: (context, state) => InvoiceEditorPage(
-                    salesOrderId: state.uri.queryParameters['sale'],
+                  builder: (context, state) => _withDocuments(
+                    const {DocumentSet.salesOrders},
+                    InvoiceEditorPage(
+                      salesOrderId: state.uri.queryParameters['sale'],
+                    ),
                   ),
                 ),
                 GoRoute(
                   path: ':id',
-                  builder: (context, state) =>
-                      InvoiceDetailPage(invoiceId: state.pathParameters['id']!),
+                  // Sales orders too, to flag an invoice whose sale was
+                  // cancelled.
+                  builder: (context, state) => _withDocuments(
+                    const {DocumentSet.invoices, DocumentSet.salesOrders},
+                    InvoiceDetailPage(
+                      invoiceId: state.pathParameters['id']!,
+                      openPayment: state.uri.queryParameters['pay'] == '1',
+                    ),
+                  ),
                   routes: [
                     GoRoute(
                       path: 'view',
-                      builder: (context, state) => InvoiceDocumentPage(
-                        invoiceId: state.pathParameters['id']!,
+                      builder: (context, state) => _withDocuments(
+                        const {DocumentSet.invoices},
+                        InvoiceDocumentPage(
+                          invoiceId: state.pathParameters['id']!,
+                        ),
                       ),
                     ),
                   ],
@@ -307,7 +370,20 @@ GoRouter createRouter({
           ],
         ),
         _branch('/customers', CustomersPage.new),
-        _branch('/reports', ReportsPage.new),
+        // Reports computes over all three, so it is the one screen that
+        // genuinely needs more than its own list.
+        StatefulShellBranch(
+          routes: [
+            GoRoute(
+              path: '/reports',
+              builder: (context, state) => _withDocuments(const {
+                DocumentSet.receipts,
+                DocumentSet.invoices,
+                DocumentSet.salesOrders,
+              }, const ReportsPage()),
+            ),
+          ],
+        ),
 
         // Administration. These sit at the indices `navItems` gives them, so
         // the sidebar's index-addressed selection keeps working.

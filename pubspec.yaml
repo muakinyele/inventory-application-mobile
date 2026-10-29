@@ -32,6 +32,10 @@ dependencies:
   # system share sheet is still the way a PDF actually travels.
   url_launcher: ^6.3.2
   shared_preferences: ^2.5.5
+  # Saves a file straight to Downloads in the browser. share_plus offers the
+  # system share sheet instead wherever the browser has one (Chrome and Safari
+  # on macOS), and that sheet has no way to save.
+  web: ^1.1.1
 
 dev_dependencies:
   # Used by the migration test to build a v1 database by hand.

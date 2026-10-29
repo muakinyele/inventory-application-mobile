@@ -32,6 +32,8 @@ RUN dart pub get --offline
 RUN dart build cli -t bin/server.dart -o /app/out/server \
  && dart build cli -t bin/migrate.dart -o /app/out/migrate \
  && dart build cli -t bin/create_admin.dart -o /app/out/create_admin \
+ && dart build cli -t bin/repair_cancelled_sales.dart -o /app/out/repair_cancelled_sales \
+ && dart build cli -t bin/repair_stock.dart -o /app/out/repair_stock \
  && dart build cli -t tool/send_test_email.dart -o /app/out/send_test_email
 
 # ---------------------------------------------------------------------------
@@ -59,6 +61,8 @@ RUN mkdir -p /app/bin
 COPY --from=build /app/out/server/bundle /app/server
 COPY --from=build /app/out/migrate/bundle /app/migrate
 COPY --from=build /app/out/create_admin/bundle /app/create_admin
+COPY --from=build /app/out/repair_cancelled_sales/bundle /app/repair_cancelled_sales
+COPY --from=build /app/out/repair_stock/bundle /app/repair_stock
 # The mail diagnostic. It lives in tool/ rather than bin/ because it is not
 # part of running the service — but a diagnostic that cannot be run where the
 # problem is proves nothing, and the mail path only fails in deployment.
@@ -69,6 +73,8 @@ COPY --from=build /app/out/send_test_email/bundle /app/send_test_email
 RUN ln -s /app/server/bin/server /app/bin/server \
  && ln -s /app/migrate/bin/migrate /app/bin/migrate \
  && ln -s /app/create_admin/bin/create_admin /app/bin/create_admin \
+ && ln -s /app/repair_cancelled_sales/bin/repair_cancelled_sales /app/bin/repair_cancelled_sales \
+ && ln -s /app/repair_stock/bin/repair_stock /app/bin/repair_stock \
  && ln -s /app/send_test_email/bin/send_test_email /app/bin/send_test_email
 
 USER stockpile

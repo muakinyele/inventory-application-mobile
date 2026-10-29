@@ -211,16 +211,15 @@ class DocumentService {
       // A proforma prints like an invoice and must not touch stock; a
       // cancelled one has had its effect reversed already.
       if (saved.movesStock && saved.status != 'cancelled') {
-        await _applyDocumentStock(
+        await _applySaleStock(
           documentId: id,
-          kind: 'sale',
+          salesOrderId: saved.salesOrderId,
           actorId: actorId,
           note: 'Invoice ${saved.reference}',
           lines: [
             for (final line in await _invoiceLines(id))
               (itemId: line.itemId, quantity: line.quantity),
           ],
-          direction: -1,
         );
       }
 
@@ -428,12 +427,17 @@ class DocumentService {
       }
 
       if (current.movesStock) {
-        await _reverseDocumentStock(
+        final returned = await _reverseDocumentStock(
           documentId: id,
           actorId: actorId,
           note: 'Cancelled invoice ${current.reference}',
           kind: 'cancellation',
         );
+        // The goods it delivered against a sale are back: that sale can bill
+        // them again.
+        if (current.salesOrderId != null) {
+          await _recordDelivery(current.salesOrderId!, returned, direction: -1);
+        }
       }
 
       await (db.update(db.invoices)..where((t) => t.id.equals(id))).write(
@@ -444,6 +448,35 @@ class DocumentService {
           updatedAt: Value(DateTime.now().toUtc()),
         ),
       );
+
+      // The last live invoice on a sale that was cancelled before cancelling
+      // returned stock: finish the job, so the goods come back too. Skipped
+      // while anything else on the sale is paid; the scan reports that one.
+      final orderId = current.salesOrderId;
+      if (orderId != null) {
+        final order = await (db.select(
+          db.salesOrders,
+        )..where((t) => t.id.equals(orderId))).getSingleOrNull();
+        if (order != null && order.status == 'cancelled') {
+          final others =
+              await (db.select(db.invoices)..where(
+                    (t) =>
+                        t.salesOrderId.equals(orderId) &
+                        t.status.equals('cancelled').not() &
+                        t.amountPaid.isBiggerThanValue(0),
+                  ))
+                  .get();
+          if (others.isEmpty && (await _paidReceipts([orderId])).isEmpty) {
+            await _unwindSale(
+              order,
+              actorId: actorId,
+              note:
+                  'Cancelled invoice ${current.reference} on cancelled '
+                  'sales order ${order.reference}',
+            );
+          }
+        }
+      }
       return (db.select(
         db.invoices,
       )..where((t) => t.id.equals(id))).getSingle();
@@ -552,16 +585,15 @@ class DocumentService {
       )..where((t) => t.id.equals(id))).getSingle();
 
       if (saved.movesStock && saved.status == 'issued') {
-        await _applyDocumentStock(
+        await _applySaleStock(
           documentId: id,
-          kind: 'sale',
+          salesOrderId: saved.invoiceId == null ? saved.salesOrderId : null,
           actorId: actorId,
           note: 'Receipt ${saved.reference}',
           lines: [
             for (final line in await _receiptLines(id))
               (itemId: line.itemId, quantity: line.quantity),
           ],
-          direction: -1,
         );
       }
 
@@ -681,12 +713,15 @@ class DocumentService {
       if (current.status == 'voided') return current;
 
       if (current.movesStock) {
-        await _reverseDocumentStock(
+        final returned = await _reverseDocumentStock(
           documentId: id,
           actorId: actorId,
           note: 'Voided receipt ${current.reference}',
           kind: 'void',
         );
+        if (current.salesOrderId != null && current.invoiceId == null) {
+          await _recordDelivery(current.salesOrderId!, returned, direction: -1);
+        }
       }
 
       final now = DateTime.now().toUtc();
@@ -987,6 +1022,35 @@ class DocumentService {
         db.salesOrders,
       )..where((t) => t.id.equals(id))).getSingleOrNull();
 
+      // Cancelling returns stock, so it only happens through cancelSalesOrder.
+      // A plain save that set the status would skip that, and one that cleared
+      // it would revive an order whose stock is already back on the shelf.
+      final wasCancelled = existing?.status == 'cancelled';
+      final wantsCancelled = header.status.present
+          ? header.status.value == 'cancelled'
+          : wasCancelled;
+      if (wantsCancelled != wasCancelled) {
+        throw ApiError.badRequest(
+          wasCancelled
+              ? 'Order ${existing!.reference} was cancelled and cannot be '
+                    'reopened.'
+              : 'Cancel a sales order through its cancel action, so the '
+                    'stock it sent comes back.',
+        );
+      }
+
+      // A NEW ORDER CANNOT PROMISE STOCK THAT IS NOT THERE. Checked when an
+      // order is raised and while it is still a draft (so confirming one is
+      // checked too). An order confirmed before this rule existed is left
+      // alone: it can still be billed.
+      final status = header.status.present
+          ? header.status.value
+          : (existing?.status ?? 'draft');
+      if ((existing == null || existing.status == 'draft') &&
+          status != 'cancelled') {
+        await _refuseOutOfStock(lines);
+      }
+
       if (existing == null) {
         await db
             .into(db.salesOrders)
@@ -1044,6 +1108,321 @@ class DocumentService {
         lines: await _salesOrderLines(id),
       );
     });
+  }
+
+  /// Cancels a sales order and puts back everything it sent.
+  ///
+  /// Works at any stage, fully sent included. The stock returned is read from
+  /// the order's own despatch movements, the same way an invoice cancellation
+  /// works.
+  ///
+  /// Refused while money has been taken against the sale: the goods would come
+  /// back with the payment still banked. Unpaid invoices billing the order are
+  /// cancelled with it, so nobody is left owing for goods that came back.
+  Future<
+    ({SalesOrder order, List<SalesOrderLine> lines, List<Invoice> invoices})
+  >
+  cancelSalesOrder({
+    required String id,
+    required String actorId,
+    String reason = '',
+  }) async {
+    return db.transaction(() async {
+      final current = await _requireSalesOrder(id);
+      if (current.status == 'cancelled') {
+        return (
+          order: current,
+          lines: await _salesOrderLines(id),
+          invoices: const <Invoice>[],
+        );
+      }
+
+      final invoices = await _unwindSale(
+        current,
+        actorId: actorId,
+        note: 'Cancelled sales order ${current.reference}',
+        reason: reason,
+      );
+
+      final now = DateTime.now().toUtc();
+      await (db.update(db.salesOrders)..where((t) => t.id.equals(id))).write(
+        SalesOrdersCompanion(
+          status: const Value('cancelled'),
+          closedAt: Value(now),
+          updatedAt: Value(now),
+        ),
+      );
+
+      return (
+        order: await _requireSalesOrder(id),
+        lines: await _salesOrderLines(id),
+        invoices: invoices,
+      );
+    });
+  }
+
+  /// Finishes a cancellation that was left half done.
+  ///
+  /// Orders cancelled before cancelling returned stock still have their goods
+  /// out, and some still have a live invoice. This puts the stock back and
+  /// cancels the unpaid invoices, under the same rule as a cancel: nothing
+  /// happens while money has been taken against the sale. Safe to run twice.
+  Future<
+    ({SalesOrder order, List<SalesOrderLine> lines, List<Invoice> invoices})
+  >
+  repairCancelledSale({required String id, required String actorId}) async {
+    return db.transaction(() async {
+      final current = await _requireSalesOrder(id);
+      if (current.status != 'cancelled') {
+        throw ApiError.badRequest(
+          'Order ${current.reference} is not cancelled, so there is nothing '
+          'to repair.',
+        );
+      }
+      final invoices = await _unwindSale(
+        current,
+        actorId: actorId,
+        note: 'Repair: finished cancelling sales order ${current.reference}',
+      );
+      return (
+        order: current,
+        lines: await _salesOrderLines(id),
+        invoices: invoices,
+      );
+    });
+  }
+
+  /// Every cancelled sale that is not fully unwound: stock still out, or an
+  /// invoice still live. Read-only.
+  Future<List<CancelledSaleIssue>> scanCancelledSales() async {
+    final orders = await (db.select(
+      db.salesOrders,
+    )..where((t) => t.status.equals('cancelled'))).get();
+    if (orders.isEmpty) return const [];
+    final ids = [for (final o in orders) o.id];
+
+    final invoices =
+        await (db.select(db.invoices)..where(
+              (t) =>
+                  t.salesOrderId.isIn(ids) & t.status.equals('cancelled').not(),
+            ))
+            .get();
+    final paidReceipts = await _paidReceipts(ids);
+
+    final issues = <CancelledSaleIssue>[];
+    for (final order in orders) {
+      final live = [
+        for (final i in invoices)
+          if (i.salesOrderId == order.id) i,
+      ];
+      final out = await _stillOut(order.id);
+      for (final invoice in live) {
+        if (invoice.movesStock) {
+          (await _stillOut(invoice.id)).forEach((item, q) {
+            out[item] = (out[item] ?? 0) + q;
+          });
+        }
+      }
+      if (out.isEmpty && live.isEmpty) continue;
+
+      final paid = [
+        for (final i in live)
+          if (i.amountPaid > 0) i.reference,
+        for (final r in paidReceipts)
+          if (r.salesOrderId == order.id) r.reference,
+      ];
+      issues.add(
+        CancelledSaleIssue(
+          salesOrderId: order.id,
+          salesOrderReference: order.reference,
+          customerName: order.customerName,
+          stockOut: {
+            for (final e in out.entries)
+              e.key: (name: await _itemName(e.key), quantity: e.value),
+          },
+          liveInvoices: [
+            for (final i in live)
+              (id: i.id, reference: i.reference, amountPaid: i.amountPaid),
+          ],
+          paidBy: paid,
+        ),
+      );
+    }
+    return issues;
+  }
+
+  Future<SalesOrder> _requireSalesOrder(String id) async {
+    final row = await (db.select(
+      db.salesOrders,
+    )..where((t) => t.id.equals(id))).getSingleOrNull();
+    if (row == null) throw ApiError.notFound;
+    return row;
+  }
+
+  Future<List<Receipt>> _paidReceipts(List<String> salesOrderIds) =>
+      (db.select(db.receipts)..where(
+            (t) =>
+                t.salesOrderId.isIn(salesOrderIds) &
+                t.status.isIn(const ['issued', 'partRefunded']) &
+                t.amountPaid.isBiggerThanValue(0),
+          ))
+          .get();
+
+  /// What a document took and has not given back, per item, as positive
+  /// quantities.
+  Future<Map<String, int>> _stillOut(String documentId) async {
+    final applied = await (db.select(
+      db.movements,
+    )..where((t) => t.documentId.equals(documentId))).get();
+    final net = <String, int>{};
+    for (final m in applied) {
+      net[m.itemId] = (net[m.itemId] ?? 0) + (m.after - m.before);
+    }
+    return {
+      for (final e in net.entries)
+        if (e.value < 0) e.key: -e.value,
+    };
+  }
+
+  Future<String> _itemName(String itemId) async {
+    final row =
+        await (db.select(db.movements)
+              ..where((t) => t.itemId.equals(itemId))
+              ..limit(1))
+            .getSingleOrNull();
+    return row?.itemName ?? itemId;
+  }
+
+  /// The shared part of cancelling a sale: refuse if paid, cancel unpaid live
+  /// invoices (returning any stock they took), and return what the order
+  /// sent. Answers with the invoices it cancelled. Runs inside the caller's
+  /// transaction.
+  Future<List<Invoice>> _unwindSale(
+    SalesOrder order, {
+    required String actorId,
+    required String note,
+    String reason = '',
+  }) async {
+    final invoices =
+        await (db.select(db.invoices)..where(
+              (t) =>
+                  t.salesOrderId.equals(order.id) &
+                  t.status.equals('cancelled').not(),
+            ))
+            .get();
+    final paid = [
+      for (final invoice in invoices)
+        if (invoice.amountPaid > 0) invoice.reference,
+      for (final receipt in await _paidReceipts([order.id])) receipt.reference,
+    ];
+    if (paid.isNotEmpty) {
+      throw ApiError.badRequest(
+        'Order ${order.reference} has been paid against '
+        '(${paid.join(', ')}) and cannot be cancelled. Refund the payment '
+        'first.',
+      );
+    }
+
+    final now = DateTime.now().toUtc();
+    for (final invoice in invoices) {
+      if (invoice.movesStock) {
+        await _reverseDocumentStock(
+          documentId: invoice.id,
+          actorId: actorId,
+          note: note,
+          kind: 'cancellation',
+        );
+      }
+      await (db.update(
+        db.invoices,
+      )..where((t) => t.id.equals(invoice.id))).write(
+        InvoicesCompanion(
+          status: const Value('cancelled'),
+          cancelledReason: Value(reason.isEmpty ? note : reason),
+          closedAt: Value(now),
+          updatedAt: Value(now),
+        ),
+      );
+    }
+
+    // Unpaid receipts took their goods too now that billing is delivery.
+    // A paid one has already refused the cancel above.
+    final unpaidReceipts =
+        await (db.select(db.receipts)..where(
+              (t) =>
+                  t.salesOrderId.equals(order.id) &
+                  t.invoiceId.isNull() &
+                  t.status.isIn(const ['issued', 'partRefunded']),
+            ))
+            .get();
+    for (final receipt in unpaidReceipts) {
+      if (receipt.movesStock) {
+        await _reverseDocumentStock(
+          documentId: receipt.id,
+          actorId: actorId,
+          note: note,
+          kind: 'void',
+        );
+      }
+      await (db.update(
+        db.receipts,
+      )..where((t) => t.id.equals(receipt.id))).write(
+        ReceiptsCompanion(
+          status: const Value('voided'),
+          voidReason: Value(reason.isEmpty ? note : reason),
+          voidedAt: Value(now),
+          updatedAt: Value(now),
+        ),
+      );
+    }
+
+    // What the order sent itself, through the old despatch.
+    await _reverseDocumentStock(
+      documentId: order.id,
+      actorId: actorId,
+      note: note,
+      kind: 'cancellation',
+    );
+
+    return [
+      for (final invoice in invoices)
+        await (db.select(
+          db.invoices,
+        )..where((t) => t.id.equals(invoice.id))).getSingle(),
+    ];
+  }
+
+  /// Refuses an order whose lines ask for more of an item than is in stock,
+  /// naming every item that is short and by how much.
+  Future<void> _refuseOutOfStock(List<SalesOrderLinesCompanion> lines) async {
+    final wanted = <String, int>{};
+    final names = <String, String>{};
+    for (final line in lines) {
+      if (!line.itemId.present || !line.quantityOrdered.present) continue;
+      final id = line.itemId.value;
+      wanted[id] = (wanted[id] ?? 0) + line.quantityOrdered.value;
+      if (line.itemName.present) names[id] = line.itemName.value;
+    }
+    final short = <String>[];
+    for (final entry in wanted.entries) {
+      final item = await (db.select(
+        db.items,
+      )..where((t) => t.id.equals(entry.key))).getSingleOrNull();
+      final onHand = item?.quantity ?? 0;
+      if (entry.value > onHand) {
+        final name = item?.name ?? names[entry.key] ?? 'An item';
+        short.add(
+          onHand <= 0
+              ? '$name is out of stock (${entry.value} ordered)'
+              : '$name has only $onHand in stock (${entry.value} ordered)',
+        );
+      }
+    }
+    if (short.isEmpty) return;
+    throw ApiError.badRequest(
+      'This order asks for more than is in stock. ${short.join('; ')}. '
+      'Lower the quantities or restock first.',
+    );
   }
 
   /// Despatches goods against a sales order: stock out, and the line's
@@ -1208,7 +1587,7 @@ class DocumentService {
   /// Derived from what actually happened rather than recomputed from the
   /// lines, because the lines may have been edited since — and the stock owed
   /// back is what left, not what the document currently says.
-  Future<void> _reverseDocumentStock({
+  Future<Map<String, int>> _reverseDocumentStock({
     required String documentId,
     required String actorId,
     required String note,
@@ -1225,6 +1604,7 @@ class DocumentService {
           (net[movement.itemId] ?? 0) + (movement.after - movement.before);
     }
 
+    final returned = <String, int>{};
     for (final entry in net.entries) {
       if (entry.value == 0) continue;
       await inventory.adjustStock(
@@ -1235,7 +1615,216 @@ class DocumentService {
         note: note,
         documentId: documentId,
       );
+      if (entry.value < 0) returned[entry.key] = -entry.value;
     }
+    return returned;
+  }
+
+  /// Takes the stock for a receipt or invoice, and when it bills a sales order
+  /// records the delivery on that order.
+  ///
+  /// THE SALES ORDER IS ONLY AN ORDER. Goods leave when the customer is given
+  /// a receipt or an invoice for them, not when the order is raised. So a
+  /// document against an order takes its lines off the shelf and counts them
+  /// as sent on the order, which is what moves it to part sent or fulfilled.
+  ///
+  /// Except for goods the order already sent the old way, through its own
+  /// despatch, and never billed: those left the shelf then, and are billed
+  /// now without moving again. They are used up first.
+  Future<void> _applySaleStock({
+    required String documentId,
+    required String? salesOrderId,
+    required String actorId,
+    required String note,
+    required List<({String itemId, int quantity})> lines,
+  }) async {
+    if (salesOrderId == null) {
+      await _applyDocumentStock(
+        documentId: documentId,
+        kind: 'sale',
+        actorId: actorId,
+        note: note,
+        lines: lines,
+        direction: -1,
+      );
+      return;
+    }
+    // Already applied: a re-save of the same document takes nothing twice.
+    if (await _hasMovements(documentId)) return;
+
+    final order = await _requireSalesOrder(salesOrderId);
+    if (order.status == 'cancelled') {
+      throw ApiError.badRequest(
+        'Order ${order.reference} was cancelled; it cannot be billed.',
+      );
+    }
+
+    final orderLines = await _salesOrderLines(salesOrderId);
+    final ordered = <String, int>{};
+    final sent = <String, int>{};
+    for (final line in orderLines) {
+      ordered[line.itemId] = (ordered[line.itemId] ?? 0) + line.quantityOrdered;
+      sent[line.itemId] = (sent[line.itemId] ?? 0) + line.quantityFulfilled;
+    }
+    final billed = await _billedOnSale(salesOrderId, except: documentId);
+
+    final asked = <String, int>{};
+    for (final line in lines) {
+      if (line.quantity <= 0) continue;
+      asked[line.itemId] = (asked[line.itemId] ?? 0) + line.quantity;
+    }
+
+    final take = <({String itemId, int quantity})>[];
+    for (final entry in asked.entries) {
+      final item = entry.key;
+      final left = (ordered[item] ?? 0) - (billed[item] ?? 0);
+      if (entry.value > left) {
+        final onOrder = [
+          for (final l in orderLines)
+            if (l.itemId == item) l.itemName,
+        ];
+        final name = onOrder.isNotEmpty
+            ? onOrder.first
+            : (await inventory.requireItem(item)).name;
+        throw ApiError.badRequest(
+          (ordered[item] ?? 0) == 0
+              ? '$name is not on order ${order.reference}.'
+              : 'Order ${order.reference} has only ${left < 0 ? 0 : left} of '
+                    '$name left to bill.',
+        );
+      }
+      // Sent the old way and not yet billed: already off the shelf.
+      final alreadyOut = ((sent[item] ?? 0) - (billed[item] ?? 0)).clamp(
+        0,
+        entry.value,
+      );
+      final quantity = entry.value - alreadyOut;
+      if (quantity > 0) take.add((itemId: item, quantity: quantity));
+    }
+
+    await _applyDocumentStock(
+      documentId: documentId,
+      kind: 'sale',
+      actorId: actorId,
+      note: '$note for ${order.reference}',
+      lines: take,
+      direction: -1,
+    );
+    await _recordDelivery(salesOrderId, {
+      for (final t in take) t.itemId: t.quantity,
+    }, direction: 1);
+  }
+
+  /// Quantities already on live receipts and invoices for a sale, per item.
+  /// A receipt for a payment on one of those invoices carries the invoice and
+  /// is not counted again.
+  Future<Map<String, int>> _billedOnSale(
+    String salesOrderId, {
+    String? except,
+  }) async {
+    final billed = <String, int>{};
+    final receipts =
+        await (db.select(db.receipts)..where(
+              (t) =>
+                  t.salesOrderId.equals(salesOrderId) &
+                  t.invoiceId.isNull() &
+                  t.status.equals('voided').not(),
+            ))
+            .get();
+    for (final r in receipts) {
+      if (r.id == except) continue;
+      for (final line in await _receiptLines(r.id)) {
+        billed[line.itemId] = (billed[line.itemId] ?? 0) + line.quantity;
+      }
+    }
+    final invoices =
+        await (db.select(db.invoices)..where(
+              (t) =>
+                  t.salesOrderId.equals(salesOrderId) &
+                  t.status.equals('cancelled').not(),
+            ))
+            .get();
+    for (final i in invoices) {
+      if (i.id == except) continue;
+      for (final line in await _invoiceLines(i.id)) {
+        billed[line.itemId] = (billed[line.itemId] ?? 0) + line.quantity;
+      }
+    }
+    return billed;
+  }
+
+  /// Moves a sale's sent counts up ([direction] 1) when a document takes its
+  /// goods, or down (-1) when that document is cancelled or voided and the
+  /// goods come back, and sets its status to match.
+  Future<void> _recordDelivery(
+    String salesOrderId,
+    Map<String, int> quantities, {
+    required int direction,
+  }) async {
+    if (quantities.values.every((q) => q <= 0)) return;
+    final order = await _requireSalesOrder(salesOrderId);
+    final lines = await _salesOrderLines(salesOrderId);
+
+    for (final entry in quantities.entries) {
+      var remaining = entry.value;
+      final matching = [
+        for (final line in lines)
+          if (line.itemId == entry.key) line,
+      ];
+      // Fill the earliest line first; empty the latest first.
+      final ordered = direction > 0 ? matching : matching.reversed.toList();
+      for (final line in ordered) {
+        if (remaining <= 0) break;
+        final room = direction > 0
+            ? line.quantityOrdered - line.quantityFulfilled
+            : line.quantityFulfilled;
+        final step = remaining < room ? remaining : room;
+        if (step <= 0) continue;
+        remaining -= step;
+
+        final double cost;
+        if (direction > 0) {
+          final item = await inventory.requireItem(line.itemId);
+          cost = line.costOfGoods + step * item.unitCost;
+        } else {
+          final perUnit = line.quantityFulfilled == 0
+              ? 0.0
+              : line.costOfGoods / line.quantityFulfilled;
+          cost = (line.costOfGoods - step * perUnit).clamp(0, double.infinity);
+        }
+        await (db.update(
+          db.salesOrderLines,
+        )..where((t) => t.id.equals(line.id))).write(
+          SalesOrderLinesCompanion(
+            quantityFulfilled: Value(line.quantityFulfilled + direction * step),
+            costOfGoods: Value(cost),
+          ),
+        );
+      }
+    }
+
+    if (order.status == 'cancelled') return;
+    final updated = await _salesOrderLines(salesOrderId);
+    final complete =
+        updated.isNotEmpty &&
+        updated.every((l) => l.quantityFulfilled >= l.quantityOrdered);
+    final any = updated.any((l) => l.quantityFulfilled > 0);
+    final now = DateTime.now().toUtc();
+    await (db.update(
+      db.salesOrders,
+    )..where((t) => t.id.equals(salesOrderId))).write(
+      SalesOrdersCompanion(
+        status: Value(
+          complete
+              ? 'fulfilled'
+              : any
+              ? 'partial'
+              : (order.status == 'draft' ? 'draft' : 'confirmed'),
+        ),
+        closedAt: complete ? Value(now) : const Value(null),
+        updatedAt: Value(now),
+      ),
+    );
   }
 
   Future<bool> _hasMovements(String documentId) async {
@@ -1259,13 +1848,88 @@ class DocumentService {
       db.preferences,
     )..where((t) => t.key.equals(key))).getSingleOrNull();
 
-    final next = (int.tryParse(row?.value ?? '') ?? 0) + 1;
+    // SKIPS ANY NUMBER ALREADY IN USE. Documents can arrive with their own
+    // reference — an import, a restore — without moving this counter, and
+    // then every new one was handed a number that existed: RC-0001 again,
+    // refused by the unique index, so no receipt could be issued and no
+    // invoice payment recorded. The counter is a hint; the table is the truth.
+    var next = (int.tryParse(row?.value ?? '') ?? 0) + 1;
+    String reference() => '$prefix${next.toString().padLeft(4, '0')}';
+    while (await _referenceTaken(kind, reference())) {
+      next++;
+    }
     await db
         .into(db.preferences)
         .insertOnConflictUpdate(
           PreferencesCompanion.insert(key: key, value: '$next'),
         );
 
-    return '$prefix${next.toString().padLeft(4, '0')}';
+    return reference();
   }
+
+  Future<bool> _referenceTaken(String kind, String reference) async {
+    final Object? row = switch (kind) {
+      'receipt' => await (db.select(
+        db.receipts,
+      )..where((t) => t.reference.equals(reference))).getSingleOrNull(),
+      'invoice' => await (db.select(
+        db.invoices,
+      )..where((t) => t.reference.equals(reference))).getSingleOrNull(),
+      'sales_order' => await (db.select(
+        db.salesOrders,
+      )..where((t) => t.reference.equals(reference))).getSingleOrNull(),
+      'purchase_order' => await (db.select(
+        db.purchaseOrders,
+      )..where((t) => t.reference.equals(reference))).getSingleOrNull(),
+      _ => null,
+    };
+    return row != null;
+  }
+}
+
+/// A cancelled sale that is not fully unwound, as the scan finds it.
+class CancelledSaleIssue {
+  const CancelledSaleIssue({
+    required this.salesOrderId,
+    required this.salesOrderReference,
+    required this.customerName,
+    required this.stockOut,
+    required this.liveInvoices,
+    required this.paidBy,
+  });
+
+  final String salesOrderId;
+  final String salesOrderReference;
+  final String customerName;
+
+  /// Item id to what is still out of stock because of this sale.
+  final Map<String, ({String name, int quantity})> stockOut;
+
+  /// Invoices billing the sale that are still live.
+  final List<({String id, String reference, double amountPaid})> liveInvoices;
+
+  /// References of payments that block a repair. Empty means it can be fixed.
+  final List<String> paidBy;
+
+  bool get fixable => paidBy.isEmpty;
+
+  Map<String, Object?> toJson() => {
+    'salesOrderId': salesOrderId,
+    'salesOrderReference': salesOrderReference,
+    'customerName': customerName,
+    'stockOut': [
+      for (final e in stockOut.entries)
+        {
+          'itemId': e.key,
+          'itemName': e.value.name,
+          'quantity': e.value.quantity,
+        },
+    ],
+    'liveInvoices': [
+      for (final i in liveInvoices)
+        {'id': i.id, 'reference': i.reference, 'amountPaid': i.amountPaid},
+    ],
+    'paidBy': paidBy,
+    'fixable': fixable,
+  };
 }

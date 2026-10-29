@@ -29,6 +29,12 @@ class FakeInventoryServer {
   /// save does not land — which is where the quiet bugs live.
   bool failNextWrite = false;
 
+  /// Paths whose next GET should fail, so a test can check what the app does
+  /// when a fetch does not land. Documents are fetched on demand now, and a
+  /// collection that failed has to be retried rather than left looking empty
+  /// for the rest of the session.
+  final failNextReadOf = <String>{};
+
   /// What the workspace's preferences hold, so a test can stage what a load
   /// should bring back.
   Map<String, String> preferences = const {};
@@ -37,6 +43,9 @@ class FakeInventoryServer {
   /// actually LEFT — the company logo looked saved for months because nobody
   /// checked this.
   Map<String, dynamic>? lastPreferences;
+
+  /// Sales orders as last echoed, so a cancel can answer with the order.
+  final _salesOrders = <String, Map<String, dynamic>>{};
 
   String _id(Map<String, dynamic> body, String fallbackPrefix) {
     final sent = body['id'];
@@ -75,6 +84,15 @@ class FakeInventoryServer {
     // Reads: empty, because a seeded controller already holds its state and a
     // reload is not what these tests are about.
     if (request.method == 'GET') {
+      if (failNextReadOf.remove(path)) {
+        return http.Response(
+          jsonEncode({
+            'error': {'code': 'internal_error', 'message': 'Nope.'},
+          }),
+          500,
+          headers: {'content-type': 'application/json'},
+        );
+      }
       return _ok(switch (path) {
         '/api/inventory/items' => {'items': <Object?>[], 'total': 0},
         '/api/inventory/stock' => {'stock': <Object?>[]},
@@ -203,7 +221,28 @@ class FakeInventoryServer {
       return _ok(echo('purchaseOrder', 'po-', {'reference': 'PO-0001'}));
     }
     if (path == '/api/documents/sales-orders') {
-      return _ok(echo('salesOrder', 'so-', {'reference': 'SO-0001'}));
+      final answer = echo('salesOrder', 'so-', {'reference': 'SO-0001'});
+      final order = answer['salesOrder'] as Map<String, dynamic>;
+      _salesOrders[order['id'] as String] = order;
+      return _ok(answer);
+    }
+    // Saving an existing order answers with what it was sent, as stored.
+    if (request.method == 'PATCH' &&
+        path.startsWith('/api/documents/sales-orders/')) {
+      final id = path.split('/')[4];
+      final order = {...?_salesOrders[id], ...body, 'id': id};
+      _salesOrders[id] = order;
+      return _ok({'salesOrder': order});
+    }
+    // Cancelling answers with the order marked cancelled. What stock comes
+    // back is the server's arithmetic and is tested there.
+    if (path.startsWith('/api/documents/sales-orders/') &&
+        path.endsWith('/cancel')) {
+      final id = path.split('/')[4];
+      return _ok({
+        'salesOrder': {...?_salesOrders[id], 'id': id, 'status': 'cancelled'},
+        'invoices': <Object?>[],
+      });
     }
 
     return _ok(const <String, Object?>{});
