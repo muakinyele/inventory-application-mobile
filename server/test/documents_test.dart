@@ -1733,24 +1733,13 @@ void main() {
       );
       final orderId = created.json['salesOrder']['id'] as String;
 
-      await server.patch(
-        '/documents/sales-orders/$orderId',
+      final cancelled = await server.post(
+        '/documents/sales-orders/$orderId/cancel',
         accessToken: s.accessToken,
-        body: {
-          'status': 'cancelled',
-          'lines': [
-            {'itemId': id, 'itemName': 'Widget', 'quantityOrdered': 4},
-          ],
-        },
+        body: <String, Object?>{},
       );
-
-      // Re-read the line id: saving replaces the lines, so the old one is gone
-      // and a 400 for that reason would prove nothing about cancellation.
-      final reread = await server.get(
-        '/documents/sales-orders/$orderId',
-        accessToken: s.accessToken,
-      );
-      final lineId = reread.json['salesOrder']['lines'][0]['id'] as String;
+      expect(cancelled.statusCode, 200);
+      final lineId = cancelled.json['salesOrder']['lines'][0]['id'] as String;
 
       final response = await server.post(
         '/documents/sales-orders/$orderId/despatch',
@@ -1762,6 +1751,660 @@ void main() {
 
       expect(response.statusCode, 400);
       expect(await quantityOf(s, id), 10, reason: 'nothing left the shelf');
+    });
+  });
+
+  group('cancelling a sale returns what it sent', () {
+    Future<(String, String)> sale(
+      TestSession s,
+      String itemId, {
+      int ordered = 5,
+    }) async {
+      final created = await server.post(
+        '/documents/sales-orders',
+        accessToken: s.accessToken,
+        body: {
+          'status': 'confirmed',
+          'lines': [
+            {
+              'itemId': itemId,
+              'itemName': 'Widget',
+              'quantityOrdered': ordered,
+              'unitPrice': 4.0,
+            },
+          ],
+        },
+      );
+      return (
+        created.json['salesOrder']['id'] as String,
+        created.json['salesOrder']['lines'][0]['id'] as String,
+      );
+    }
+
+    Future<void> send(TestSession s, String orderId, String lineId, int n) =>
+        server.post(
+          '/documents/sales-orders/$orderId/despatch',
+          accessToken: s.accessToken,
+          body: {
+            'sent': {lineId: n},
+          },
+        );
+
+    Future<ApiResponse> cancel(TestSession s, String orderId) => server.post(
+      '/documents/sales-orders/$orderId/cancel',
+      accessToken: s.accessToken,
+      body: <String, Object?>{},
+    );
+
+    Future<String> invoiceFor(
+      TestSession s,
+      String orderId,
+      String itemId,
+    ) async {
+      final response = await server.post(
+        '/documents/invoices',
+        accessToken: s.accessToken,
+        body: {
+          'salesOrderId': orderId,
+          // Billing goods the order already sent: the invoice moves nothing.
+          'movesStock': false,
+          'lines': [
+            {
+              'itemId': itemId,
+              'itemName': 'Widget',
+              'quantity': 5,
+              'unitPrice': 4.0,
+            },
+          ],
+        },
+      );
+      return response.json['invoice']['id'] as String;
+    }
+
+    test('a partly sent order puts back what went', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 20);
+      final (orderId, lineId) = await sale(s, id);
+      await send(s, orderId, lineId, 3);
+      expect(await quantityOf(s, id), 17);
+
+      final response = await cancel(s, orderId);
+
+      expect(response.statusCode, 200);
+      expect(response.json['salesOrder']['status'], 'cancelled');
+      expect(await quantityOf(s, id), 20);
+    });
+
+    test('a fully sent order can be cancelled and puts it all back', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 10);
+      final (orderId, lineId) = await sale(s, id, ordered: 4);
+      await send(s, orderId, lineId, 4);
+      expect(await quantityOf(s, id), 6);
+
+      final response = await cancel(s, orderId);
+
+      expect(response.statusCode, 200);
+      expect(response.json['salesOrder']['status'], 'cancelled');
+      expect(await quantityOf(s, id), 10);
+    });
+
+    test('the return is recorded as a movement on the order', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 10);
+      final (orderId, lineId) = await sale(s, id, ordered: 4);
+      await send(s, orderId, lineId, 4);
+
+      await cancel(s, orderId);
+
+      final movements = await server.get(
+        '/inventory/movements',
+        accessToken: s.accessToken,
+      );
+      final onOrder = [
+        for (final m in movements.json['movements'] as List)
+          if (m['documentId'] == orderId) m,
+      ];
+      expect(
+        onOrder.map((m) => m['kind']),
+        containsAll(['sale', 'cancellation']),
+      );
+    });
+
+    test('cancelling twice does not return the stock twice', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 10);
+      final (orderId, lineId) = await sale(s, id, ordered: 4);
+      await send(s, orderId, lineId, 4);
+
+      await cancel(s, orderId);
+      final again = await cancel(s, orderId);
+
+      expect(again.statusCode, 200);
+      expect(await quantityOf(s, id), 10);
+    });
+
+    test('an unsent order cancels and moves nothing', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 10);
+      final (orderId, _) = await sale(s, id);
+
+      final response = await cancel(s, orderId);
+
+      expect(response.json['salesOrder']['status'], 'cancelled');
+      expect(await quantityOf(s, id), 10);
+    });
+
+    test('an unpaid invoice billing the order is cancelled with it', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 10);
+      final (orderId, lineId) = await sale(s, id);
+      await send(s, orderId, lineId, 5);
+      final invoiceId = await invoiceFor(s, orderId, id);
+
+      final response = await cancel(s, orderId);
+
+      expect(response.statusCode, 200);
+      expect(response.json['invoices'].length, 1);
+      expect(response.json['invoices'][0]['id'], invoiceId);
+      expect(response.json['invoices'][0]['status'], 'cancelled');
+      expect(await quantityOf(s, id), 10, reason: 'back once, not twice');
+    });
+
+    test('money taken against the sale blocks the cancel', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 10);
+      final (orderId, lineId) = await sale(s, id);
+      await send(s, orderId, lineId, 5);
+      final invoiceId = await invoiceFor(s, orderId, id);
+      await server.post(
+        '/documents/invoices/$invoiceId/payments',
+        accessToken: s.accessToken,
+        body: {'amount': 5.0},
+      );
+
+      final response = await cancel(s, orderId);
+
+      expect(response.statusCode, 400);
+      expect(await quantityOf(s, id), 5, reason: 'nothing came back');
+      final reread = await server.get(
+        '/documents/sales-orders/$orderId',
+        accessToken: s.accessToken,
+      );
+      expect(reread.json['salesOrder']['status'], isNot('cancelled'));
+    });
+
+    test('a plain save cannot cancel, or reopen, an order', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 10);
+      final (orderId, lineId) = await sale(s, id);
+      await send(s, orderId, lineId, 2);
+      final lines = [
+        {'itemId': id, 'itemName': 'Widget', 'quantityOrdered': 5},
+      ];
+
+      final sneaky = await server.patch(
+        '/documents/sales-orders/$orderId',
+        accessToken: s.accessToken,
+        body: {'status': 'cancelled', 'lines': lines},
+      );
+      expect(sneaky.statusCode, 400);
+      expect(await quantityOf(s, id), 8);
+
+      await cancel(s, orderId);
+      final reopen = await server.patch(
+        '/documents/sales-orders/$orderId',
+        accessToken: s.accessToken,
+        body: {'status': 'confirmed', 'lines': lines},
+      );
+      expect(reopen.statusCode, 400);
+    });
+  });
+
+  group('repairing sales cancelled the old way', () {
+    // Before cancelling returned stock, an order was cancelled by flipping its
+    // status. That is staged here directly in the database, because the API
+    // no longer allows it.
+    Future<({String orderId, String itemId})> legacyCancelled(
+      TestSession s, {
+      int onHand = 10,
+      int sent = 4,
+      bool invoice = false,
+      double paid = 0,
+    }) async {
+      final itemId = await item(s, quantity: onHand);
+      final created = await server.post(
+        '/documents/sales-orders',
+        accessToken: s.accessToken,
+        body: {
+          'status': 'confirmed',
+          'lines': [
+            {'itemId': itemId, 'itemName': 'Widget', 'quantityOrdered': sent},
+          ],
+        },
+      );
+      final orderId = created.json['salesOrder']['id'] as String;
+      final lineId = created.json['salesOrder']['lines'][0]['id'] as String;
+      await server.post(
+        '/documents/sales-orders/$orderId/despatch',
+        accessToken: s.accessToken,
+        body: {
+          'sent': {lineId: sent},
+        },
+      );
+      if (invoice) {
+        final raised = await server.post(
+          '/documents/invoices',
+          accessToken: s.accessToken,
+          body: {
+            'salesOrderId': orderId,
+            'movesStock': false,
+            'lines': [
+              {
+                'itemId': itemId,
+                'itemName': 'Widget',
+                'quantity': sent,
+                'unitPrice': 4.0,
+              },
+            ],
+          },
+        );
+        final invoiceId = raised.json['invoice']['id'] as String;
+        if (paid > 0) {
+          await server.post(
+            '/documents/invoices/$invoiceId/payments',
+            accessToken: s.accessToken,
+            body: {'amount': paid},
+          );
+        }
+      }
+      await server.customStatement(
+        "UPDATE sales_orders SET status = 'cancelled' WHERE id = '$orderId'",
+      );
+      return (orderId: orderId, itemId: itemId);
+    }
+
+    Future<List<dynamic>> scan(TestSession s) async {
+      final response = await server.get(
+        '/documents/repairs/cancelled-sales',
+        accessToken: s.accessToken,
+      );
+      expect(response.statusCode, 200);
+      return response.json['issues'] as List;
+    }
+
+    Future<List<dynamic>> invoicesOf(TestSession s, String orderId) async {
+      final response = await server.get(
+        '/documents/invoices',
+        accessToken: s.accessToken,
+      );
+      return [
+        for (final i in response.json['invoices'] as List)
+          if (i['salesOrderId'] == orderId) i,
+      ];
+    }
+
+    test('the scan finds stock still out and live invoices', () async {
+      final s = await admin();
+      final legacy = await legacyCancelled(s, invoice: true);
+
+      final issues = await scan(s);
+
+      expect(issues.length, 1);
+      expect(issues[0]['salesOrderId'], legacy.orderId);
+      expect(issues[0]['stockOut'][0]['quantity'], 4);
+      expect(issues[0]['liveInvoices'].length, 1);
+      expect(issues[0]['fixable'], isTrue);
+      expect(
+        await quantityOf(s, legacy.itemId),
+        6,
+        reason: 'scan is read-only',
+      );
+    });
+
+    test('a cancel done the new way leaves nothing to find', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 10);
+      final created = await server.post(
+        '/documents/sales-orders',
+        accessToken: s.accessToken,
+        body: {
+          'lines': [
+            {'itemId': id, 'itemName': 'Widget', 'quantityOrdered': 2},
+          ],
+        },
+      );
+      final orderId = created.json['salesOrder']['id'] as String;
+      await server.post(
+        '/documents/sales-orders/$orderId/cancel',
+        accessToken: s.accessToken,
+        body: <String, Object?>{},
+      );
+
+      expect(await scan(s), isEmpty);
+    });
+
+    test('repairing one returns the stock and cancels the invoice', () async {
+      final s = await admin();
+      final legacy = await legacyCancelled(s, invoice: true);
+
+      final response = await server.post(
+        '/documents/repairs/cancelled-sales/${legacy.orderId}',
+        accessToken: s.accessToken,
+        body: <String, Object?>{},
+      );
+
+      expect(response.statusCode, 200);
+      expect(response.json['invoices'][0]['status'], 'cancelled');
+      expect(await quantityOf(s, legacy.itemId), 10);
+      expect(await scan(s), isEmpty);
+    });
+
+    test('repairing twice returns the stock once', () async {
+      final s = await admin();
+      final legacy = await legacyCancelled(s);
+      for (var i = 0; i < 2; i++) {
+        await server.post(
+          '/documents/repairs/cancelled-sales/${legacy.orderId}',
+          accessToken: s.accessToken,
+          body: <String, Object?>{},
+        );
+      }
+      expect(await quantityOf(s, legacy.itemId), 10);
+    });
+
+    test('a paid sale is reported but not repaired', () async {
+      final s = await admin();
+      final legacy = await legacyCancelled(s, invoice: true, paid: 5);
+
+      final issues = await scan(s);
+      expect(issues[0]['fixable'], isFalse);
+      expect(issues[0]['paidBy'], isNotEmpty);
+
+      final one = await server.post(
+        '/documents/repairs/cancelled-sales/${legacy.orderId}',
+        accessToken: s.accessToken,
+        body: <String, Object?>{},
+      );
+      expect(one.statusCode, 400);
+
+      final all = await server.post(
+        '/documents/repairs/cancelled-sales',
+        accessToken: s.accessToken,
+        body: <String, Object?>{},
+      );
+      expect(all.json['repaired'], isEmpty);
+      expect(all.json['skipped'].length, 1);
+      expect(await quantityOf(s, legacy.itemId), 6);
+    });
+
+    test('repair all fixes every fixable sale and skips the paid', () async {
+      final s = await admin();
+      final a = await legacyCancelled(s);
+      final b = await legacyCancelled(s, invoice: true);
+      final paid = await legacyCancelled(s, invoice: true, paid: 5);
+
+      final all = await server.post(
+        '/documents/repairs/cancelled-sales',
+        accessToken: s.accessToken,
+        body: <String, Object?>{},
+      );
+
+      expect(all.json['repaired'].length, 2);
+      expect(all.json['skipped'].length, 1);
+      expect(await quantityOf(s, a.itemId), 10);
+      expect(await quantityOf(s, b.itemId), 10);
+      expect(await quantityOf(s, paid.itemId), 6);
+    });
+
+    test(
+      'cancelling the live invoice by hand also returns the stock',
+      () async {
+        final s = await admin();
+        final legacy = await legacyCancelled(s, invoice: true);
+        final invoiceId = (await invoicesOf(s, legacy.orderId))[0]['id'];
+
+        final response = await server.post(
+          '/documents/invoices/$invoiceId/cancel',
+          accessToken: s.accessToken,
+          body: {'reason': 'Sale was cancelled'},
+        );
+
+        expect(response.statusCode, 200);
+        expect(response.json['invoice']['status'], 'cancelled');
+        expect(await quantityOf(s, legacy.itemId), 10);
+        expect(await scan(s), isEmpty);
+      },
+    );
+
+    test('only administrators can scan or repair', () async {
+      final staff = await server.signedInUser(
+        email: 'staff@example.com',
+        role: staffRoleKey,
+      );
+      final response = await server.get(
+        '/documents/repairs/cancelled-sales',
+        accessToken: staff.accessToken,
+      );
+      expect(response.statusCode, 403);
+    });
+  });
+
+  group('stock leaves when the sale is billed, not when it is ordered', () {
+    Future<String> order(TestSession s, String itemId, {int qty = 10}) async {
+      final created = await server.post(
+        '/documents/sales-orders',
+        accessToken: s.accessToken,
+        body: {
+          'customerName': 'Ada',
+          'status': 'confirmed',
+          'lines': [
+            {
+              'itemId': itemId,
+              'itemName': 'Widget',
+              'quantityOrdered': qty,
+              'unitPrice': 4.0,
+            },
+          ],
+        },
+      );
+      return created.json['salesOrder']['id'] as String;
+    }
+
+    Future<ApiResponse> receipt(
+      TestSession s,
+      String orderId,
+      String itemId,
+      int qty, {
+      double paid = 0,
+    }) => server.post(
+      '/documents/receipts',
+      accessToken: s.accessToken,
+      body: {
+        'salesOrderId': orderId,
+        'movesStock': true,
+        'amountPaid': paid,
+        'lines': [
+          {
+            'itemId': itemId,
+            'itemName': 'Widget',
+            'quantity': qty,
+            'unitPrice': 4.0,
+          },
+        ],
+      },
+    );
+
+    Future<ApiResponse> invoice(
+      TestSession s,
+      String orderId,
+      String itemId,
+      int qty,
+    ) => server.post(
+      '/documents/invoices',
+      accessToken: s.accessToken,
+      body: {
+        'salesOrderId': orderId,
+        'movesStock': true,
+        'lines': [
+          {
+            'itemId': itemId,
+            'itemName': 'Widget',
+            'quantity': qty,
+            'unitPrice': 4.0,
+          },
+        ],
+      },
+    );
+
+    Future<Map<String, dynamic>> sale(TestSession s, String id) async =>
+        (await server.get(
+              '/documents/sales-orders/$id',
+              accessToken: s.accessToken,
+            )).json['salesOrder']
+            as Map<String, dynamic>;
+
+    test('a receipt for part of the order takes that part', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 20);
+      final orderId = await order(s, id);
+      expect(await quantityOf(s, id), 20, reason: 'ordering moves nothing');
+
+      final response = await receipt(s, orderId, id, 4, paid: 16);
+
+      expect(response.statusCode, 201);
+      expect(await quantityOf(s, id), 16);
+      final now = await sale(s, orderId);
+      expect(now['status'], 'partial');
+      expect(now['lines'][0]['quantityFulfilled'], 4);
+    });
+
+    test('an invoice for the rest takes the rest and fulfils it', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 20);
+      final orderId = await order(s, id);
+      await receipt(s, orderId, id, 4, paid: 16);
+
+      final response = await invoice(s, orderId, id, 6);
+
+      expect(response.statusCode, 201);
+      expect(await quantityOf(s, id), 10);
+      expect((await sale(s, orderId))['status'], 'fulfilled');
+    });
+
+    test('billing more than was ordered is refused', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 20);
+      final orderId = await order(s, id, qty: 5);
+      await receipt(s, orderId, id, 3, paid: 12);
+
+      final response = await invoice(s, orderId, id, 3);
+
+      expect(response.statusCode, 400);
+      expect(await quantityOf(s, id), 17);
+    });
+
+    test(
+      'cancelling the invoice puts the stock back and reopens the line',
+      () async {
+        final s = await admin();
+        final id = await item(s, quantity: 20);
+        final orderId = await order(s, id);
+        final raised = await invoice(s, orderId, id, 10);
+        final invoiceId = raised.json['invoice']['id'] as String;
+        expect((await sale(s, orderId))['status'], 'fulfilled');
+
+        await server.post(
+          '/documents/invoices/$invoiceId/cancel',
+          accessToken: s.accessToken,
+          body: <String, Object?>{},
+        );
+
+        expect(await quantityOf(s, id), 20);
+        final now = await sale(s, orderId);
+        expect(now['status'], 'confirmed');
+        expect(now['lines'][0]['quantityFulfilled'], 0);
+        // And it can be billed again.
+        expect((await invoice(s, orderId, id, 10)).statusCode, 201);
+      },
+    );
+
+    test('voiding the receipt puts the stock back too', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 20);
+      final orderId = await order(s, id);
+      final issued = await receipt(s, orderId, id, 4, paid: 16);
+      final receiptId = issued.json['receipt']['id'] as String;
+
+      await server.post(
+        '/documents/receipts/$receiptId/void',
+        accessToken: s.accessToken,
+        body: <String, Object?>{},
+      );
+
+      expect(await quantityOf(s, id), 20);
+      expect((await sale(s, orderId))['lines'][0]['quantityFulfilled'], 0);
+    });
+
+    test('goods sent the old way are billed without leaving twice', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 20);
+      final orderId = await order(s, id);
+      final lineId = (await sale(s, orderId))['lines'][0]['id'] as String;
+      await server.post(
+        '/documents/sales-orders/$orderId/despatch',
+        accessToken: s.accessToken,
+        body: {
+          'sent': {lineId: 6},
+        },
+      );
+      expect(await quantityOf(s, id), 14);
+
+      // Bills the six already sent, plus two more that leave now.
+      await receipt(s, orderId, id, 8, paid: 32);
+
+      expect(await quantityOf(s, id), 12);
+      expect((await sale(s, orderId))['lines'][0]['quantityFulfilled'], 8);
+    });
+
+    test(
+      'cancelling the sale voids an unpaid receipt and returns it',
+      () async {
+        final s = await admin();
+        final id = await item(s, quantity: 20);
+        final orderId = await order(s, id);
+        final issued = await receipt(s, orderId, id, 5);
+        final receiptId = issued.json['receipt']['id'] as String;
+        expect(await quantityOf(s, id), 15);
+
+        final response = await server.post(
+          '/documents/sales-orders/$orderId/cancel',
+          accessToken: s.accessToken,
+          body: <String, Object?>{},
+        );
+
+        expect(response.statusCode, 200);
+        expect(await quantityOf(s, id), 20);
+        final r = await server.get(
+          '/documents/receipts/$receiptId',
+          accessToken: s.accessToken,
+        );
+        expect(r.json['receipt']['status'], 'voided');
+      },
+    );
+
+    test('a cancelled sale cannot be billed', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 20);
+      final orderId = await order(s, id);
+      await server.post(
+        '/documents/sales-orders/$orderId/cancel',
+        accessToken: s.accessToken,
+        body: <String, Object?>{},
+      );
+
+      expect((await invoice(s, orderId, id, 2)).statusCode, 400);
+      expect(await quantityOf(s, id), 20);
     });
   });
 

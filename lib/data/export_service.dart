@@ -4,8 +4,23 @@ import 'dart:typed_data';
 import 'package:flutter/widgets.dart';
 import 'package:share_plus/share_plus.dart';
 
-/// Hands a generated file to the platform: the native share sheet on Android
-/// and iOS, and on web `navigator.share` with an automatic download fallback.
+import 'browser_download.dart';
+
+/// Hands a generated file to the platform.
+///
+/// Two intents, kept apart on purpose:
+///
+/// * [shareText] / [shareBytes] SAVE the file. In a browser that is a straight
+///   download to Downloads. On Android and iOS there is no Downloads folder an
+///   app can write to, so it opens the share sheet, which carries "Save to
+///   Files" and the like.
+/// * [shareBytesWithApps] offers the file to other apps through the system
+///   share sheet, everywhere. Only the explicit "Share" option uses it.
+///
+/// These used to be one path, through share_plus, which in a browser opens
+/// the system share sheet whenever one exists. Chrome and Safari on macOS have
+/// one, and it cannot save a file, so "Download PDF" and every CSV export
+/// opened a menu of Mail and Messages and saved nothing.
 class ExportService {
   const ExportService();
 
@@ -14,33 +29,47 @@ class ExportService {
     required String contents,
     required String mimeType,
     Rect? originRect,
-  }) async {
-    final file = XFile.fromData(
-      utf8.encode(contents),
-      mimeType: mimeType,
-      name: filename,
-    );
-    await _share(file, filename, originRect);
-  }
+  }) => shareBytes(
+    filename: filename,
+    bytes: Uint8List.fromList(utf8.encode(contents)),
+    mimeType: mimeType,
+    originRect: originRect,
+  );
 
-  /// The same, for a file that is not text — a generated PDF.
+  /// Saves a file that is not text — a generated PDF or spreadsheet.
   Future<void> shareBytes({
     required String filename,
     required Uint8List bytes,
     required String mimeType,
     Rect? originRect,
   }) async {
-    await _share(
-      XFile.fromData(bytes, mimeType: mimeType, name: filename),
-      filename,
-      originRect,
+    if (canDownloadInBrowser) {
+      await downloadInBrowser(
+        bytes: bytes,
+        filename: filename,
+        mimeType: mimeType,
+      );
+      return;
+    }
+    await shareBytesWithApps(
+      filename: filename,
+      bytes: bytes,
+      mimeType: mimeType,
+      originRect: originRect,
     );
   }
 
-  Future<void> _share(XFile file, String filename, Rect? originRect) {
+  /// Offers the file to other apps through the system share sheet. Where a
+  /// browser has no share sheet, share_plus downloads it instead.
+  Future<void> shareBytesWithApps({
+    required String filename,
+    required Uint8List bytes,
+    required String mimeType,
+    Rect? originRect,
+  }) {
     return SharePlus.instance.share(
       ShareParams(
-        files: [file],
+        files: [XFile.fromData(bytes, mimeType: mimeType, name: filename)],
         fileNameOverrides: [filename],
         subject: filename,
         // iPad and macOS anchor the popover to whatever the user tapped.

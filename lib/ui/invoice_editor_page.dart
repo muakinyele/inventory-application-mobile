@@ -62,7 +62,11 @@ class _InvoiceEditorPageState extends State<InvoiceEditorPage> {
 
     _customerId = order.customerId;
     _lines.addAll(
-      controller.invoiceLinesForSalesOrder(order).map(_LineDraft.fromLine),
+      controller
+          .invoiceLinesForSalesOrder(order)
+          .map(
+            (line) => _LineDraft.fromLine(line)..maxQuantity = line.quantity,
+          ),
     );
   }
 
@@ -174,7 +178,26 @@ class _InvoiceEditorPageState extends State<InvoiceEditorPage> {
       return;
     }
 
-    if (!_fromSale) {
+    if (_fromSale) {
+      for (final line in _lines) {
+        final max = line.maxQuantity;
+        if (max != null && line.quantity > max) {
+          _notify(
+            'Only ${number(max)} of ${line.itemName} left to bill on '
+            '${_order!.reference}.',
+            tone: MessageTone.warning,
+          );
+          return;
+        }
+      }
+    }
+
+    // Billing takes the goods, so there has to be enough on the shelf —
+    // except for units a sale's old despatch already sent.
+    {
+      final alreadyOut = _fromSale
+          ? _controller.sentNotBilled(_order!)
+          : const <String, int>{};
       final wanted = <String, int>{};
       for (final line in lines) {
         wanted[line.itemId] = (wanted[line.itemId] ?? 0) + line.quantity;
@@ -182,7 +205,8 @@ class _InvoiceEditorPageState extends State<InvoiceEditorPage> {
       for (final entry in wanted.entries) {
         final item = _controller.byId(entry.key);
         if (item == null) continue;
-        if (entry.value > item.quantity) {
+        final need = entry.value - (alreadyOut[entry.key] ?? 0);
+        if (need > item.quantity) {
           _notify(
             'Only ${number(item.quantity)} of ${item.name} on the shelf.',
             tone: MessageTone.warning,
@@ -247,11 +271,10 @@ class _InvoiceEditorPageState extends State<InvoiceEditorPage> {
         appBar: AppBar(leading: const BackButton()),
         body: EmptyState(
           icon: Icons.local_shipping_outlined,
-          title: 'Nothing has been sent yet',
+          title: 'Nothing left to bill',
           body:
-              'An invoice bills for goods the customer has actually received. '
-              'Send stock against ${_order!.reference} first, then invoice '
-              'for what went out.',
+              'Everything on ${_order!.reference} is already on a receipt or '
+              'an invoice.',
           action: FilledButton(
             onPressed: () => context.go('/sales-orders/${_order!.id}'),
             child: const Text('Back to the sale'),
@@ -272,7 +295,7 @@ class _InvoiceEditorPageState extends State<InvoiceEditorPage> {
                   ? 'Invoice for ${_order!.reference}'
                   : 'New Invoice',
               subtitle: _fromSale
-                  ? 'Bills what that sale has already sent'
+                  ? 'Pay later: issuing this takes the goods off the shelf'
                   : 'Goods go out now, payment comes later',
               showBack: true,
             ),
@@ -502,8 +525,9 @@ class _InvoiceEditorPageState extends State<InvoiceEditorPage> {
             const SizedBox(height: Insets.sm),
             Text(
               _fromSale
-                  ? 'This bills for the sale only. The stock left the shelf '
-                        'when the order was sent.'
+                  ? 'Issuing takes these goods off the shelf and marks them '
+                        'sent on ${_order!.reference}. Record the payment when '
+                        'it comes in.'
                   : 'Issuing takes the stock off the shelf now. Record the '
                         'payment later and a receipt is issued for it.',
               textAlign: TextAlign.center,
@@ -600,6 +624,10 @@ class _LineDraft {
   String sku;
   String unit;
   double costOfGoods;
+
+  /// Against a sale: the most still to bill on this line.
+  int? maxQuantity;
+
   final TextEditingController quantityController;
   final TextEditingController priceController;
   final TextEditingController discountController;
@@ -667,11 +695,29 @@ class _LineEditor extends StatelessWidget {
                   ),
                 ),
                 Text(
-                  '${number(line.quantity)} ${line.unit} · '
-                  '${money(line.price, currency)} each',
+                  '${money(line.price, currency)} each'
+                  '${line.maxQuantity == null ? '' : ' · up to ${number(line.maxQuantity!)} ${line.unit} left on the order'}',
                   style: TextStyle(fontSize: 12.5, color: p.inkMuted),
                 ),
               ],
+            ),
+          ),
+          const SizedBox(width: Insets.md),
+          // The quantity is the one thing a sale's line lets you change: bill
+          // and deliver part of it now, the rest later.
+          SizedBox(
+            width: 84,
+            child: TextField(
+              controller: line.quantityController,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              textAlign: TextAlign.end,
+              decoration: InputDecoration(
+                labelText: 'Qty',
+                isDense: true,
+                suffixText: line.unit,
+              ),
+              onChanged: (_) => onChanged(),
             ),
           ),
           const SizedBox(width: Insets.md),

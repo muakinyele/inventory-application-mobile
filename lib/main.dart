@@ -9,6 +9,7 @@ import 'data/inventory_api.dart';
 import 'data/snapshot.dart';
 import 'state/auth_controller.dart';
 import 'state/inventory_controller.dart';
+import 'state/live_refresh.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -35,6 +36,9 @@ Future<void> main() async {
         inventory.forgetSharedData();
       }
     });
+
+    // Picks up what other devices and people change, without a reload.
+    LiveRefresh(inventory);
 
     runApp(
       MultiProvider(

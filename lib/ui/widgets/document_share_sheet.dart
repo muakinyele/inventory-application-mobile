@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../../core/design.dart';
 import '../../core/formatters.dart';
 import '../../core/palette.dart';
+import '../../data/browser_download.dart';
 import '../../data/export_service.dart';
 import '../../data/order_document.dart';
 import '../../data/share_targets.dart';
@@ -76,16 +77,30 @@ class _ShareSheet extends StatelessWidget {
 
   final ShareableDocument document;
 
-  Future<void> _sharePdf(BuildContext context, Rect? origin) async {
+  Future<void> _sharePdf(
+    BuildContext context,
+    Rect? origin, {
+    bool download = false,
+  }) async {
     final messenger = Navigator.of(context);
     try {
       final bytes = await document.buildPdf();
-      await const ExportService().shareBytes(
-        filename: document.filename,
-        bytes: bytes,
-        mimeType: 'application/pdf',
-        originRect: origin,
-      );
+      const export = ExportService();
+      if (download) {
+        await export.shareBytes(
+          filename: document.filename,
+          bytes: bytes,
+          mimeType: 'application/pdf',
+          originRect: origin,
+        );
+      } else {
+        await export.shareBytesWithApps(
+          filename: document.filename,
+          bytes: bytes,
+          mimeType: 'application/pdf',
+          originRect: origin,
+        );
+      }
       messenger.pop();
     } catch (error) {
       messenger.pop();
@@ -158,14 +173,33 @@ class _ShareSheet extends StatelessWidget {
                   document.onView!();
                 },
               ),
+            // In a browser, saving and sharing are different things: the
+            // system share sheet on a Mac has no way to save. On a phone the
+            // share sheet is how a file gets saved, so one tile does both.
+            if (canDownloadInBrowser)
+              Builder(
+                builder: (tileContext) => _ShareTile(
+                  icon: Icons.file_download_outlined,
+                  label: 'Download the PDF',
+                  note: 'Saves it to your Downloads folder',
+                  onTap: () => _sharePdf(
+                    tileContext,
+                    shareOriginOf(tileContext),
+                    download: true,
+                  ),
+                ),
+              ),
             Builder(
               builder: (tileContext) => _ShareTile(
                 icon: Icons.ios_share,
-                label: 'Share or save the PDF',
-                // The honest description of the system sheet: on a phone it
-                // lists WhatsApp, Telegram, Drive and mail, and the file
-                // really is attached. In a browser it saves to Downloads.
-                note: 'Hands the file to another app, or saves it',
+                label: canDownloadInBrowser
+                    ? 'Share the PDF'
+                    : 'Share or save the PDF',
+                // On a phone the system sheet lists WhatsApp, Telegram, Drive
+                // and mail, and the file really is attached.
+                note: canDownloadInBrowser
+                    ? 'Hands the file to another app'
+                    : 'Hands the file to another app, or saves it',
                 onTap: () => _sharePdf(tileContext, shareOriginOf(tileContext)),
               ),
             ),
@@ -181,7 +215,7 @@ class _ShareSheet extends StatelessWidget {
               ),
               child: Text(
                 'These carry the details as text. To send the PDF itself, use '
-                '“Share or save the PDF” above.',
+                'the options above.',
                 style: TextStyle(fontSize: 12.5, color: p.inkMuted),
               ),
             ),

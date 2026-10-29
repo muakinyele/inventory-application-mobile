@@ -9,6 +9,7 @@ import '../data/export_service.dart';
 import '../data/invoice_document.dart';
 import '../models/invoice.dart';
 import '../models/receipt.dart';
+import '../models/sales_order.dart';
 import '../state/inventory_controller.dart';
 import 'document_view_page.dart';
 import 'widgets/app_message.dart';
@@ -20,9 +21,17 @@ import 'widgets/section_card.dart';
 import 'widgets/status_pill.dart';
 
 class InvoiceDetailPage extends StatefulWidget {
-  const InvoiceDetailPage({super.key, required this.invoiceId});
+  const InvoiceDetailPage({
+    super.key,
+    required this.invoiceId,
+    this.openPayment = false,
+  });
 
   final String invoiceId;
+
+  /// Opens "Record payment" as soon as the page shows. Set by `?pay=1`, which
+  /// is how a sales order's "Record payment" lands here in one tap.
+  final bool openPayment;
 
   @override
   State<InvoiceDetailPage> createState() => _InvoiceDetailPageState();
@@ -30,6 +39,22 @@ class InvoiceDetailPage extends StatefulWidget {
 
 class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
   bool _exporting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!widget.openPayment) return;
+    // After the first frame, so the dialog opens over the page rather than
+    // during its build.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final controller = context.read<InventoryController>();
+      final invoice = controller.invoiceById(widget.invoiceId);
+      if (invoice != null && invoice.status.isCollectable) {
+        _takePayment(controller, invoice);
+      }
+    });
+  }
 
   Future<void> _notify(
     String message, {
@@ -127,6 +152,19 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
                     : invoice.cancelledReason,
                 tone: p.critical,
                 wash: p.criticalWash,
+              ),
+              const SizedBox(height: Insets.lg),
+            ] else if (_billsCancelledSale(controller, invoice)) ...[
+              _Banner(
+                icon: Icons.warning_amber_rounded,
+                title: 'The sale this invoice bills was cancelled',
+                body: invoice.amountPaid > 0
+                    ? 'It has a payment against it. Refund the payment, then '
+                          'cancel this invoice.'
+                    : 'Cancel this invoice to close it out. Any stock the sale '
+                          'still has out goes back on the shelf.',
+                tone: p.warning,
+                wash: p.warningWash,
               ),
               const SizedBox(height: Insets.lg),
             ] else if (invoice.isOverdue) ...[
@@ -511,6 +549,12 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
       return;
     }
     _notify('${receipt.reference} issued for ${money(amount, currency)}');
+  }
+
+  bool _billsCancelledSale(InventoryController controller, Invoice invoice) {
+    final orderId = invoice.salesOrderId;
+    if (orderId == null) return false;
+    return controller.salesOrderById(orderId)?.status == SalesStatus.cancelled;
   }
 
   Future<void> _cancel(InventoryController controller, Invoice invoice) async {

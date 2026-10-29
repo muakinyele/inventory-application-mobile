@@ -1,5 +1,6 @@
 import '../models/item.dart';
 import '../models/movement.dart';
+import '../models/cancelled_sale_issue.dart';
 import '../models/invoice.dart';
 import '../models/party.dart';
 import '../models/purchase_order.dart';
@@ -447,6 +448,11 @@ class InventoryApi {
     return _list(body['salesOrders']).map(salesOrderFromJson).toList();
   }
 
+  Future<SalesOrder> salesOrder(String id) async {
+    final body = await _auth.send('GET', '/documents/sales-orders/$id');
+    return salesOrderFromJson(body['salesOrder'] as Map<String, dynamic>);
+  }
+
   Future<SalesOrder> saveSalesOrder(SalesOrder order) async {
     final existing = order.id.isNotEmpty;
     final body = await _auth.send(
@@ -457,6 +463,71 @@ class InventoryApi {
       body: order.toJson(),
     );
     return salesOrderFromJson(body['salesOrder'] as Map<String, dynamic>);
+  }
+
+  /// Cancels a sale. The server puts back whatever it sent and cancels any
+  /// unpaid invoice billing it; both come back in the answer.
+  Future<({SalesOrder order, List<Invoice> invoices})> cancelSalesOrder(
+    String id, {
+    String reason = '',
+  }) async {
+    final body = await _auth.send(
+      'POST',
+      '/documents/sales-orders/$id/cancel',
+      body: {'reason': reason},
+    );
+    return (
+      order: salesOrderFromJson(body['salesOrder'] as Map<String, dynamic>),
+      invoices: _list(body['invoices']).map(invoiceFromJson).toList(),
+    );
+  }
+
+  /// Cancelled sales whose stock is still out or whose invoice is still live.
+  /// Read-only. Needs settings.manage.
+  Future<List<CancelledSaleIssue>> scanCancelledSales() async {
+    final body = await _auth.send('GET', '/documents/repairs/cancelled-sales');
+    return _list(body['issues']).map(CancelledSaleIssue.fromJson).toList();
+  }
+
+  /// Finishes one cancelled sale: returns its stock and cancels its unpaid
+  /// invoices.
+  Future<({SalesOrder order, List<Invoice> invoices})> repairCancelledSale(
+    String salesOrderId,
+  ) async {
+    final body = await _auth.send(
+      'POST',
+      '/documents/repairs/cancelled-sales/$salesOrderId',
+      body: const <String, Object?>{},
+    );
+    return (
+      order: salesOrderFromJson(body['salesOrder'] as Map<String, dynamic>),
+      invoices: _list(body['invoices']).map(invoiceFromJson).toList(),
+    );
+  }
+
+  /// Repairs every fixable cancelled sale. Answers with the references fixed
+  /// and the ones left, with why.
+  Future<
+    ({List<String> repaired, List<({String reference, String reason})> skipped})
+  >
+  repairAllCancelledSales() async {
+    final body = await _auth.send(
+      'POST',
+      '/documents/repairs/cancelled-sales',
+      body: const <String, Object?>{},
+    );
+    return (
+      repaired: [
+        for (final r in (body['repaired'] as List? ?? const [])) r as String,
+      ],
+      skipped: [
+        for (final raw in (body['skipped'] as List? ?? const []))
+          (
+            reference: (raw as Map)['reference'] as String? ?? '',
+            reason: raw['reason'] as String? ?? '',
+          ),
+      ],
+    );
   }
 
   /// Despatching is what moves stock, not confirming the order. Each line is

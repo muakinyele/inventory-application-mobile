@@ -20,9 +20,9 @@ import 'widgets/section_card.dart';
 ///
 /// Two shapes, one screen. With no [salesOrderId] this is a counter sale: pick
 /// what is going out, take the money, and the stock leaves the shelf as the
-/// receipt is issued. With one, the lines are fixed to what that sale already
-/// despatched — the goods have gone, and this is only the paperwork for the
-/// payment — so they are shown but not editable.
+/// receipt is issued. With one, the lines are what that sale still has to
+/// bill: item and price fixed, quantity adjustable, and issuing it takes the
+/// goods off the shelf and marks them sent on the order.
 class ReceiptEditorPage extends StatefulWidget {
   const ReceiptEditorPage({super.key, this.salesOrderId});
 
@@ -66,7 +66,11 @@ class _ReceiptEditorPageState extends State<ReceiptEditorPage> {
 
     _customerId = order.customerId;
     _lines.addAll(
-      controller.receiptLinesForSalesOrder(order).map(_LineDraft.fromLine),
+      controller
+          .receiptLinesForSalesOrder(order)
+          .map(
+            (line) => _LineDraft.fromLine(line)..maxQuantity = line.quantity,
+          ),
     );
     _syncPaid();
   }
@@ -146,7 +150,26 @@ class _ReceiptEditorPageState extends State<ReceiptEditorPage> {
 
     // A counter sale can not send what is not there. Checked here so the
     // seller is told, rather than having the controller silently trim it.
-    if (!_fromSale) {
+    if (_fromSale) {
+      for (final line in _lines) {
+        final max = line.maxQuantity;
+        if (max != null && line.quantity > max) {
+          _notify(
+            'Only ${number(max)} of ${line.itemName} left to bill on '
+            '${_order!.reference}.',
+            tone: MessageTone.warning,
+          );
+          return;
+        }
+      }
+    }
+
+    // Billing takes the goods, so there has to be enough on the shelf —
+    // except for units a sale's old despatch already sent.
+    {
+      final alreadyOut = _fromSale
+          ? _controller.sentNotBilled(_order!)
+          : const <String, int>{};
       final wanted = <String, int>{};
       for (final line in lines) {
         wanted[line.itemId] = (wanted[line.itemId] ?? 0) + line.quantity;
@@ -154,7 +177,8 @@ class _ReceiptEditorPageState extends State<ReceiptEditorPage> {
       for (final entry in wanted.entries) {
         final item = _controller.byId(entry.key);
         if (item == null) continue;
-        if (entry.value > item.quantity) {
+        final need = entry.value - (alreadyOut[entry.key] ?? 0);
+        if (need > item.quantity) {
           _notify(
             'Only ${number(item.quantity)} of ${item.name} on the shelf.',
             tone: MessageTone.warning,
@@ -218,11 +242,10 @@ class _ReceiptEditorPageState extends State<ReceiptEditorPage> {
         appBar: AppBar(leading: const BackButton()),
         body: EmptyState(
           icon: Icons.local_shipping_outlined,
-          title: 'Nothing has been sent yet',
+          title: 'Nothing left to bill',
           body:
-              'A receipt covers goods the customer has actually taken. Send '
-              'stock against ${_order!.reference} first, then raise the '
-              'receipt for what went out.',
+              'Everything on ${_order!.reference} is already on a receipt or '
+              'an invoice.',
           action: FilledButton(
             onPressed: () => context.go('/sales-orders/${_order!.id}'),
             child: const Text('Back to the sale'),
@@ -245,7 +268,7 @@ class _ReceiptEditorPageState extends State<ReceiptEditorPage> {
                   ? 'Receipt for ${_order!.reference}'
                   : 'New Receipt',
               subtitle: _fromSale
-                  ? 'Payment for what that sale has already sent'
+                  ? 'Paid now: issuing this takes the goods off the shelf'
                   : 'Issuing this takes the stock off the shelf',
               showBack: true,
             ),
@@ -483,8 +506,8 @@ class _ReceiptEditorPageState extends State<ReceiptEditorPage> {
             const SizedBox(height: Insets.sm),
             Text(
               _fromSale
-                  ? 'This records the payment only. The stock left the shelf '
-                        'when the sale was sent.'
+                  ? 'Issuing takes these goods off the shelf and marks them '
+                        'sent on ${_order!.reference}. To undo, void it.'
                   : 'Issuing takes the stock off the shelf and writes it to '
                         'the ledger. To undo one, void it.',
               textAlign: TextAlign.center,
@@ -589,6 +612,10 @@ class _LineDraft {
   String sku;
   String unit;
   double costOfGoods;
+
+  /// Against a sale: the most still to bill on this line.
+  int? maxQuantity;
+
   final TextEditingController quantityController;
   final TextEditingController priceController;
   final TextEditingController discountController;
@@ -630,8 +657,8 @@ class _LineEditor extends StatelessWidget {
   final String currency;
   final PriceTier tier;
 
-  /// A receipt against a sales order can not change what that sale sent, so
-  /// its lines are shown read-only rather than hidden.
+  /// A receipt against a sales order bills that order's lines: the item and
+  /// price are fixed, only the quantity can be lowered.
   final bool locked;
 
   final VoidCallback onChanged;
@@ -662,11 +689,29 @@ class _LineEditor extends StatelessWidget {
                   ),
                 ),
                 Text(
-                  '${number(line.quantity)} ${line.unit} · '
-                  '${money(line.price, currency)} each',
+                  '${money(line.price, currency)} each'
+                  '${line.maxQuantity == null ? '' : ' · up to ${number(line.maxQuantity!)} ${line.unit} left on the order'}',
                   style: TextStyle(fontSize: 12.5, color: p.inkMuted),
                 ),
               ],
+            ),
+          ),
+          const SizedBox(width: Insets.md),
+          // The quantity is the one thing a sale's line lets you change: bill
+          // and deliver part of it now, the rest later.
+          SizedBox(
+            width: 84,
+            child: TextField(
+              controller: line.quantityController,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              textAlign: TextAlign.end,
+              decoration: InputDecoration(
+                labelText: 'Qty',
+                isDense: true,
+                suffixText: line.unit,
+              ),
+              onChanged: (_) => onChanged(),
             ),
           ),
           const SizedBox(width: Insets.md),

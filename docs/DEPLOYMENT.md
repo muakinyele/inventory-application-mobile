@@ -260,6 +260,32 @@ docker compose -f docker-compose.prod.yml run --rm \
 `--force` creates an additional administrator, so prefer inviting from the app
 whenever you can still sign in. It is the way back when you cannot.
 
+### Repairing sales cancelled before stock was returned
+
+Before cancelling a sales order returned its stock, a cancel only changed the
+status. Those orders still have their goods counted as gone, and some still
+have a live invoice. Run this once on each existing deployment after
+upgrading. It only reports until you pass `--apply`:
+
+```bash
+cd "$DEPLOY_PATH"
+# Report only. Changes nothing.
+docker compose -f docker-compose.prod.yml run --rm \
+  --entrypoint /app/bin/repair_cancelled_sales api
+
+# Return the stock and cancel the unpaid invoices.
+docker compose -f docker-compose.prod.yml run --rm \
+  --entrypoint /app/bin/repair_cancelled_sales api --apply
+```
+
+A sale with a payment against it is listed as blocked and left alone: refund
+the payment, then run it again. Running it twice changes nothing the second
+time, and each returned unit is recorded as a "cancellation" movement on the
+order. Exit code 2 means something was left for you to look at.
+
+The same check is in the app for administrators, under **Settings → Data →
+Check cancelled sales**, with a Repair button per sale and a Repair all.
+
 ## Rolling back
 
 Images are tagged with the commit SHA, so a rollback is a redeploy of a known

@@ -98,7 +98,7 @@ void main() {
 
     test('a cancelled sale sends nothing', () async {
       final (c, order, itemId) = await confirmedSale(onHand: 20, ordered: 5);
-      c.cancelSalesOrder(order.id);
+      await c.cancelSalesOrder(order.id);
 
       final moved = await c.fulfilSalesOrder(order.id, {'l1': 5});
 

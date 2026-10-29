@@ -693,16 +693,13 @@ void main() {
       expect(find.text('Delete'), findsNothing);
     });
 
-    testWidgets('a sale offers a receipt only once stock has gone', (
-      tester,
-    ) async {
+    testWidgets('a sale offers a receipt once it is confirmed', (tester) async {
       tester.view.physicalSize = _tallDesktop;
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      // Two states, seeded rather than reached by despatching: the screen's
-      // job is to offer the receipt when something has shipped, and the
-      // shipping itself is the server's.
+      // A draft is still being agreed; once confirmed it can be billed, and
+      // billing is what takes the goods. Nothing has to be sent first.
       Future<void> pumpWith(SalesStatus status, int fulfilled) async {
         final controller = await seededController(
           salesOrders: [
@@ -731,8 +728,11 @@ void main() {
         await tester.pumpAndSettle();
       }
 
-      await pumpWith(SalesStatus.confirmed, 0);
+      await pumpWith(SalesStatus.draft, 0);
       expect(find.text('Issue receipt'), findsNothing);
+
+      await pumpWith(SalesStatus.confirmed, 0);
+      expect(find.text('Issue receipt'), findsOneWidget);
 
       await pumpWith(SalesStatus.partial, 4);
       expect(find.text('Issue receipt'), findsOneWidget);

@@ -23,6 +23,7 @@ Future<InventoryController> newController() async {
   return InventoryController(
     await fakeInventoryApi(FakeInventoryServer()),
     Snapshot.empty,
+    loadedDocuments: DocumentSet.values.toSet(),
   );
 }
 
@@ -53,6 +54,7 @@ Future<InventoryController> seededController({
 }) async {
   return InventoryController(
     await fakeInventoryApi(FakeInventoryServer()),
+    loadedDocuments: DocumentSet.values.toSet(),
     Snapshot(
       items: items,
       movements: movements,

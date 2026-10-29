@@ -9,8 +9,11 @@ import '../core/palette.dart';
 import '../data/csv_codec.dart';
 import '../data/export_service.dart';
 import '../data/receipt_document.dart';
+import '../data/snapshot.dart';
 import '../models/app_settings.dart';
+import '../state/auth_controller.dart';
 import '../state/inventory_controller.dart';
+import 'cancelled_sales_check_page.dart';
 import 'widgets/app_message.dart';
 import 'widgets/section_card.dart';
 import 'widgets/company_logo_field.dart';
@@ -133,6 +136,20 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Future<void> _exportReceipts(BuildContext buttonContext) async {
     final controller = context.read<InventoryController>();
+    // Taken before the fetch: it is where the row was when it was tapped, and
+    // reading a BuildContext after an await is how that becomes a crash on a
+    // screen that has since been left.
+    final origin = shareOriginOf(buttonContext);
+
+    // Fetched here rather than at sign-in. Settings is not a document screen
+    // — somebody opening it to change the tax rate should not wait on the
+    // receipt book — but the export plainly needs it, and without this the
+    // button would report "nothing to export" for a workspace full of them.
+    setState(() => _busyRow = 'receipts-export');
+    await controller.ensureDocuments(const {DocumentSet.receipts});
+    if (!mounted) return;
+    setState(() => _busyRow = null);
+
     if (controller.receipts.isEmpty) {
       _notify('No receipts to export yet.', tone: MessageTone.warning);
       return;
@@ -141,7 +158,7 @@ class _SettingsPageState extends State<SettingsPage> {
       filename: 'receipts.csv',
       contents: receiptsToCsv(controller.receipts, controller.settings),
       mimeType: 'text/csv',
-      originRect: shareOriginOf(buttonContext),
+      originRect: origin,
     );
     if (mounted) {
       _notify('${number(controller.receipts.length)} receipts exported');
@@ -739,7 +756,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     builder: (rowContext) => _MenuRow(
                       icon: Icons.receipt_long_outlined,
                       label: 'Export receipts (CSV)',
-                      note: '${controller.receipts.length}',
+                      busy: _isBusy('receipts-export'),
                       onTap: () => _exportReceipts(rowContext),
                     ),
                   ),
@@ -768,6 +785,22 @@ class _SettingsPageState extends State<SettingsPage> {
                     busy: _isBusy('restore'),
                     danger: true,
                   ),
+                  if (context.watch<AuthController?>()?.can(
+                        'settings.manage',
+                      ) ??
+                      false) ...[
+                    Divider(color: p.line, height: 1),
+                    _MenuRow(
+                      icon: Icons.fact_check_outlined,
+                      label: 'Check cancelled sales',
+                      note: 'stock not returned',
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const CancelledSalesCheckPage(),
+                        ),
+                      ),
+                    ),
+                  ],
                   Divider(color: p.line, height: 1),
                   _MenuRow(
                     icon: Icons.refresh,

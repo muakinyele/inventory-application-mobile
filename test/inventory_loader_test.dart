@@ -120,7 +120,7 @@ void main() {
     expect(snapshot.settings.locations, ['Main', 'Back room']);
   });
 
-  test('every list is fetched, not just the ones a screen needs', () async {
+  test('what every screen shares is fetched up front', () async {
     final fake = _Fake();
     await loadSharedSnapshot(await _api(fake));
 
@@ -130,14 +130,43 @@ void main() {
       '/api/inventory/stock',
       '/api/inventory/suppliers',
       '/api/inventory/customers',
+      '/api/inventory/preferences',
+    ]) {
+      expect(fake.calls, contains(path), reason: '$path was not requested');
+    }
+  });
+
+  // THE DASHBOARD WAITED ON EVERY DOCUMENT IT DOES NOT SHOW. Sign-in fetched
+  // all five collections, with every line of every one, before the first
+  // screen could draw -- and the first screen reads none of them. They are now
+  // the business of whichever screen actually shows them.
+  test('documents are not fetched before a screen asks for them', () async {
+    final fake = _Fake();
+    await loadSharedSnapshot(await _api(fake));
+
+    for (final path in [
       '/api/documents/invoices',
       '/api/documents/receipts',
       '/api/documents/purchase-orders',
       '/api/documents/sales-orders',
       '/api/documents/transfers',
     ]) {
-      expect(fake.calls, contains(path), reason: '$path was not requested');
+      expect(
+        fake.calls,
+        isNot(contains(path)),
+        reason: '$path is on the startup path again',
+      );
     }
+  });
+
+  test('the opening snapshot carries no documents', () async {
+    final snapshot = await loadSharedSnapshot(await _api(_Fake()));
+
+    expect(snapshot.invoices, isEmpty);
+    expect(snapshot.receipts, isEmpty);
+    expect(snapshot.purchaseOrders, isEmpty);
+    expect(snapshot.salesOrders, isEmpty);
+    expect(snapshot.transfers, isEmpty);
   });
 
   test('a failure is raised, not smoothed into an empty inventory', () async {

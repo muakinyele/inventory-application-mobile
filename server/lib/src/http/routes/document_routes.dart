@@ -344,6 +344,83 @@ Router documentRoutes({required DocumentService documents}) {
     });
   });
 
+  // Cancelling puts back whatever the order sent, and cancels any unpaid
+  // invoice billing it. The answer carries those invoices so the app can
+  // adopt them rather than guess.
+  router.post('/sales-orders/<id>/cancel', (Request request, String id) async {
+    final caller = request.require('sales_orders.update');
+    final body = await readJsonBody(request);
+    final result = await documents.cancelSalesOrder(
+      id: id,
+      actorId: caller.user.id,
+      reason: body['reason'] as String? ?? '',
+    );
+    return jsonResponse({
+      'salesOrder': salesOrderJson(result.order, result.lines),
+      'invoices': [
+        for (final invoice in result.invoices)
+          invoiceJson(invoice, (await documents.invoice(invoice.id)).lines),
+      ],
+    });
+  });
+
+  // Repairs for sales cancelled before cancelling returned stock. The scan is
+  // read-only; the fix is per order, or every fixable one at once. Both are
+  // administration: they move stock on records other people raised.
+  router.get('/repairs/cancelled-sales', (Request request) async {
+    request.require('settings.manage');
+    final issues = await documents.scanCancelledSales();
+    return jsonResponse({
+      'issues': [for (final issue in issues) issue.toJson()],
+    });
+  });
+
+  router.post('/repairs/cancelled-sales/<id>', (
+    Request request,
+    String id,
+  ) async {
+    final caller = request.require('settings.manage');
+    final result = await documents.repairCancelledSale(
+      id: id,
+      actorId: caller.user.id,
+    );
+    return jsonResponse({
+      'salesOrder': salesOrderJson(result.order, result.lines),
+      'invoices': [
+        for (final invoice in result.invoices)
+          invoiceJson(invoice, (await documents.invoice(invoice.id)).lines),
+      ],
+    });
+  });
+
+  router.post('/repairs/cancelled-sales', (Request request) async {
+    final caller = request.require('settings.manage');
+    final repaired = <String>[];
+    final skipped = <Map<String, String>>[];
+    for (final issue in await documents.scanCancelledSales()) {
+      if (!issue.fixable) {
+        skipped.add({
+          'reference': issue.salesOrderReference,
+          'reason': 'Paid against (${issue.paidBy.join(', ')}). Refund first.',
+        });
+        continue;
+      }
+      try {
+        await documents.repairCancelledSale(
+          id: issue.salesOrderId,
+          actorId: caller.user.id,
+        );
+        repaired.add(issue.salesOrderReference);
+      } on ApiError catch (error) {
+        skipped.add({
+          'reference': issue.salesOrderReference,
+          'reason': error.message,
+        });
+      }
+    }
+    return jsonResponse({'repaired': repaired, 'skipped': skipped});
+  });
+
   /// Despatching is what moves stock, not confirming the order.
   router.post('/sales-orders/<id>/despatch', (
     Request request,

@@ -93,7 +93,10 @@ void main() {
     // bill.
     testWidgets('a sale with no customer lets you choose one', (tester) async {
       final controller = await seededController(
-        customers: [_customer(), _customer(id: 'c2', name: 'Bola Ade')],
+        customers: [
+          _customer(),
+          _customer(id: 'c2', name: 'Bola Ade'),
+        ],
         salesOrders: [_sale()],
       );
 
@@ -112,7 +115,10 @@ void main() {
 
     testWidgets('and the whole customer list is offered', (tester) async {
       final controller = await seededController(
-        customers: [_customer(), _customer(id: 'c2', name: 'Bola Ade')],
+        customers: [
+          _customer(),
+          _customer(id: 'c2', name: 'Bola Ade'),
+        ],
         salesOrders: [_sale()],
       );
       await _pump(tester, controller);
