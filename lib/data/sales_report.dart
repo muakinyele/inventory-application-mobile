@@ -148,13 +148,13 @@ class ReportLine {
 
 /// Revenue, cost and margin over a period, per item and in total.
 ///
-/// The one rule that keeps the figures honest: **a sale is counted where the
-/// goods left the shelf, exactly once**. Three kinds of document can do that —
-/// a counter receipt, a credit invoice, and a despatch against a sales order —
-/// and each carries a `movesStock` flag saying whether it was the one that
-/// moved it. Paperwork raised on top (a receipt for an invoice payment, an
-/// invoice billing a sales order) moves nothing and is deliberately ignored
-/// here, or the same goods would be counted two and three times over.
+/// The one rule that keeps the figures honest: **every unit sold is counted
+/// exactly once, where it was billed**. A counter receipt or a credit invoice
+/// is a sale when it took the stock. A receipt or invoice for a sales order is
+/// always the sale of what it bills. A sales order itself counts only units it
+/// sent through its old despatch that no receipt or invoice has billed yet. A
+/// receipt for an invoice payment, a proforma, and anything voided or
+/// cancelled count for nothing.
 ///
 /// Revenue is recognised when the goods go out, not when the money arrives,
 /// so a credit sale counts in full on the day it was invoiced and the unpaid
@@ -230,11 +230,34 @@ class SalesReport {
       bySource[source] = (bySource[source] ?? 0) + revenue;
     }
 
-    // --- Counter sales -----------------------------------------------------
+    // EACH UNIT IS COUNTED ONCE, WHERE IT WAS BILLED. A sales order is only
+    // an order: its receipts and invoices are the sale, at their own date and
+    // prices, whether they took the stock (since billing moves it) or billed
+    // goods the order's old despatch had already sent. The order itself counts
+    // only what it sent and nobody has billed yet. This used to count every
+    // sent unit on the order AND again on the receipt or invoice that took it,
+    // doubling those sales once billing began to move stock.
+    final billedOnOrder = <String, Map<String, int>>{};
+    void billed(String? orderId, String itemId, int units) {
+      if (orderId == null) return;
+      final byItem = billedOnOrder.putIfAbsent(orderId, () => {});
+      byItem[itemId] = (byItem[itemId] ?? 0) + units;
+    }
+
+    // --- Receipts ----------------------------------------------------------
     for (final receipt in receipts) {
-      // movesStock is false for a receipt that only records a payment, and
-      // countsAsSale is false for a void. Both are excluded here.
-      if (!receipt.movesStock || !receipt.status.countsAsSale) continue;
+      // A receipt for a payment on an invoice is that invoice's money, not a
+      // second sale; a void counts for nothing.
+      if (receipt.invoiceId != null || !receipt.status.countsAsSale) continue;
+      // No lines bills no goods: a record of money arriving, not a sale.
+      if (receipt.lines.isEmpty) continue;
+      final onOrder = receipt.salesOrderId != null;
+      // Without an order, only a receipt that took stock is a sale (one that
+      // did not is a payment record or an imported copy).
+      if (!onOrder && !receipt.movesStock) continue;
+      for (final line in receipt.lines) {
+        billed(receipt.salesOrderId, line.itemId, line.quantity);
+      }
       if (!range.contains(receipt.issuedAt)) continue;
       documents++;
 
@@ -250,7 +273,7 @@ class SalesReport {
             ? 0.0
             : line.quantityKept / line.quantity;
         addLine(
-          SaleSource.counter,
+          onOrder ? SaleSource.salesOrder : SaleSource.counter,
           line.itemId,
           line.itemName,
           line.sku,
@@ -259,12 +282,20 @@ class SalesReport {
           line.costOfGoods * kept,
         );
       }
-      if (receipt.balanceDue > 0) outstanding += receipt.balanceDue;
+      // Owed on what the customer kept: goods handed back are not owed for.
+      final owed = receipt.netTotal - receipt.amountPaid;
+      if (owed > 0.005) outstanding += owed;
     }
 
-    // --- Credit sales ------------------------------------------------------
+    // --- Invoices ----------------------------------------------------------
     for (final invoice in invoices) {
-      if (!invoice.movesStock || !invoice.status.countsAsSale) continue;
+      if (!invoice.status.countsAsSale || invoice.lines.isEmpty) continue;
+      final onOrder = invoice.salesOrderId != null;
+      // Without an order, one that moved no stock is a proforma: not a sale.
+      if (!onOrder && !invoice.movesStock) continue;
+      for (final line in invoice.lines) {
+        billed(invoice.salesOrderId, line.itemId, line.quantity);
+      }
       if (!range.contains(invoice.issuedAt)) continue;
       documents++;
       creditSales++;
@@ -274,7 +305,7 @@ class SalesReport {
 
       for (final line in invoice.lines) {
         addLine(
-          SaleSource.credit,
+          onOrder ? SaleSource.salesOrder : SaleSource.credit,
           line.itemId,
           line.itemName,
           line.sku,
@@ -286,29 +317,37 @@ class SalesReport {
       outstanding += invoice.outstanding;
     }
 
-    // --- Sales orders ------------------------------------------------------
+    // --- Sent on a sales order, not yet billed ------------------------------
     for (final order in salesOrders) {
       if (order.status == SalesStatus.cancelled) continue;
       if (order.unitsFulfilled <= 0) continue;
       final at = _salesOrderDate(order);
       if (!range.contains(at)) continue;
-      // An order that has been receipted or invoiced is still the document
-      // that moved the stock — the paperwork on top was skipped above — so it
-      // is counted here and nowhere else.
-      documents++;
-
+      // What its receipts and invoices already cover, item by item, filling
+      // the earliest line first.
+      final covered = {...?billedOnOrder[order.id]};
+      var counted = false;
       for (final line in order.lines) {
         if (line.quantityFulfilled <= 0) continue;
+        final already = covered[line.itemId] ?? 0;
+        final take = already < line.quantityFulfilled
+            ? already
+            : line.quantityFulfilled;
+        covered[line.itemId] = already - take;
+        final unbilled = line.quantityFulfilled - take;
+        if (unbilled <= 0) continue;
+        counted = true;
         addLine(
           SaleSource.salesOrder,
           line.itemId,
           line.itemName,
           '',
-          line.quantityFulfilled,
-          line.revenue,
-          line.costOfGoods,
+          unbilled,
+          unbilled * line.unitPrice,
+          line.costOfGoods * unbilled / line.quantityFulfilled,
         );
       }
+      if (counted) documents++;
     }
 
     final lines =

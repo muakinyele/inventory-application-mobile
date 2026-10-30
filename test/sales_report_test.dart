@@ -350,6 +350,167 @@ void main() {
       expect(report.lines.single.unitsSold, 60);
     });
 
+    group('billing a sales order', () {
+      // Billing is what takes the goods now: a receipt or invoice for an order
+      // moves the stock and marks the units sent on the order. Counting the
+      // order's sent units as well doubled every such sale.
+      SalesOrder order({required int sent}) => SalesOrder(
+        id: 'so1',
+        reference: 'SO-0001',
+        status: sent >= 10 ? SalesStatus.fulfilled : SalesStatus.partial,
+        lines: [
+          SalesOrderLine(
+            id: 'c',
+            itemId: 'i1',
+            itemName: 'Bolt',
+            quantityOrdered: 10,
+            quantityFulfilled: sent,
+            unitPrice: 500,
+            costOfGoods: 100.0 * sent,
+          ),
+        ],
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+
+      ReceiptLine bolts(int n, {double price = 500}) => ReceiptLine(
+        id: 'r$n',
+        itemId: 'i1',
+        itemName: 'Bolt',
+        quantity: n,
+        unitPrice: price,
+        costOfGoods: 100.0 * n,
+      );
+
+      test('a receipt that billed the whole order counts once', () async {
+        final c = await seededController(
+          salesOrders: [order(sent: 10)],
+          receipts: [
+            seedReceipt(
+              id: 'r1',
+              salesOrderId: 'so1',
+              amountPaid: 5000,
+              lines: [bolts(10)],
+            ),
+          ],
+        );
+
+        final report = thisMonth(c);
+
+        expect(report.unitsSold, 10, reason: 'not 20');
+        expect(report.revenue, 5000);
+        expect(report.costOfGoods, 1000);
+        expect(report.documentCount, 1);
+        expect(report.revenueBySource[SaleSource.salesOrder], 5000);
+      });
+
+      test('part billed, part sent the old way: each unit once', () async {
+        // Ten sent; four on a receipt, six never billed.
+        final c = await seededController(
+          salesOrders: [order(sent: 10)],
+          receipts: [
+            seedReceipt(
+              id: 'r1',
+              salesOrderId: 'so1',
+              amountPaid: 2000,
+              lines: [bolts(4)],
+            ),
+          ],
+        );
+
+        final report = thisMonth(c);
+
+        expect(report.unitsSold, 10);
+        expect(report.revenue, 5000);
+        expect(report.costOfGoods, 1000);
+        expect(report.documentCount, 2, reason: 'the receipt and the order');
+      });
+
+      test('an invoice for an order counts at the invoice price', () async {
+        final c = await seededController(
+          salesOrders: [order(sent: 10)],
+          invoices: [
+            Invoice(
+              id: 'inv1',
+              reference: 'INV-0001',
+              salesOrderId: 'so1',
+              // An invoice for goods the old despatch had sent moved nothing.
+              movesStock: false,
+              lines: const [
+                InvoiceLine(
+                  id: 'x',
+                  itemId: 'i1',
+                  itemName: 'Bolt',
+                  quantity: 10,
+                  unitPrice: 450,
+                  costOfGoods: 1000,
+                ),
+              ],
+              issuedAt: DateTime.now(),
+              createdAt: DateTime.now(),
+              updatedAt: DateTime.now(),
+            ),
+          ],
+        );
+
+        final report = thisMonth(c);
+
+        expect(report.unitsSold, 10);
+        expect(report.revenue, 4500, reason: 'what was billed');
+        expect(report.outstanding, 4500);
+      });
+
+      test('a proforma is still not a sale', () async {
+        final c = await seededController(
+          invoices: [
+            Invoice(
+              id: 'pf',
+              reference: 'INV-0009',
+              movesStock: false,
+              lines: const [
+                InvoiceLine(
+                  id: 'x',
+                  itemId: 'i1',
+                  itemName: 'Bolt',
+                  quantity: 3,
+                  unitPrice: 500,
+                ),
+              ],
+              issuedAt: DateTime.now(),
+              createdAt: DateTime.now(),
+              updatedAt: DateTime.now(),
+            ),
+          ],
+        );
+
+        expect(thisMonth(c).isEmpty, isTrue);
+      });
+    });
+
+    test('what is still owed leaves out goods handed back', () async {
+      // An account sale of ten, nothing paid, four returned: six are owed for.
+      final c = await seededController(
+        receipts: [
+          seedReceipt(
+            id: 'r1',
+            amountPaid: 0,
+            lines: const [
+              ReceiptLine(
+                id: 'a',
+                itemId: 'i1',
+                itemName: 'Bolt',
+                quantity: 10,
+                unitPrice: 100,
+                quantityRefunded: 4,
+              ),
+            ],
+          ),
+        ],
+      );
+
+      expect(thisMonth(c).outstanding, 600);
+    });
+
     test('a refund nets down both units and revenue', () async {
       // Four of ten came back, so the day sold six — the refund is not a
       // separate negative sale, it reduces the one that happened.
