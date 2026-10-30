@@ -6,6 +6,7 @@ import 'dart:js_interop_unsafe';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:stockpile/data/browser_download.dart';
 import 'package:stockpile/data/export_service.dart';
 
 /// "Download PDF" and every export opened the macOS share menu in Chrome and
@@ -59,4 +60,53 @@ void main() {
       expect(downloads, ['INV-0001.pdf', 'items.csv']);
     },
   );
+
+  test('a browser that can share files is offered the PDF itself', () {
+    // Which way a Share goes: a browser that takes files gets the file; the
+    // widget tests check that file is the PDF and not a text summary.
+    globalContext.callMethod(
+      'eval'.toJS,
+      '''
+      Object.defineProperty(navigator, 'canShare', {
+        configurable: true,
+        value: (d) => !!(d && d.files && d.files.length &&
+            d.files[0].type === 'application/pdf'),
+      });
+      '''
+          .toJS,
+    );
+
+    expect(
+      canShareFilesInBrowser(
+        bytes: Uint8List.fromList([37, 80, 68, 70]),
+        filename: 'INV-0042.pdf',
+        mimeType: 'application/pdf',
+      ),
+      isTrue,
+    );
+  });
+
+  test('a browser that cannot share files downloads it instead', () async {
+    globalContext.callMethod(
+      'eval'.toJS,
+      '''
+      window.__downloads = [];
+      Object.defineProperty(navigator, 'canShare', {
+        configurable: true, value: () => false,
+      });
+      '''
+          .toJS,
+    );
+
+    final outcome = await const ExportService().shareFile(
+      filename: 'SO-0021.pdf',
+      bytes: Uint8List.fromList([37, 80, 68, 70]),
+      mimeType: 'application/pdf',
+    );
+
+    expect(outcome, FileShareOutcome.downloaded);
+    final downloads = (globalContext['__downloads'] as JSArray<JSString>).toDart
+        .map((s) => s.toDart);
+    expect(downloads, ['SO-0021.pdf']);
+  });
 }

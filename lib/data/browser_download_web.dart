@@ -5,6 +5,26 @@ import 'package:web/web.dart' as web;
 
 const bool canDownloadInBrowser = true;
 
+/// Whether this browser can hand a file to other apps through its share
+/// sheet. Chrome and Safari on a Mac, and phones, can; Firefox on a desktop
+/// cannot, and there the file is downloaded instead.
+bool canShareFilesInBrowser({
+  required Uint8List bytes,
+  required String filename,
+  required String mimeType,
+}) {
+  try {
+    final file = web.File(
+      [bytes.toJS].toJS,
+      filename,
+      web.FilePropertyBag(type: mimeType),
+    );
+    return web.window.navigator.canShare(web.ShareData(files: [file].toJS));
+  } catch (_) {
+    return false;
+  }
+}
+
 /// Saves [bytes] to the browser's Downloads as [filename].
 ///
 /// A temporary link with a `download` attribute, clicked and removed. Needs no

@@ -79,6 +79,56 @@ class ExportService {
   }
 }
 
+/// What became of a file handed to [ExportService.shareFile].
+enum FileShareOutcome {
+  /// Given to the system share sheet.
+  shared,
+
+  /// The sheet was closed without choosing anywhere.
+  dismissed,
+
+  /// This browser cannot share files, so it was downloaded instead.
+  downloaded,
+}
+
+extension FileSharing on ExportService {
+  /// Shares the FILE — the same PDF that Download saves — never a text
+  /// message about it. Where the browser cannot share files, downloads it.
+  ///
+  /// Call it as soon after the tap as possible: a browser only allows a share
+  /// while the tap is recent, which is why callers build the file in advance.
+  Future<FileShareOutcome> shareFile({
+    required String filename,
+    required Uint8List bytes,
+    required String mimeType,
+    Rect? originRect,
+  }) async {
+    if (canDownloadInBrowser &&
+        !canShareFilesInBrowser(
+          bytes: bytes,
+          filename: filename,
+          mimeType: mimeType,
+        )) {
+      await downloadInBrowser(
+        bytes: bytes,
+        filename: filename,
+        mimeType: mimeType,
+      );
+      return FileShareOutcome.downloaded;
+    }
+    final result = await SharePlus.instance.share(
+      ShareParams(
+        files: [XFile.fromData(bytes, mimeType: mimeType, name: filename)],
+        fileNameOverrides: [filename],
+        sharePositionOrigin: originRect,
+      ),
+    );
+    return result.status == ShareResultStatus.dismissed
+        ? FileShareOutcome.dismissed
+        : FileShareOutcome.shared;
+  }
+}
+
 /// The rect of the widget that triggered a share, in global coordinates.
 /// iPadOS throws without one; every other platform ignores it.
 Rect? shareOriginOf(BuildContext context) {

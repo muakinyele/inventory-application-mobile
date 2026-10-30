@@ -1260,6 +1260,9 @@ class InventoryController extends ChangeNotifier {
   double unreceiptedPayment(String invoiceId) {
     final invoice = invoiceById(invoiceId);
     if (invoice == null || invoice.status == InvoiceStatus.cancelled) return 0;
+    // Only with the receipts in hand. Without them every payment looks
+    // unreceipted, and issuing "the missing one" would duplicate it.
+    if (!_loadedDocuments.contains(DocumentSet.receipts)) return 0;
     final receipted = paymentsForInvoice(
       invoiceId,
     ).fold(0.0, (sum, p) => sum + p.amount);
@@ -1274,8 +1277,18 @@ class InventoryController extends ChangeNotifier {
     PaymentMethod method = PaymentMethod.cash,
   }) async {
     final invoice = invoiceById(invoiceId);
+    // Re-read first: another device may have issued it since this loaded.
+    try {
+      _receipts = await _api.receipts();
+    } catch (error) {
+      debugPrint('Stockpile: could not re-read receipts: $error');
+      return null;
+    }
     final gap = unreceiptedPayment(invoiceId);
-    if (invoice == null || gap <= 0) return null;
+    if (invoice == null || gap <= 0) {
+      notifyListeners();
+      return null;
+    }
     return _writePaymentReceipt(invoice, gap, method: method);
   }
 

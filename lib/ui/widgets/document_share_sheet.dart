@@ -72,10 +72,32 @@ Future<void> showDocumentShareSheet(
   );
 }
 
-class _ShareSheet extends StatelessWidget {
+class _ShareSheet extends StatefulWidget {
   const _ShareSheet({required this.document});
 
   final ShareableDocument document;
+
+  @override
+  State<_ShareSheet> createState() => _ShareSheetState();
+}
+
+class _ShareSheetState extends State<_ShareSheet> {
+  ShareableDocument get document => widget.document;
+
+  /// Built the moment the sheet opens. A browser only lets a share or a new
+  /// window start while the tap that asked for it is recent, and building the
+  /// PDF first could outlast that.
+  late final Future<Uint8List> _pdf = document.buildPdf()
+    ..then((bytes) => _ready = bytes, onError: (_) {});
+  Uint8List? _ready;
+
+  /// In a browser a message cannot carry a file, so the PDF is saved to
+  /// Downloads alongside it, ready to drop into the chat or the email.
+  bool get _savesPdfWithMessage => canDownloadInBrowser;
+
+  String get _message => _savesPdfWithMessage
+      ? '${document.summary}\n\nPDF attached: ${document.filename}'
+      : document.summary;
 
   Future<void> _sharePdf(
     BuildContext context,
@@ -84,8 +106,9 @@ class _ShareSheet extends StatelessWidget {
   }) async {
     final messenger = Navigator.of(context);
     try {
-      final bytes = await document.buildPdf();
+      final bytes = _ready ?? await _pdf;
       const export = ExportService();
+      var downloadedInstead = false;
       if (download) {
         await export.shareBytes(
           filename: document.filename,
@@ -94,14 +117,26 @@ class _ShareSheet extends StatelessWidget {
           originRect: origin,
         );
       } else {
-        await export.shareBytesWithApps(
-          filename: document.filename,
-          bytes: bytes,
-          mimeType: 'application/pdf',
-          originRect: origin,
-        );
+        // The FILE, through the system share sheet: on a phone that lists
+        // WhatsApp, Gmail and the rest with the PDF attached.
+        downloadedInstead =
+            await export.shareFile(
+              filename: document.filename,
+              bytes: bytes,
+              mimeType: 'application/pdf',
+              originRect: origin,
+            ) ==
+            FileShareOutcome.downloaded;
       }
       messenger.pop();
+      if (downloadedInstead && context.mounted) {
+        await showAppMessage(
+          context,
+          'This browser cannot share files, so ${document.filename} was saved '
+          'to your Downloads. Attach it from there.',
+          tone: MessageTone.warning,
+        );
+      }
     } catch (error) {
       messenger.pop();
       if (context.mounted) {
@@ -116,7 +151,21 @@ class _ShareSheet extends StatelessWidget {
 
   Future<void> _open(BuildContext context, Uri target, String name) async {
     Navigator.of(context).pop();
-    final opened = await openShareTarget(target);
+    // The app first, while the tap is fresh — a browser blocks a new window
+    // opened later — then the PDF, which a download does not need a tap for.
+    final opening = openShareTarget(target);
+    if (_savesPdfWithMessage) {
+      try {
+        await downloadInBrowser(
+          bytes: _ready ?? await _pdf,
+          filename: document.filename,
+          mimeType: 'application/pdf',
+        );
+      } catch (error) {
+        debugPrint('Stockpile: could not save the PDF to attach: $error');
+      }
+    }
+    final opened = await opening;
     if (opened || !context.mounted) return;
     await showAppMessage(
       context,
@@ -205,7 +254,11 @@ class _ShareSheet extends StatelessWidget {
             ),
 
             const SizedBox(height: Insets.sm),
-            _GroupLabel(text: 'A message about it'),
+            _GroupLabel(
+              text: _savesPdfWithMessage
+                  ? 'Send it with WhatsApp, email or text'
+                  : 'A message about it',
+            ),
             Padding(
               padding: const EdgeInsets.fromLTRB(
                 Insets.xl,
@@ -214,8 +267,12 @@ class _ShareSheet extends StatelessWidget {
                 Insets.sm,
               ),
               child: Text(
-                'These carry the details as text. To send the PDF itself, use '
-                'the options above.',
+                _savesPdfWithMessage
+                    ? 'Opens the app with the details filled in, and saves the '
+                          'PDF to your Downloads at the same time — drop it into '
+                          'the chat or the email to attach it.'
+                    : 'These carry the details as text. To send the PDF '
+                          'itself, use the options above.',
                 style: TextStyle(fontSize: 12.5, color: p.inkMuted),
               ),
             ),
@@ -227,7 +284,7 @@ class _ShareSheet extends StatelessWidget {
                   : 'Pick a contact in WhatsApp',
               onTap: () => _open(
                 context,
-                whatsAppUri(document.summary, phone: document.recipientPhone),
+                whatsAppUri(_message, phone: document.recipientPhone),
                 'WhatsApp',
               ),
             ),
@@ -241,7 +298,7 @@ class _ShareSheet extends StatelessWidget {
                 context,
                 mailtoUri(
                   subject: document.title,
-                  body: document.summary,
+                  body: _message,
                   to: document.recipientEmail,
                 ),
                 'Your mail app',
@@ -253,7 +310,7 @@ class _ShareSheet extends StatelessWidget {
               note: 'Opens your messages app',
               onTap: () => _open(
                 context,
-                smsUri(document.summary, phone: document.recipientPhone),
+                smsUri(_message, phone: document.recipientPhone),
                 'Your messages app',
               ),
             ),

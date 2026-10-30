@@ -345,9 +345,14 @@ GoRouter createRouter({
                 GoRoute(
                   path: ':id',
                   // Sales orders too, to flag an invoice whose sale was
-                  // cancelled.
+                  // cancelled; receipts, because a payment is a receipt and
+                  // without them every payment looked unreceipted.
                   builder: (context, state) => _withDocuments(
-                    const {DocumentSet.invoices, DocumentSet.salesOrders},
+                    const {
+                      DocumentSet.invoices,
+                      DocumentSet.salesOrders,
+                      DocumentSet.receipts,
+                    },
                     InvoiceDetailPage(
                       invoiceId: state.pathParameters['id']!,
                       openPayment: state.uri.queryParameters['pay'] == '1',

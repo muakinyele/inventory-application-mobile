@@ -104,7 +104,7 @@ pw.Widget companyLogoBlock(AppSettings settings) {
   );
 }
 
-Future<(pw.Font, pw.Font, pw.Font)>? _fontsFuture;
+(pw.Font, pw.Font, pw.Font)? _fonts;
 
 /// Regular, semi-bold and bold Inter, for anything this app renders to PDF.
 ///
@@ -114,16 +114,20 @@ Future<(pw.Font, pw.Font, pw.Font)>? _fontsFuture;
 ///
 /// Cached: parsing three TTFs is the slow part of producing a PDF, and a
 /// report and a receipt want exactly the same three.
-Future<(pw.Font, pw.Font, pw.Font)> loadReportFonts() {
-  return _fontsFuture ??= () async {
-    Future<pw.Font> load(String name) async =>
-        pw.Font.ttf(await rootBundle.load('assets/fonts/$name.ttf'));
-    return (
-      await load('Inter-Regular'),
-      await load('Inter-SemiBold'),
-      await load('Inter-Bold'),
-    );
-  }();
+///
+/// Only a finished load is kept. Keeping the in-flight one meant a load that
+/// never finished — its page closed mid-way, as Share now builds the PDF when
+/// a page opens — left every later document waiting on it for ever.
+Future<(pw.Font, pw.Font, pw.Font)> loadReportFonts() async {
+  final cached = _fonts;
+  if (cached != null) return cached;
+  Future<pw.Font> load(String name) async =>
+      pw.Font.ttf(await rootBundle.load('assets/fonts/$name.ttf'));
+  return _fonts = (
+    await load('Inter-Regular'),
+    await load('Inter-SemiBold'),
+    await load('Inter-Bold'),
+  );
 }
 
 /// Turns a receipt into the files a customer or an accountant can be handed.

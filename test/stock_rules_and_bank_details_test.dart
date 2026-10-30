@@ -11,6 +11,7 @@ import 'package:stockpile/models/app_settings.dart';
 import 'package:stockpile/models/invoice.dart';
 import 'package:stockpile/models/item.dart';
 import 'package:stockpile/models/movement.dart';
+import 'package:stockpile/models/receipt.dart';
 import 'package:stockpile/models/party.dart';
 import 'package:stockpile/models/sales_order.dart';
 import 'package:stockpile/state/inventory_controller.dart';
@@ -376,6 +377,52 @@ void main() {
         );
       },
     );
+
+    test('a payment with its receipt is not flagged', () async {
+      final c = await seededController(
+        invoices: [paidWithoutReceipt()],
+        receipts: [
+          seedReceipt(
+            id: 'r1',
+            invoiceId: 'inv4',
+            amountPaid: 96000,
+            lines: const [
+              ReceiptLine(
+                id: 'rl',
+                itemId: 'a',
+                itemName: 'Large Cabin',
+                quantity: 10,
+                unitPrice: 9600,
+              ),
+            ],
+          ),
+        ],
+      );
+      expect(c.unreceiptedPayment('inv4'), 0);
+    });
+
+    test('without the receipts loaded it does not guess', () async {
+      // The invoice page did not load receipts, so every payment looked
+      // unreceipted — and issuing "the missing one" would have duplicated it.
+      final c = InventoryController(
+        await fakeInventoryApi(FakeInventoryServer()),
+        Snapshot(
+          items: const [],
+          movements: const [],
+          suppliers: const [],
+          customers: const [],
+          purchaseOrders: const [],
+          salesOrders: const [],
+          receipts: const [],
+          invoices: [paidWithoutReceipt()],
+          transfers: const [],
+          levels: const {},
+          settings: const AppSettings(),
+        ),
+        loadedDocuments: {DocumentSet.invoices},
+      );
+      expect(c.unreceiptedPayment('inv4'), 0);
+    });
 
     testWidgets('the invoice page offers to issue it', (tester) async {
       tester.view.physicalSize = const Size(1400, 3000);
