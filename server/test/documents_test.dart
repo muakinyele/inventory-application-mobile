@@ -2610,6 +2610,113 @@ void main() {
     });
   });
 
+  group('editing a sales order before it is billed', () {
+    Future<(String, String)> confirmed(TestSession s, String itemId) async {
+      final created = await server.post(
+        '/documents/sales-orders',
+        accessToken: s.accessToken,
+        body: {
+          'status': 'confirmed',
+          'lines': [
+            {
+              'itemId': itemId,
+              'itemName': 'Widget',
+              'quantityOrdered': 3,
+              'unitPrice': 4.0,
+            },
+          ],
+        },
+      );
+      return (
+        created.json['salesOrder']['id'] as String,
+        created.json['salesOrder']['reference'] as String,
+      );
+    }
+
+    Future<ApiResponse> edit(
+      TestSession s,
+      String orderId,
+      String itemId, {
+      int qty = 5,
+    }) => server.patch(
+      '/documents/sales-orders/$orderId',
+      accessToken: s.accessToken,
+      body: {
+        'status': 'confirmed',
+        'notes': 'Changed after confirming',
+        'lines': [
+          {
+            'itemId': itemId,
+            'itemName': 'Widget',
+            'quantityOrdered': qty,
+            'unitPrice': 4.5,
+          },
+        ],
+      },
+    );
+
+    test('a confirmed order nobody has billed can be changed', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 10);
+      final (orderId, _) = await confirmed(s, id);
+
+      final response = await edit(s, orderId, id);
+
+      expect(response.statusCode, 200);
+      expect(response.json['salesOrder']['status'], 'confirmed');
+      expect(response.json['salesOrder']['lines'][0]['quantityOrdered'], 5);
+      expect(response.json['salesOrder']['notes'], 'Changed after confirming');
+      expect(await quantityOf(s, id), 10, reason: 'an edit moves no stock');
+    });
+
+    test('an edit still cannot promise stock that is not there', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 4);
+      final (orderId, _) = await confirmed(s, id);
+
+      final response = await edit(s, orderId, id, qty: 6);
+
+      expect(response.statusCode, 400);
+      expect(
+        response.json['error']['message'],
+        contains('Widget has only 4 in stock (6 ordered)'),
+      );
+    });
+
+    test('once billed it is locked, and says by what', () async {
+      final s = await admin();
+      final id = await item(s, quantity: 10);
+      final (orderId, _) = await confirmed(s, id);
+      final receipt = await server.post(
+        '/documents/receipts',
+        accessToken: s.accessToken,
+        body: {
+          'salesOrderId': orderId,
+          'movesStock': true,
+          'amountPaid': 4.0,
+          'lines': [
+            {
+              'itemId': id,
+              'itemName': 'Widget',
+              'quantity': 1,
+              'unitPrice': 4.0,
+            },
+          ],
+        },
+      );
+      final reference = receipt.json['receipt']['reference'] as String;
+
+      final response = await edit(s, orderId, id);
+
+      expect(response.statusCode, 400);
+      expect(response.json['error']['message'], contains(reference));
+      expect(
+        response.json['error']['message'],
+        contains('can no longer be edited'),
+      );
+    });
+  });
+
   group('shared and guarded', () {
     test('a document raised by one user is visible to another', () async {
       final owner = await admin();

@@ -238,6 +238,37 @@ void main() {
       expect(find.byType(AlertDialog), findsOne);
     });
 
+    testWidgets('a confirmed sale can be edited, and stays confirmed', (
+      tester,
+    ) async {
+      await pump(
+        tester,
+        await seededController(salesOrders: [_sale(sent: 0)]),
+        '/sales-orders/so1',
+      );
+      expect(find.text('Edit'), findsOne);
+
+      await tester.tap(find.text('Edit'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Edit SO-0021'), findsOne);
+      expect(find.text('Save changes'), findsOne);
+      expect(find.text('Confirm sale'), findsNothing);
+    });
+
+    testWidgets('a billed sale has no Edit', (tester) async {
+      await pump(
+        tester,
+        await seededController(
+          salesOrders: [_sale(sent: 0)],
+          invoices: [_invoice()],
+        ),
+        '/sales-orders/so1',
+      );
+
+      expect(find.text('Edit'), findsNothing);
+    });
+
     testWidgets('fits a phone screen', (tester) async {
       tester.view.physicalSize = const Size(390, 2400);
       tester.view.devicePixelRatio = 1.0;

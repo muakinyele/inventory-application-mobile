@@ -1039,15 +1039,34 @@ class DocumentService {
         );
       }
 
-      // A NEW ORDER CANNOT PROMISE STOCK THAT IS NOT THERE. Checked when an
-      // order is raised and while it is still a draft (so confirming one is
-      // checked too). An order confirmed before this rule existed is left
-      // alone: it can still be billed.
+      // EDITABLE UNTIL IT IS BILLED. Once a receipt or invoice bills it, or it
+      // has taken stock, the order is a record of what was sold and changing
+      // it would leave it disagreeing with the documents raised from it.
+      if (existing != null &&
+          existing.status != 'cancelled' &&
+          !wantsCancelled) {
+        final billedBy = await _billedBy(id);
+        final sent = (await _salesOrderLines(
+          id,
+        )).any((l) => l.quantityFulfilled > 0);
+        if (billedBy.isNotEmpty || sent || await _hasMovements(id)) {
+          throw ApiError.badRequest(
+            billedBy.isNotEmpty
+                ? 'Order ${existing.reference} has been billed '
+                      '(${billedBy.join(', ')}) and can no longer be edited.'
+                : 'Order ${existing.reference} has taken stock and can no '
+                      'longer be edited.',
+          );
+        }
+      }
+
+      // AN ORDER CANNOT PROMISE STOCK THAT IS NOT THERE. Checked whenever its
+      // lines are saved before it is billed: when it is raised, edited, or
+      // confirmed. An order billed already is refused above.
       final status = header.status.present
           ? header.status.value
           : (existing?.status ?? 'draft');
-      if ((existing == null || existing.status == 'draft') &&
-          status != 'cancelled') {
+      if (status != 'cancelled') {
         await _refuseOutOfStock(lines);
       }
 
@@ -1391,6 +1410,28 @@ class DocumentService {
         )..where((t) => t.id.equals(invoice.id))).getSingle(),
     ];
   }
+
+  /// References of the live receipts and invoices billing a sale. A receipt
+  /// for a payment on one of those invoices is not counted separately.
+  Future<List<String>> _billedBy(String salesOrderId) async => [
+    for (final r
+        in await (db.select(db.receipts)..where(
+              (t) =>
+                  t.salesOrderId.equals(salesOrderId) &
+                  t.invoiceId.isNull() &
+                  t.status.equals('voided').not(),
+            ))
+            .get())
+      r.reference,
+    for (final i
+        in await (db.select(db.invoices)..where(
+              (t) =>
+                  t.salesOrderId.equals(salesOrderId) &
+                  t.status.equals('cancelled').not(),
+            ))
+            .get())
+      i.reference,
+  ];
 
   /// Refuses an order whose lines ask for more of an item than is in stock,
   /// naming every item that is short and by how much.

@@ -1826,7 +1826,44 @@ class InventoryController extends ChangeNotifier {
 
   /// Edits are only accepted while the sale is still a draft; once confirmed,
   /// the document is a record of what was quoted.
-  void updateSalesOrder(
+  /// Why a sale can no longer be edited, or null while it still can.
+  ///
+  /// Editable until money or goods are involved: once a receipt or invoice
+  /// bills it, or it has taken stock, the order is the record of what was
+  /// sold, and changing it would leave it disagreeing with those documents.
+  /// The server applies the same rule.
+  String? editBlockedReason(SalesOrder order) {
+    if (order.status == SalesStatus.cancelled) {
+      return '${order.reference} was cancelled.';
+    }
+    final billedBy = [
+      for (final r in _receipts)
+        if (r.salesOrderId == order.id &&
+            r.invoiceId == null &&
+            r.status.countsAsSale)
+          r.reference,
+      for (final i in _invoices)
+        if (i.salesOrderId == order.id && i.status.countsAsSale) i.reference,
+    ];
+    if (billedBy.isNotEmpty) {
+      return '${order.reference} has been billed (${billedBy.join(', ')}). '
+          'Cancel or void those first to change it.';
+    }
+    if (order.unitsFulfilled > 0) {
+      return '${order.reference} has taken stock, so it can no longer be '
+          'changed.';
+    }
+    return null;
+  }
+
+  bool canEditSalesOrder(SalesOrder order) => editBlockedReason(order) == null;
+
+  /// Saves changes to a sale that has not been billed yet, draft or
+  /// confirmed. Shown at once and put back if the server refuses, for
+  /// instance when the new lines ask for more than is in stock.
+  ///
+  /// Returns null on success, or the reason it was refused.
+  Future<String?> updateSalesOrder(
     String id, {
     String? customerId,
     bool clearCustomer = false,
@@ -1834,9 +1871,11 @@ class InventoryController extends ChangeNotifier {
     bool clearDueAt = false,
     String? notes,
     List<SalesOrderLine>? lines,
-  }) {
+  }) async {
     final existing = salesOrderById(id);
-    if (existing == null || !existing.status.isEditable) return;
+    if (existing == null) return 'That sale no longer exists.';
+    final blocked = editBlockedReason(existing);
+    if (blocked != null) return blocked;
 
     final resolvedCustomerId = clearCustomer
         ? null
@@ -1852,7 +1891,24 @@ class InventoryController extends ChangeNotifier {
       lines: lines,
       updatedAt: DateTime.now(),
     );
-    _replaceSalesOrder(updated);
+    _salesOrders = _salesOrders.map((o) => o.id == id ? updated : o).toList();
+    notifyListeners();
+
+    try {
+      final saved = await _api.saveSalesOrder(updated);
+      _salesOrders = _salesOrders.map((o) => o.id == id ? saved : o).toList();
+      lastWriteError = null;
+      notifyListeners();
+      return null;
+    } catch (error) {
+      _salesOrders = _salesOrders
+          .map((o) => o.id == id ? existing : o)
+          .toList();
+      lastWriteError = error;
+      debugPrint('Stockpile: could not save the sale: $error');
+      notifyListeners();
+      return reasonFor(error, 'The changes could not be saved.');
+    }
   }
 
   /// Confirms the sale. Nothing moves in stock — this only opens it for
@@ -2042,27 +2098,6 @@ class InventoryController extends ChangeNotifier {
     if (order == null || !order.status.isOpen) return 0;
 
     return _despatchOnServer(_api, order, sent);
-  }
-
-  /// Writes an order's new state through, wherever it lives.
-  ///
-  /// Every status change goes through here — confirming, cancelling, closing —
-  /// so this one method is what decides whether they reach anybody else. While
-  /// it wrote only to the device, confirming a sale looked right until the
-  /// next load and was never true for anyone but the person who did it.
-  void _replaceSalesOrder(SalesOrder order) {
-    _salesOrders = _salesOrders
-        .map((o) => o.id == order.id ? order : o)
-        .toList();
-    notifyListeners();
-
-    _persist(() async {
-      final saved = await _api.saveSalesOrder(order);
-      _salesOrders = _salesOrders
-          .map((o) => o.id == saved.id ? saved : o)
-          .toList();
-      notifyListeners();
-    });
   }
 
   // --- Receipts ------------------------------------------------------------

@@ -89,9 +89,9 @@ class _SalesOrderEditorPageState extends State<SalesOrderEditorPage> {
 
     final existing = _existing;
 
-    // A new order, or a draft, cannot promise stock that is not there. The
+    // An order cannot promise stock that is not there, new or edited. The
     // server refuses it too; checked here so the reason comes before saving.
-    if (existing == null || existing.status == SalesStatus.draft) {
+    {
       final short = controller.outOfStockReasons(lines);
       if (short.isNotEmpty) {
         await _notify(
@@ -113,7 +113,7 @@ class _SalesOrderEditorPageState extends State<SalesOrderEditorPage> {
         : existing.id;
 
     if (existing != null) {
-      controller.updateSalesOrder(
+      final refused = await controller.updateSalesOrder(
         id,
         customerId: _customerId,
         clearCustomer: _customerId == null,
@@ -122,6 +122,12 @@ class _SalesOrderEditorPageState extends State<SalesOrderEditorPage> {
         notes: _notes.text.trim(),
         lines: lines,
       );
+      if (refused != null) {
+        // Said here, with its reason; nothing was left half-saved.
+        controller.clearWriteError();
+        if (mounted) await _notify(refused, tone: MessageTone.failure);
+        return;
+      }
     }
 
     if (id.isEmpty) {
@@ -136,14 +142,22 @@ class _SalesOrderEditorPageState extends State<SalesOrderEditorPage> {
       return;
     }
 
-    final refused = confirm ? await controller.confirmSalesOrder(id) : null;
+    // A confirmed order being edited stays confirmed; only a draft is
+    // confirmed from here.
+    final confirming =
+        confirm && (existing?.status ?? SalesStatus.draft) == SalesStatus.draft;
+    final refused = confirming ? await controller.confirmSalesOrder(id) : null;
     if (refused != null) controller.clearWriteError();
     if (!mounted) return;
     // Awaited: routing away takes the dialog down with the page it sits on.
     await _notify(
       refused != null
           ? 'Saved as a draft, not confirmed. $refused'
-          : (confirm ? 'Sale confirmed' : 'Draft saved'),
+          : (confirming
+                ? 'Sale confirmed'
+                : (existing != null && existing.status != SalesStatus.draft
+                      ? 'Changes saved'
+                      : 'Draft saved')),
       tone: refused != null ? MessageTone.warning : MessageTone.success,
     );
     if (!mounted) return;
@@ -186,16 +200,19 @@ class _SalesOrderEditorPageState extends State<SalesOrderEditorPage> {
     final currency = controller.settings.currency;
     final p = context.palette;
 
-    if (widget.orderId != null &&
-        (_existing == null || !_existing!.status.isEditable)) {
+    final blocked = _existing == null
+        ? null
+        : controller.editBlockedReason(_existing!);
+    if (widget.orderId != null && (_existing == null || blocked != null)) {
       return Scaffold(
         appBar: AppBar(leading: const BackButton()),
         body: EmptyState(
           icon: Icons.lock_outline,
           title: 'This sale cannot be edited',
           body:
-              'Only drafts can be changed. A confirmed sale is a record of '
-              'what was quoted to the customer.',
+              blocked ??
+              'It may have been deleted. A sale can be changed until it is '
+                  'paid for, invoiced or receipted.',
           action: FilledButton(
             onPressed: () => context.go('/sales-orders'),
             child: const Text('Back to sales'),
@@ -334,23 +351,34 @@ class _SalesOrderEditorPageState extends State<SalesOrderEditorPage> {
               ),
             ),
             const SizedBox(height: Insets.xl),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () => _save(confirm: false),
-                    child: const Text('Save draft'),
-                  ),
+            // A confirmed sale is edited in place and stays confirmed; only a
+            // new sale or a draft has the choice of confirming.
+            if (_existing != null && _existing!.status != SalesStatus.draft)
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: () => _save(confirm: false),
+                  child: const Text('Save changes'),
                 ),
-                const SizedBox(width: Insets.md),
-                Expanded(
-                  child: FilledButton(
-                    onPressed: () => _save(confirm: true),
-                    child: const Text('Confirm sale'),
+              )
+            else
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => _save(confirm: false),
+                      child: const Text('Save draft'),
+                    ),
                   ),
-                ),
-              ],
-            ),
+                  const SizedBox(width: Insets.md),
+                  Expanded(
+                    child: FilledButton(
+                      onPressed: () => _save(confirm: true),
+                      child: const Text('Confirm sale'),
+                    ),
+                  ),
+                ],
+              ),
           ],
         ),
       ),

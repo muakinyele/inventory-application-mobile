@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:stockpile/models/item.dart';
 import 'package:stockpile/models/party.dart';
 import 'package:stockpile/models/purchase_order.dart';
+import 'package:stockpile/models/receipt.dart';
 import 'package:stockpile/models/sales_order.dart';
 import 'package:stockpile/state/inventory_controller.dart';
 
@@ -87,13 +88,52 @@ void main() {
       expect(c.salesOrderById(order.id)!.status, SalesStatus.draft);
     });
 
-    test('a confirmed sale refuses edits', () async {
+    test('a confirmed sale can be edited until it is billed', () async {
       final (c, order, itemId) = await confirmedSale();
 
-      c.updateSalesOrder(order.id, notes: 'changed my mind');
+      final refused = await c.updateSalesOrder(
+        order.id,
+        notes: 'changed my mind',
+      );
 
-      expect(c.salesOrderById(order.id)!.notes, '');
+      expect(refused, isNull);
+      expect(c.salesOrderById(order.id)!.notes, 'changed my mind');
+      expect(c.salesOrderById(order.id)!.status, SalesStatus.confirmed);
       expect(itemId, isNotEmpty);
+    });
+
+    test('a billed sale refuses edits, and says by what', () async {
+      final order = seedSalesOrder(
+        id: 'so1',
+        reference: 'SO-0001',
+        lines: [line('i1', 'Bolt', quantity: 5, price: 500)],
+      );
+      final c = await seededController(
+        salesOrders: [order],
+        receipts: [
+          seedReceipt(
+            id: 'r1',
+            reference: 'RC-0004',
+            salesOrderId: 'so1',
+            amountPaid: 2500,
+            lines: const [
+              ReceiptLine(
+                id: 'a',
+                itemId: 'i1',
+                itemName: 'Bolt',
+                quantity: 5,
+                unitPrice: 500,
+              ),
+            ],
+          ),
+        ],
+      );
+
+      expect(c.canEditSalesOrder(order), isFalse);
+      final refused = await c.updateSalesOrder('so1', notes: 'too late');
+
+      expect(refused, contains('RC-0004'));
+      expect(c.salesOrderById('so1')!.notes, '');
     });
 
     test('a cancelled sale sends nothing', () async {

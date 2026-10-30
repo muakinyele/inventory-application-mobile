@@ -70,7 +70,8 @@ class SalesOrderDetailPage extends StatelessWidget {
                   : '${order.customerName} · ${order.priceTier.label} prices',
               showBack: true,
               actions: [
-                if (order.status.isEditable)
+                // Until it is paid for, invoiced or receipted.
+                if (controller.canEditSalesOrder(order))
                   OutlinedButton.icon(
                     onPressed: () =>
                         context.go('/sales-orders/${order.id}/edit'),
